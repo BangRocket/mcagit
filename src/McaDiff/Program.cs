@@ -25,7 +25,9 @@ return cmd switch
     "extract" => RunExtract(tail[1..]),
     "apply" => RunApply(tail[1..]),
     "init" => RepoCommands.Init(dashC, tail[1..]),
+    "add" => RepoCommands.Add(dashC, tail[1..]),
     "commit" => RepoCommands.Commit(dashC, tail[1..]),
+    "bisect" => RepoCommands.Bisect(dashC, tail[1..]),
     "log" => RepoCommands.Log(dashC, tail[1..]),
     "show" => RepoCommands.Show(dashC, tail[1..]),
     "status" => RepoCommands.Status(dashC, tail[1..]),
@@ -69,7 +71,7 @@ int RunDiff(string[] a, string? repoDir)
         WorldDiff diff;
         if (repo is not null)
         {
-            diff = RepoDiffMode(repo, o.Positionals, o.ToRunOptions());
+            diff = o.Staged ? StagedDiff(repo, o.ToRunOptions()) : RepoDiffMode(repo, o.Positionals, o.ToRunOptions());
         }
         else
         {
@@ -104,6 +106,15 @@ static WorldDiff RepoDiffMode(Repository repo, List<string> pos, DiffRunOptions 
     var (mA, srcA, labelA) = DiffSide(repo, a);
     var (mB, srcB, labelB) = DiffSide(repo, b);
     return RepoDiffer.Diff(labelA, mA, srcA, labelB, mB, srcB, opt);
+}
+
+static WorldDiff StagedDiff(Repository repo, DiffRunOptions opt)
+{
+    Manifest head = repo.HeadCommit() is { } h ? repo.ReadManifest(repo.ReadCommit(h).Tree) : new Manifest();
+    Manifest idx = StagingIndex.Exists(repo) ? StagingIndex.Load(repo) : head; // nothing staged → no diff
+    return RepoDiffer.Diff(
+        "HEAD", head, new RepoDiffer.CommitSource(repo, head),
+        "index", idx, new RepoDiffer.CommitSource(repo, idx), opt);
 }
 
 static string Worktree(Repository repo) =>
@@ -193,8 +204,12 @@ partial class Program
 
         REPOSITORY (content-addressed, deduplicated)
             mcadiff init [<repo>] [--worktree <world>]
-            mcadiff commit [-m <msg>] [<world>]   Snapshot the worktree (or <world>)
-            mcadiff status [<world>]              Changes vs HEAD
+            mcadiff add <path>... | add .         Stage paths into the index
+            mcadiff commit [-m <msg>] [<world>]   Commit the index, else the worktree
+            mcadiff restore --staged <path>...    Unstage paths (index → HEAD)
+            mcadiff status [<world>]              Staged / unstaged changes
+            mcadiff diff --staged                 Staged changes (index vs HEAD)
+            mcadiff bisect (start|bad|good|skip|reset|log)   Binary-search for a bad commit
             mcadiff log [--oneline|-p|--stat] [-n N] [<ref>]
             mcadiff show [<ref>]                  A commit's metadata + diff
             mcadiff checkout <ref> [<world-out>]  Materialize a snapshot

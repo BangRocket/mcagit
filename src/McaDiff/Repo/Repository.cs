@@ -221,6 +221,48 @@ public sealed class Repository
             if (File.Exists(p)) File.Delete(p);
     }
 
+    // ---- in-progress bisect state ----
+
+    private string BisectStartPath => Path.Combine(Dir, "BISECT_START");
+    private string BisectBadPath => Path.Combine(Dir, "BISECT_BAD");
+    private string BisectGoodPath => Path.Combine(Dir, "BISECT_GOOD");
+    private string BisectSkipPath => Path.Combine(Dir, "BISECT_SKIP");
+    private string BisectLogPath => Path.Combine(Dir, "BISECT_LOG");
+
+    public bool InBisect => File.Exists(BisectStartPath);
+
+    public void BisectStart(string originalRef)
+    {
+        foreach (string p in new[] { BisectBadPath, BisectGoodPath, BisectSkipPath, BisectLogPath })
+            if (File.Exists(p)) File.Delete(p);
+        File.WriteAllText(BisectStartPath, originalRef + "\n");
+    }
+
+    public string? BisectOriginal() => File.Exists(BisectStartPath) ? File.ReadAllText(BisectStartPath).Trim() : null;
+    public void BisectSetBad(string commit) => File.WriteAllText(BisectBadPath, commit + "\n");
+    public string? BisectBad() => File.Exists(BisectBadPath) ? File.ReadAllText(BisectBadPath).Trim() : null;
+    public void BisectAddGood(string commit) => AppendUnique(BisectGoodPath, commit);
+    public List<string> BisectGood() => ReadLines(BisectGoodPath);
+    public void BisectAddSkip(string commit) => AppendUnique(BisectSkipPath, commit);
+    public List<string> BisectSkip() => ReadLines(BisectSkipPath);
+    public void BisectAppendLog(string line) => File.AppendAllText(BisectLogPath, line + "\n");
+    public IEnumerable<string> BisectLogLines() => File.Exists(BisectLogPath) ? File.ReadLines(BisectLogPath) : [];
+
+    public void BisectClear()
+    {
+        foreach (string p in new[] { BisectStartPath, BisectBadPath, BisectGoodPath, BisectSkipPath, BisectLogPath })
+            if (File.Exists(p)) File.Delete(p);
+    }
+
+    private static void AppendUnique(string path, string value)
+    {
+        if (File.Exists(path) && File.ReadLines(path).Any(l => l.Trim() == value)) return;
+        File.AppendAllText(path, value + "\n");
+    }
+
+    private static List<string> ReadLines(string path) => File.Exists(path)
+        ? File.ReadLines(path).Select(l => l.Trim()).Where(l => l.Length > 0).ToList() : [];
+
     // ---- HEAD & branches ----
 
     public string ReadHeadRaw() => File.ReadAllText(Path.Combine(Dir, "HEAD")).Trim();

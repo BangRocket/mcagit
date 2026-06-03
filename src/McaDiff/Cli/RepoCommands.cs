@@ -31,14 +31,22 @@ public static class RepoCommands
         if (Open(dashC) is not { } repo) return NoRepo();
         string? message = opts.GetValueOrDefault("-m") ?? opts.GetValueOrDefault("--message");
         if (message is null) return Err("commit requires -m <message>");
-        if (World(repo, pos, 0) is not { } world) return NoWorld();
 
-        Manifest manifest = Snapshotter.Snapshot(repo, world);
+        // With a staging index, commit the staged tree; otherwise snapshot the whole worktree.
+        bool fromIndex = StagingIndex.Exists(repo);
+        Manifest manifest;
+        if (fromIndex) manifest = StagingIndex.Load(repo);
+        else
+        {
+            if (World(repo, pos, 0) is not { } world) return NoWorld();
+            manifest = Snapshotter.Snapshot(repo, world);
+        }
         string tree = repo.WriteManifest(manifest);
         string? head = repo.HeadCommit();
         if (head is not null && repo.ReadCommit(head).Tree == tree)
         {
-            Console.Error.WriteLine("nothing to commit — world matches HEAD");
+            Console.Error.WriteLine($"nothing to commit — {(fromIndex ? "index" : "world")} matches HEAD");
+            if (fromIndex) StagingIndex.Clear(repo);
             return 0;
         }
 
@@ -49,10 +57,11 @@ public static class RepoCommands
 
         string hash = repo.CreateCommit(tree, head is null ? [] : [head], message,
             Author(repo, opts.GetValueOrDefault("--author")), sign: signer);
+        if (fromIndex) StagingIndex.Clear(repo);
         int chunks = manifest.Regions.Sum(r => r.Value.Count);
         int files = manifest.Regions.Count + manifest.Nbt.Count + manifest.Blobs.Count;
         string where = repo.CurrentBranch() ?? "detached HEAD";
-        Console.Error.WriteLine($"[{where} {hash[..10]}] {message}  ({files} files, {chunks} chunks{(sign ? ", signed" : "")})");
+        Console.Error.WriteLine($"[{where} {hash[..10]}] {message}  ({files} files, {chunks} chunks{(sign ? ", signed" : "")}{(fromIndex ? ", from index" : "")})");
         return 0;
     }
 
@@ -131,7 +140,7 @@ public static class RepoCommands
         if (opts.ContainsKey("--hard"))
         {
             if (repo.Worktree is not { } world) return Err("--hard requires a bound worktree");
-            Repo.Checkout.Materialize(repo, repo.ReadManifest(repo.ReadCommit(target).Tree), world);
+            Repo.Checkout.Materialize(repo, repo.ReadManifest(repo.ReadCommit(target).Tree), world, prune: true);
             Console.Error.WriteLine($"HEAD is now at {target[..10]} (worktree updated)");
         }
         else Console.Error.WriteLine($"HEAD is now at {target[..10]}");
@@ -168,8 +177,18 @@ public static class RepoCommands
 
     public static int Restore(string? dashC, string[] a)
     {
-        var (pos, opts) = Parse(a, ["--world", "--source"], []);
+        var (pos, opts) = Parse(a, ["--world", "--source"], ["--staged", "--cached"]);
         if (Open(dashC) is not { } repo) return NoRepo();
+
+        // `restore --staged <path>...` unstages (index → HEAD), like git.
+        if (opts.ContainsKey("--staged") || opts.ContainsKey("--cached"))
+        {
+            if (pos.Count == 0) return Err("usage: restore --staged <path>...");
+            Staging.Unstage(repo, pos);
+            Console.Error.WriteLine($"Unstaged {pos.Count} path(s).");
+            return 0;
+        }
+
         string? refName = opts.GetValueOrDefault("--source") ?? (pos.Count > 0 ? pos[0] : null);
         var specs = (opts.ContainsKey("--source") ? pos : pos.Skip(1)).ToList();
         if (refName is null || specs.Count == 0) return Err("usage: restore [--source <ref>] <ref> <path>...");
@@ -262,6 +281,19 @@ public static class RepoCommands
             Console.WriteLine();
         }
 
+        if (StagingIndex.Exists(repo))
+        {
+            Manifest head = repo.HeadCommit() is { } h ? repo.ReadManifest(repo.ReadCommit(h).Tree) : new Manifest();
+            Manifest idx = StagingIndex.Load(repo);
+            Manifest work = Snapshotter.HashOnly(repo, world);
+            List<StatusEntry> staged = StatusCalc.Compute(head, idx);
+            List<StatusEntry> unstaged = StatusCalc.Compute(idx, work);
+            if (staged.Count == 0 && unstaged.Count == 0) { Console.WriteLine("clean — index matches HEAD and worktree"); return 0; }
+            PrintStatusSection("Staged for commit", staged);
+            PrintStatusSection("Not staged", unstaged);
+            return 0;
+        }
+
         List<StatusEntry> entries = StatusCalc.Compute(repo, world);
         if (entries.Count == 0) { Console.WriteLine("clean — world matches HEAD"); return 0; }
         Console.WriteLine($"changes vs HEAD ({repo.CurrentBranch() ?? "detached"}):");
@@ -286,7 +318,7 @@ public static class RepoCommands
             return Err($"output directory is not empty: {outDir} (use --force)");
 
         Manifest manifest = repo.ReadManifest(repo.ReadCommit(commit).Tree);
-        Repo.Checkout.Materialize(repo, manifest, outDir);
+        Repo.Checkout.Materialize(repo, manifest, outDir, prune: true);
 
         bool onBranch = repo.ReadBranch(refName) is not null;
         if (onBranch) repo.SetHeadToBranch(refName); else repo.SetHeadDetached(commit);
@@ -656,9 +688,121 @@ public static class RepoCommands
         return 0;
     }
 
+    public static int Add(string? dashC, string[] a)
+    {
+        var (pos, opts) = Parse(a, ["--world"], []);
+        if (Open(dashC) is not { } repo) return NoRepo();
+        string? world = opts.GetValueOrDefault("--world") ?? repo.Worktree;
+        if (world is null) return Err("no worktree bound; use --world <dir>");
+        if (pos.Count == 0) return Err("usage: add <path>... | add .");
+
+        int staged = Staging.Add(repo, world, pos);
+        Console.Error.WriteLine($"Staged {staged} change(s).");
+        return 0;
+    }
+
+    public static int Bisect(string? dashC, string[] a)
+    {
+        if (Open(dashC) is not { } repo) return NoRepo();
+        if (a.Length == 0) return Err("usage: bisect (start|bad|good|skip|reset|log) ...");
+        string sub = a[0];
+        string[] rest = a[1..];
+
+        string Resolve(string s) => repo.ResolveRef(s);
+        try
+        {
+            switch (sub)
+            {
+                case "start":
+                    string original = repo.CurrentBranch() ?? repo.HeadCommit()
+                        ?? throw new InvalidOperationException("no commits to bisect");
+                    repo.BisectStart(original);
+                    repo.BisectAppendLog("# bisect start");
+                    if (rest.Length >= 1) { string bad = Resolve(rest[0]); repo.BisectSetBad(bad); repo.BisectAppendLog($"bad {bad}"); }
+                    foreach (string g in rest.Skip(1)) { string gg = Resolve(g); repo.BisectAddGood(gg); repo.BisectAppendLog($"good {gg}"); }
+                    return BisectAdvance(repo);
+
+                case "bad":
+                    if (!repo.InBisect) return Err("not bisecting (run `bisect start`)");
+                    string b = rest.Length > 0 ? Resolve(rest[0]) : repo.HeadCommit()!;
+                    repo.BisectSetBad(b); repo.BisectAppendLog($"bad {b}");
+                    return BisectAdvance(repo);
+
+                case "good":
+                    if (!repo.InBisect) return Err("not bisecting (run `bisect start`)");
+                    IEnumerable<string> goods = rest.Length > 0 ? rest.Select(Resolve) : [repo.HeadCommit()!];
+                    foreach (string g in goods) { repo.BisectAddGood(g); repo.BisectAppendLog($"good {g}"); }
+                    return BisectAdvance(repo);
+
+                case "skip":
+                    if (!repo.InBisect) return Err("not bisecting (run `bisect start`)");
+                    string sk = rest.Length > 0 ? Resolve(rest[0]) : repo.HeadCommit()!;
+                    repo.BisectAddSkip(sk); repo.BisectAppendLog($"skip {sk}");
+                    return BisectAdvance(repo);
+
+                case "reset":
+                    if (!repo.InBisect) return Err("not bisecting");
+                    string orig = repo.BisectOriginal()!;
+                    BisectRestore(repo, orig);
+                    repo.BisectClear();
+                    Console.Error.WriteLine($"Bisect reset; back at {orig}.");
+                    return 0;
+
+                case "log":
+                    foreach (string line in repo.BisectLogLines()) Console.WriteLine(line);
+                    return 0;
+
+                default:
+                    return Err($"unknown bisect subcommand: {sub}");
+            }
+        }
+        catch (Exception ex) { return Err(ex.Message); }
+    }
+
+    private static int BisectAdvance(Repository repo)
+    {
+        Repo.Bisect.State s = Repo.Bisect.Compute(repo);
+        if (s.NeedMarks)
+        {
+            Console.Error.WriteLine("bisect: mark at least one bad and one good commit (`bisect bad` / `bisect good`).");
+            return 0;
+        }
+        if (s.Done)
+        {
+            CommitObject c = repo.ReadCommit(s.FirstBad!);
+            Console.WriteLine($"{s.FirstBad} is the first bad commit");
+            Console.WriteLine($"    {c.Message}");
+            return 0;
+        }
+        if (repo.Worktree is { } w)
+        {
+            Repo.Checkout.Materialize(repo, repo.ReadManifest(repo.ReadCommit(s.Next!).Tree), w, prune: true);
+            repo.SetHeadDetached(s.Next!);
+        }
+        int steps = (int)Math.Floor(Math.Log2(Math.Max(1, s.Remaining)));
+        Console.Error.WriteLine($"Bisecting: {s.Remaining} revisions left to test after this (roughly {steps} steps); testing {s.Next![..10]}");
+        return 0;
+    }
+
+    private static void BisectRestore(Repository repo, string orig)
+    {
+        string commit;
+        if (repo.ReadBranch(orig) is { } tip) { repo.SetHeadToBranch(orig); commit = tip; }
+        else { repo.SetHeadDetached(orig); commit = orig; }
+        if (repo.Worktree is { } w) Repo.Checkout.Materialize(repo, repo.ReadManifest(repo.ReadCommit(commit).Tree), w, prune: true);
+    }
+
     // ---- helpers ----
 
     private static Repository? Open(string? dashC) => Repository.Discover(dashC);
+
+    private static void PrintStatusSection(string title, IReadOnlyList<StatusEntry> entries)
+    {
+        if (entries.Count == 0) return;
+        Console.WriteLine($"{title}:");
+        foreach (StatusEntry e in entries)
+            Console.WriteLine($"  {e.Change,-9} {e.Path}{(e.Detail is null ? "" : $"  ({e.Detail})")}");
+    }
 
     /// <summary>Diff a commit against its first parent (root commit → empty base).</summary>
     private static WorldDiff CommitDiff(Repository repo, string commit)

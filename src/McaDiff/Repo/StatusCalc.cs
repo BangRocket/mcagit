@@ -9,24 +9,26 @@ public sealed record StatusEntry(string Path, string Change, string? Detail = nu
 public static class StatusCalc
 {
     public static List<StatusEntry> Compute(Repository repo, string worldDir)
-    {
-        Manifest work = Snapshotter.HashOnly(repo, worldDir);
-        Manifest head = HeadManifest(repo);
+        => Compute(HeadManifest(repo), Snapshotter.HashOnly(repo, worldDir));
 
+    /// <summary>Status of <paramref name="to"/> relative to <paramref name="from"/>
+    /// (added = present in <c>to</c> only, removed = in <c>from</c> only).</summary>
+    public static List<StatusEntry> Compute(Manifest from, Manifest to)
+    {
         var entries = new List<StatusEntry>();
 
         // Region files: compare per-chunk maps.
-        foreach (string rel in Union(work.Regions.Keys, head.Regions.Keys))
+        foreach (string rel in Union(to.Regions.Keys, from.Regions.Keys))
         {
-            bool inW = work.Regions.TryGetValue(rel, out var w);
-            bool inH = head.Regions.TryGetValue(rel, out var h);
-            if (inW && !inH) entries.Add(new StatusEntry(rel, "added", $"{w!.Count} chunks"));
-            else if (!inW && inH) entries.Add(new StatusEntry(rel, "removed", $"{h!.Count} chunks"));
-            else if (!ChunksEqual(w!, h!)) entries.Add(new StatusEntry(rel, "modified", $"{ChangedChunks(w!, h!)} chunks"));
+            bool inT = to.Regions.TryGetValue(rel, out var t);
+            bool inF = from.Regions.TryGetValue(rel, out var f);
+            if (inT && !inF) entries.Add(new StatusEntry(rel, "added", $"{t!.Count} chunks"));
+            else if (!inT && inF) entries.Add(new StatusEntry(rel, "removed", $"{f!.Count} chunks"));
+            else if (!ChunksEqual(t!, f!)) entries.Add(new StatusEntry(rel, "modified", $"{ChangedChunks(t!, f!)} chunks"));
         }
 
-        AddScalar(entries, work.Nbt, head.Nbt);
-        AddScalar(entries, work.Blobs, head.Blobs);
+        AddScalar(entries, to.Nbt, from.Nbt);
+        AddScalar(entries, to.Blobs, from.Blobs);
 
         entries.Sort((a, b) => string.CompareOrdinal(a.Path, b.Path));
         return entries;
@@ -35,15 +37,15 @@ public static class StatusCalc
     private static Manifest HeadManifest(Repository repo)
         => repo.HeadCommit() is { } c ? repo.ReadManifest(repo.ReadCommit(c).Tree) : new Manifest();
 
-    private static void AddScalar(List<StatusEntry> entries, IDictionary<string, string> work, IDictionary<string, string> head)
+    private static void AddScalar(List<StatusEntry> entries, IDictionary<string, string> to, IDictionary<string, string> from)
     {
-        foreach (string rel in Union(work.Keys, head.Keys))
+        foreach (string rel in Union(to.Keys, from.Keys))
         {
-            bool inW = work.TryGetValue(rel, out string? w);
-            bool inH = head.TryGetValue(rel, out string? h);
-            if (inW && !inH) entries.Add(new StatusEntry(rel, "added"));
-            else if (!inW && inH) entries.Add(new StatusEntry(rel, "removed"));
-            else if (w != h) entries.Add(new StatusEntry(rel, "modified"));
+            bool inT = to.TryGetValue(rel, out string? t);
+            bool inF = from.TryGetValue(rel, out string? f);
+            if (inT && !inF) entries.Add(new StatusEntry(rel, "added"));
+            else if (!inT && inF) entries.Add(new StatusEntry(rel, "removed"));
+            else if (t != f) entries.Add(new StatusEntry(rel, "modified"));
         }
     }
 

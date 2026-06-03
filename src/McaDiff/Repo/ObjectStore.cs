@@ -41,7 +41,12 @@ public sealed class ObjectStore
             using (var fs = File.Create(tmp))
             using (var z = new ZLibStream(fs, CompressionLevel.Optimal))
                 z.Write(content);
-            if (File.Exists(path)) File.Delete(tmp); else File.Move(tmp, path);
+            // Commit the temp file. Two threads can race to write the same hash (e.g. two
+            // identical-content files snapshotted in parallel) — whoever loses just drops
+            // its temp; the object is already there.
+            if (File.Exists(path)) File.Delete(tmp);
+            else try { File.Move(tmp, path); }
+            catch (IOException) { if (File.Exists(path)) File.Delete(tmp); else throw; }
         }
         return hash;
     }

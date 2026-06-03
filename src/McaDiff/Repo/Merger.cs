@@ -63,7 +63,7 @@ public static class Merger
 
         // Stop: record the in-progress merge and lay the partial result into the worktree.
         repo.BeginMergeState(ours, theirs, baseCommit, msg, conflicts);
-        if (repo.Worktree is { } w) Checkout.Materialize(repo, merged, w);
+        if (repo.Worktree is { } w) Checkout.Materialize(repo, merged, w, prune: true);
         return new MergeResult { Conflicts = conflicts, Stopped = true };
     }
 
@@ -93,7 +93,7 @@ public static class Merger
         string? from = repo.HeadCommit();
 
         repo.WriteBranch(branch, orig);
-        if (repo.Worktree is { } w) Checkout.Materialize(repo, repo.ReadManifest(repo.ReadCommit(orig).Tree), w);
+        if (repo.Worktree is { } w) Checkout.Materialize(repo, repo.ReadManifest(repo.ReadCommit(orig).Tree), w, prune: true);
         repo.RecordHead(from, orig, "merge --abort");
         repo.ClearMergeState();
     }

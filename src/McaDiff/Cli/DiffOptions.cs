@@ -11,6 +11,7 @@ public sealed class DiffOptions
     public bool NoColor { get; private set; }
     public bool SummaryOnly { get; private set; }
     public bool ShowHelp { get; private set; }
+    public bool Staged { get; private set; }
     public HashSet<string>? Only { get; private set; }
     public string? Error { get; private set; }
 
@@ -29,6 +30,7 @@ public sealed class DiffOptions
                 case "--expand": o.Expand = true; break;
                 case "--no-color": o.NoColor = true; break;
                 case "--summary": o.SummaryOnly = true; break;
+                case "--staged" or "--cached": o.Staged = true; break;
                 case "--only":
                     if (i + 1 >= args.Length) return o.Fail("--only requires a value (region,entities,poi,nbt)");
                     HashSet<string>? only = o.Only;
