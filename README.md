@@ -174,20 +174,29 @@ end-to-end against these worlds in the test suite.
 ## Version control
 
 A semantic VCS for worlds — like git, but it understands chunks. The repository is
-an **external, content-addressed object store**: each chunk is hashed by its
-*decoded NBT*, so an unchanged chunk is stored **once** no matter how many
-snapshots reference it (the thing fastback + git-LFS can't do — they store whole
-region blobs per snapshot).
+a **content-addressed object store**: each chunk is hashed by its *decoded NBT*,
+so an unchanged chunk is stored **once** no matter how many snapshots reference it
+(the thing fastback + git-LFS can't do — they store whole region blobs per snapshot).
+
+The CLI mirrors git: the repo is the current directory (or nearest ancestor), or
+you pass `-C <repo>`; a **bound worktree** (the world) lets `commit`/`status`/
+`diff`/`checkout` take no path — just like git's working tree.
 
 ```sh
-mcadiff init    <repo>                          # create a repository
-mcadiff commit  <repo> <world> -m "before raid" # snapshot a world
-mcadiff commit  <repo> <world> -m "after raid"  # …only changed chunks add objects
-mcadiff log     <repo>
-mcadiff status  <repo> <world>                   # what changed vs HEAD (by hash; fast)
-mcadiff checkout <repo> <ref> <world-out>        # materialize a snapshot (branch or commit)
-mcadiff branch  <repo> [name]                    # list / create branches
-mcadiff merge   <repo> <other-branch>            # true 3-way merge
+mcadiff init <repo> --worktree <world>     # create a repo, bind a world
+cd <repo>                                   # …or prefix commands with -C <repo>
+
+mcadiff commit -m "before raid"             # snapshot the bound worktree
+# …play, then:
+mcadiff commit -m "after raid"              # only changed chunks add objects
+
+mcadiff status                              # changes vs HEAD (by hash; fast)
+mcadiff diff                                # worktree vs HEAD
+mcadiff diff <refA> <refB>                  # any two snapshots (branch/commit/HEAD/path)
+mcadiff log
+mcadiff checkout <ref> [<world-out>]        # materialize a snapshot
+mcadiff branch [name]                       # list / create branches
+mcadiff merge <other-branch>               # true 3-way merge
 ```
 
 - **Whole-world snapshots:** region/entities/poi as deduped per-chunk objects,
@@ -198,10 +207,10 @@ mcadiff merge   <repo> <other-branch>            # true 3-way merge
   same-node clash is a conflict (kept *ours*, or *theirs* with `--theirs`, and
   reported). Far finer than git's line-based merge on these files.
 - Verified on the example worlds: committing Older then Newer reproduces each
-  exactly on `checkout`, and the shared chunks are stored once.
+  exactly on `checkout` (and loads in real Minecraft), with shared chunks stored once.
 
-> Stop the server before `checkout` (it rewrites world files), and keep the repo
-> outside the world directory.
+> Stop the server before `checkout` (it rewrites world files). The repo lives
+> outside the world directory; bind the world with `--worktree` / `config worktree`.
 
 ## Performance
 

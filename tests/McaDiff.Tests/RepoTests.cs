@@ -1,5 +1,6 @@
 using fNbt;
 using McaDiff.Anvil;
+using McaDiff.Diff;
 using McaDiff.Nbt;
 using McaDiff.Repo;
 using Xunit;
@@ -123,6 +124,46 @@ public class RepoTests
     }
 
     [Fact]
+    public void RepoDiff_TwoCommits_ShowsChunkChange()
+    {
+        Repository repo = Repository.Init(TestAnvil.TempDir("rd"));
+        string cA = CommitWorld(repo, ChunkWorld(1, 10), "a");
+        string cB = CommitWorld(repo, ChunkWorld(2, 10), "b");
+        Manifest mA = repo.ReadManifest(repo.ReadCommit(cA).Tree);
+        Manifest mB = repo.ReadManifest(repo.ReadCommit(cB).Tree);
+
+        WorldDiff diff = RepoDiffer.Diff(
+            "a", mA, new RepoDiffer.CommitSource(repo, mA),
+            "b", mB, new RepoDiffer.CommitSource(repo, mB), new DiffRunOptions());
+
+        ChunkDiff chunk = diff.Files.Single(f => f.RelativePath == "region/r.0.0.mca").Chunks.Single();
+        var change = chunk.Changes.Single(c => c.Path == "a");
+        Assert.Equal("1", change.OldValue);
+        Assert.Equal("2", change.NewValue);
+    }
+
+    [Fact]
+    public void RepoDiff_CommitVsWorkingTree()
+    {
+        Repository repo = Repository.Init(TestAnvil.TempDir("rdw"));
+        string world = TestAnvil.TempDir("wt");
+        TestAnvil.WriteRegion(Path.Combine(world, "region", "r.0.0.mca"), (new ChunkPos(0, 0), AB(1, 10)));
+        string c = CommitWorld(repo, world, "snap");
+
+        // Edit the working world on disk.
+        TestAnvil.WriteRegion(Path.Combine(world, "region", "r.0.0.mca"), (new ChunkPos(0, 0), AB(2, 10)));
+
+        Manifest head = repo.ReadManifest(repo.ReadCommit(c).Tree);
+        Manifest work = Snapshotter.HashOnly(repo, world);
+        WorldDiff diff = RepoDiffer.Diff(
+            "HEAD", head, new RepoDiffer.CommitSource(repo, head),
+            "working", work, new RepoDiffer.WorldContentSource(world), new DiffRunOptions());
+
+        var change = diff.Files.Single().Chunks.Single().Changes.Single(c => c.Path == "a");
+        Assert.Equal("2", change.NewValue);
+    }
+
+    [Fact]
     public void Checkout_RecreatesEmptyDirectories()
     {
         Repository repo = Repository.Init(TestAnvil.TempDir("ed"));
@@ -187,11 +228,13 @@ public class RepoTests
         return dir;
     }
 
+    private static NbtCompound AB(int a, int b) =>
+        TestAnvil.Root(new NbtInt("DataVersion", 3953), new NbtInt("a", a), new NbtInt("b", b));
+
     private static string ChunkWorld(int a, int b)
     {
         string dir = TestAnvil.TempDir("cw");
-        var root = TestAnvil.Root(new NbtInt("DataVersion", 3953), new NbtInt("a", a), new NbtInt("b", b));
-        TestAnvil.WriteRegion(Path.Combine(dir, "region", "r.0.0.mca"), (new ChunkPos(0, 0), root));
+        TestAnvil.WriteRegion(Path.Combine(dir, "region", "r.0.0.mca"), (new ChunkPos(0, 0), AB(a, b)));
         return dir;
     }
 

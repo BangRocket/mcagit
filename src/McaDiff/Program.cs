@@ -2,47 +2,107 @@ using McaDiff.Cli;
 using McaDiff.Diff;
 using McaDiff.Output;
 using McaDiff.Patch;
+using McaDiff.Repo;
 
-// Subcommand dispatch. `diff` is the default so `mcadiff <A> <B>` still works.
-if (args.Length > 0)
+// Global, git-style: an optional leading `-C <repo>` selects the repository
+// (otherwise it's discovered from the current directory). `diff` is the default
+// when the first token isn't a known subcommand, so `mcadiff <A> <B>` still works.
+string? dashC = null;
+int idx = 0;
+if (args.Length >= 1 && args[0] == "-C")
 {
-    switch (args[0])
-    {
-        case "diff": return RunDiff(args[1..]);
-        case "extract": return RunExtract(args[1..]);
-        case "apply": return RunApply(args[1..]);
-        case "init": return RepoCommands.Init(args[1..]);
-        case "commit": return RepoCommands.Commit(args[1..]);
-        case "log": return RepoCommands.Log(args[1..]);
-        case "status": return RepoCommands.Status(args[1..]);
-        case "checkout": return RepoCommands.Checkout(args[1..]);
-        case "branch": return RepoCommands.Branch(args[1..]);
-        case "merge": return RepoCommands.Merge(args[1..]);
-        case "-h" or "--help": Console.WriteLine(TopUsage); return 0;
-    }
+    if (args.Length < 2) return Fail("-C requires a repository path");
+    dashC = args[1];
+    idx = 2;
 }
-return RunDiff(args);
 
-int RunDiff(string[] a)
+string[] tail = args[idx..];
+string? cmd = tail.Length > 0 ? tail[0] : null;
+
+return cmd switch
 {
-    DiffOptions options = DiffOptions.Parse(a);
-    if (options.ShowHelp) { Console.WriteLine(DiffOptions.Usage); return 0; }
-    if (options.Error is not null) return Fail(options.Error, DiffOptions.Usage);
+    "diff" => RunDiff(tail[1..], dashC),
+    "extract" => RunExtract(tail[1..]),
+    "apply" => RunApply(tail[1..]),
+    "init" => RepoCommands.Init(dashC, tail[1..]),
+    "commit" => RepoCommands.Commit(dashC, tail[1..]),
+    "log" => RepoCommands.Log(dashC, tail[1..]),
+    "status" => RepoCommands.Status(dashC, tail[1..]),
+    "checkout" => RepoCommands.Checkout(dashC, tail[1..]),
+    "branch" => RepoCommands.Branch(dashC, tail[1..]),
+    "merge" => RepoCommands.Merge(dashC, tail[1..]),
+    "config" => RepoCommands.Config(dashC, tail[1..]),
+    null or "-h" or "--help" => Help(),
+    _ => RunDiff(tail, dashC), // shorthand: `mcadiff <A> <B>`
+};
 
-    string pathA = options.PathA!, pathB = options.PathB!;
-    if (MissingPath(pathA) is { } m1) return Fail(m1);
-    if (MissingPath(pathB) is { } m2) return Fail(m2);
+int Help() { Console.WriteLine(TopUsage); return 0; }
+
+int RunDiff(string[] a, string? repoDir)
+{
+    DiffOptions o = DiffOptions.Parse(a);
+    if (o.ShowHelp) { Console.WriteLine(DiffOptions.Usage); return 0; }
+    if (o.Error is not null) return Fail(o.Error, DiffOptions.Usage);
 
     try
     {
-        WorldDiff diff = WorldDiffer.Diff(pathA, pathB, options.ToRunOptions());
-        if (options.Json)
-            JsonDiffFormatter.Write(diff, Console.Out);
+        Repository? repo = Repository.Discover(repoDir);
+        WorldDiff diff;
+        if (repo is not null)
+        {
+            diff = RepoDiffMode(repo, o.Positionals, o.ToRunOptions());
+        }
         else
-            new TextDiffFormatter(new Ansi(Ansi.ShouldColor(options.NoColor)), options.SummaryOnly).Write(diff, Console.Out);
+        {
+            if (o.Positionals.Count != 2) return Fail("diff needs two paths, or run inside a repository", DiffOptions.Usage);
+            diff = RunFileDiff(o.Positionals[0], o.Positionals[1], o.ToRunOptions());
+        }
+
+        if (o.Json) JsonDiffFormatter.Write(diff, Console.Out);
+        else new TextDiffFormatter(new Ansi(Ansi.ShouldColor(o.NoColor)), o.SummaryOnly).Write(diff, Console.Out);
         return diff.HasDifferences ? 1 : 0;
     }
     catch (Exception ex) { return Fail(ex.Message); }
+}
+
+static WorldDiff RunFileDiff(string pathA, string pathB, DiffRunOptions opt)
+{
+    foreach (string p in new[] { pathA, pathB })
+        if (!File.Exists(p) && !Directory.Exists(p))
+            throw new FileNotFoundException($"path not found: {p}");
+    return WorldDiffer.Diff(pathA, pathB, opt);
+}
+
+static WorldDiff RepoDiffMode(Repository repo, List<string> pos, DiffRunOptions opt)
+{
+    (string a, string b) = pos.Count switch
+    {
+        0 => ("HEAD", Worktree(repo)),
+        1 => (pos[0], Worktree(repo)),
+        2 => (pos[0], pos[1]),
+        _ => throw new InvalidOperationException("diff takes at most two refs"),
+    };
+    var (mA, srcA, labelA) = DiffSide(repo, a);
+    var (mB, srcB, labelB) = DiffSide(repo, b);
+    return RepoDiffer.Diff(labelA, mA, srcA, labelB, mB, srcB, opt);
+}
+
+static string Worktree(Repository repo) =>
+    repo.Worktree ?? throw new InvalidOperationException("no worktree bound; pass paths or set `config worktree`");
+
+static (Manifest, RepoDiffer.IContentSource, string) DiffSide(Repository repo, string spec)
+{
+    try
+    {
+        string commit = repo.ResolveRef(spec);
+        Manifest m = repo.ReadManifest(repo.ReadCommit(commit).Tree);
+        return (m, new RepoDiffer.CommitSource(repo, m), $"{spec} ({commit[..10]})");
+    }
+    catch (Exception) when (Directory.Exists(spec))
+    {
+        Manifest m = Snapshotter.HashOnly(repo, spec);
+        return (m, new RepoDiffer.WorldContentSource(spec), $"{spec} (working)");
+    }
 }
 
 int RunExtract(string[] a)
@@ -58,7 +118,6 @@ int RunExtract(string[] a)
         WorldPatch patch = PatchExtractor.Extract(o.OldPath!, o.NewPath!, o.ToRunOptions(), o.WholeChunk, o.WholeFile);
         if (o.Note is not null) patch.Note = o.Note;
         File.WriteAllText(o.OutputPath!, patch.ToJson());
-
         int ops = patch.Files.Sum(f => (f.Ops?.Count ?? 0) + (f.Chunks?.Sum(c => c.Ops.Count) ?? 0));
         Console.Error.WriteLine($"Wrote {o.OutputPath} — {patch.Files.Count} files, {ops} ops.");
         return 0;
@@ -79,13 +138,11 @@ int RunApply(string[] a)
         WorldPatch patch = WorldPatch.FromJson(File.ReadAllText(o.PatchPath!));
         var settings = new ApplySettings(o.Reverse, o.Force, o.DryRun, o.Only);
         ApplyReport report = PatchApplier.Apply(patch, o.TargetPath!, o.OutputPath ?? o.TargetPath!, settings);
-
         string mode = o.DryRun ? "[dry-run] " : "";
         Console.Error.WriteLine($"{mode}Applied {report.Applied} ops across {report.FilesWritten} files; {report.Conflicts.Count} conflicts.");
         foreach (Conflict c in report.Conflicts.Take(20))
             Console.Error.WriteLine($"  conflict: {c.File}{(c.Chunk is null ? "" : $" chunk {c.Chunk}")} {c.Path} — {c.Reason}");
-        if (report.Conflicts.Count > 20)
-            Console.Error.WriteLine($"  … and {report.Conflicts.Count - 20} more");
+        if (report.Conflicts.Count > 20) Console.Error.WriteLine($"  … and {report.Conflicts.Count - 20} more");
         return report.HasConflicts ? 1 : 0;
     }
     catch (Exception ex) { return Fail(ex.Message); }
@@ -105,20 +162,25 @@ partial class Program
     private const string TopUsage = """
         mcadiff — semantic diff, patch & version control for Anvil Minecraft worlds
 
-        DIFF / PATCH
-            mcadiff diff    <A> <B> [options]                 Show a git-style diff
-            mcadiff extract <old> <new> -o <patch> [options]  Write a portable patch
-            mcadiff apply   <patch> <target> -o <out> [opts]  Apply a patch (non-destructive)
-            mcadiff <A> <B>                                   Shorthand for `diff`
+        Add `-C <repo>` before any command to select the repository (default: the
+        current directory or nearest ancestor).
 
-        REPOSITORY (semantic VCS — content-addressed, deduplicated)
-            mcadiff init     <repo>                           Create a repository
-            mcadiff commit   <repo> <world> -m <msg>          Snapshot a world
-            mcadiff log      <repo> [--branch b]              Show history
-            mcadiff status   <repo> <world>                   Changes vs HEAD
-            mcadiff checkout <repo> <ref> <world-out>         Materialize a snapshot
-            mcadiff branch   <repo> [name]                    List / create branches
-            mcadiff merge    <repo> <ref> [--theirs]          3-way merge a branch
+        DIFF / PATCH
+            mcadiff diff <A> <B>                  Git-style diff of two worlds/files
+            mcadiff diff [<a> [<b>]]              In a repo: worktree vs HEAD, <a> vs
+                                                  worktree, or <a> vs <b> (refs/worlds)
+            mcadiff extract <old> <new> -o <p>    Write a portable patch
+            mcadiff apply <patch> <target> -o <o> Apply a patch (non-destructive)
+
+        REPOSITORY (content-addressed, deduplicated)
+            mcadiff init [<repo>] [--worktree <world>]
+            mcadiff commit [-m <msg>] [<world>]   Snapshot the worktree (or <world>)
+            mcadiff status [<world>]              Changes vs HEAD
+            mcadiff log [<ref>]                   History
+            mcadiff checkout <ref> [<world-out>]  Materialize a snapshot
+            mcadiff branch [<name>]               List / create branches
+            mcadiff merge <ref> [--theirs]        3-way merge
+            mcadiff config worktree [<path>]      Get / set the bound world
 
         Run diff/extract/apply with --help for their options.
         """;

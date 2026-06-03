@@ -41,6 +41,39 @@ public sealed class Repository
         return new Repository(dir);
     }
 
+    /// <summary>
+    /// Locates the repository git-style: an explicit <paramref name="dashC"/> if
+    /// given, otherwise the current directory or the nearest ancestor that is a
+    /// repository. Returns null if none is found.
+    /// </summary>
+    public static Repository? Discover(string? dashC)
+    {
+        if (dashC is not null)
+            return IsRepository(dashC) ? Open(dashC) : null;
+        for (string? dir = Directory.GetCurrentDirectory(); dir is not null; dir = Directory.GetParent(dir)?.FullName)
+            if (IsRepository(dir))
+                return Open(dir);
+        return null;
+    }
+
+    // ---- config (bound worktree) ----
+
+    /// <summary>The world directory bound to this repo (git's "working tree"), or null.</summary>
+    public string? Worktree
+    {
+        get => ReadConfig().Worktree;
+        set { RepoConfig c = ReadConfig(); c.Worktree = value is null ? null : Path.GetFullPath(value); WriteConfig(c); }
+    }
+
+    private string ConfigPath => Path.Combine(Dir, "config");
+    private RepoConfig ReadConfig() => File.Exists(ConfigPath)
+        ? System.Text.Json.JsonSerializer.Deserialize<RepoConfig>(File.ReadAllText(ConfigPath)) ?? new RepoConfig()
+        : new RepoConfig();
+    private void WriteConfig(RepoConfig c) => File.WriteAllText(ConfigPath,
+        System.Text.Json.JsonSerializer.Serialize(c, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
+
+    private sealed class RepoConfig { public string? Worktree { get; set; } }
+
     // ---- HEAD & branches ----
 
     public string ReadHeadRaw() => File.ReadAllText(Path.Combine(Dir, "HEAD")).Trim();
@@ -88,9 +121,11 @@ public sealed class Repository
         return branch is not null ? ReadBranch(branch) : ReadHeadRaw();
     }
 
-    /// <summary>Resolves a branch name or commit hash to a commit hash.</summary>
+    /// <summary>Resolves <c>HEAD</c>, a branch name, or a commit hash to a commit hash.</summary>
     public string ResolveRef(string refName)
     {
+        if (refName == "HEAD")
+            return HeadCommit() ?? throw new InvalidOperationException("HEAD has no commits yet");
         if (ReadBranch(refName) is { } byBranch) return byBranch;
         if (Objects.Exists(refName)) return refName;
         throw new InvalidOperationException($"unknown ref: {refName}");
