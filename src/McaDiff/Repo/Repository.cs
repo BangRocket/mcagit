@@ -72,7 +72,51 @@ public sealed class Repository
     private void WriteConfig(RepoConfig c) => File.WriteAllText(ConfigPath,
         System.Text.Json.JsonSerializer.Serialize(c, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
 
-    private sealed class RepoConfig { public string? Worktree { get; set; } }
+    private sealed class RepoConfig
+    {
+        public string? Worktree { get; set; }
+        public Dictionary<string, string> Remotes { get; set; } = new();
+    }
+
+    // ---- remotes ----
+
+    public IReadOnlyDictionary<string, string> Remotes => ReadConfig().Remotes;
+    public string? GetRemote(string name) => ReadConfig().Remotes.GetValueOrDefault(name);
+    public void AddRemote(string name, string path)
+    {
+        RepoConfig c = ReadConfig();
+        c.Remotes[name] = Path.GetFullPath(path);
+        WriteConfig(c);
+    }
+
+    public string? ReadRemoteRef(string remoteSlashBranch)
+    {
+        string p = Path.Combine(Dir, "refs", "remotes", remoteSlashBranch.Replace('/', Path.DirectorySeparatorChar));
+        return File.Exists(p) ? File.ReadAllText(p).Trim() : null;
+    }
+
+    public void WriteRemoteTracking(string remote, string branch, string commitHash)
+    {
+        string p = Path.Combine(Dir, "refs", "remotes", remote, branch);
+        Directory.CreateDirectory(Path.GetDirectoryName(p)!);
+        File.WriteAllText(p, commitHash + "\n");
+    }
+
+    // ---- reflog (logs/HEAD) ----
+
+    public void RecordHead(string? from, string to, string message)
+    {
+        string p = Path.Combine(Dir, "logs", "HEAD");
+        Directory.CreateDirectory(Path.GetDirectoryName(p)!);
+        File.AppendAllText(p, $"{from ?? new string('0', 40)} {to} {message}\n");
+    }
+
+    /// <summary>Reflog entries, most recent first.</summary>
+    public IEnumerable<string> Reflog()
+    {
+        string p = Path.Combine(Dir, "logs", "HEAD");
+        return File.Exists(p) ? File.ReadLines(p).Reverse() : [];
+    }
 
     // ---- HEAD & branches ----
 
@@ -173,6 +217,7 @@ public sealed class Repository
             return HeadCommit() ?? throw new InvalidOperationException("HEAD has no commits yet");
         if (ReadBranch(name) is { } b) return b;
         if (ReadTag(name) is { } t) return t;
+        if (name.Contains('/') && ReadRemoteRef(name) is { } rr) return rr; // e.g. origin/main
         if (Objects.Exists(name)) return name;
         if (Objects.ResolvePrefix(name) is { } full) return full;
         throw new InvalidOperationException($"unknown revision: {name}");
@@ -229,6 +274,7 @@ public sealed class Repository
             Author = author,
             Time = DateTimeOffset.Now.ToString("o"),
         };
+        string? oldTip = HeadCommit();
         string hash = WriteCommit(commit);
 
         // Advance the current branch; if HEAD is detached, move HEAD itself and
@@ -236,6 +282,7 @@ public sealed class Repository
         // silently clobber 'main').
         if (CurrentBranch() is { } branch) WriteBranch(branch, hash);
         else SetHeadDetached(hash);
+        RecordHead(oldTip, hash, $"commit: {message}");
         return hash;
     }
 

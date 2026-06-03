@@ -36,7 +36,14 @@ return cmd switch
     "branch" => RepoCommands.Branch(dashC, tail[1..]),
     "tag" => RepoCommands.Tag(dashC, tail[1..]),
     "merge" => RepoCommands.Merge(dashC, tail[1..]),
+    "cherry-pick" => RepoCommands.CherryPick(dashC, tail[1..]),
     "config" => RepoCommands.Config(dashC, tail[1..]),
+    "remote" => RepoCommands.Remote(dashC, tail[1..]),
+    "clone" => RepoCommands.Clone(dashC, tail[1..]),
+    "fetch" => RepoCommands.Fetch(dashC, tail[1..]),
+    "push" => RepoCommands.Push(dashC, tail[1..]),
+    "reflog" => RepoCommands.Reflog(dashC, tail[1..]),
+    "gc" => RepoCommands.GcCmd(dashC, tail[1..]),
     null or "-h" or "--help" => Help(),
     _ => RunDiff(tail, dashC), // shorthand: `mcadiff <A> <B>`
 };
@@ -190,7 +197,16 @@ partial class Program
             mcadiff branch [<name>]               List / create branches
             mcadiff tag [<name> [<ref>]] | -d <name>
             mcadiff merge <ref> [--theirs]        3-way merge
+            mcadiff cherry-pick <commit>          Apply one commit onto HEAD
             mcadiff config worktree [<path>]      Get / set the bound world
+
+        REMOTES (filesystem) & MAINTENANCE
+            mcadiff clone <src-repo> <dest-repo>
+            mcadiff remote [add <name> <path>]
+            mcadiff fetch [<remote> [<branch>]]   Into refs/remotes/<remote>/*
+            mcadiff push [<remote> [<branch>]] [--force]
+            mcadiff reflog                        HEAD movement history
+            mcadiff gc                            Prune unreachable objects
 
         Revisions accept HEAD, branches, tags, short hashes, and ~n / ^n suffixes.
 

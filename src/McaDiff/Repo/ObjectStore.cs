@@ -47,6 +47,25 @@ public sealed class ObjectStore
 
     public string ReadText(string hash) => Encoding.UTF8.GetString(Read(hash));
 
+    /// <summary>Copies an object's compressed file from another store (no-op if present).</summary>
+    public void Import(ObjectStore src, string hash)
+    {
+        if (Exists(hash)) return;
+        string dst = PathFor(hash);
+        Directory.CreateDirectory(Path.GetDirectoryName(dst)!);
+        File.Copy(src.PathFor(hash), dst);
+    }
+
+    /// <summary>Deletes an object. Returns its on-disk (compressed) size, or 0 if absent.</summary>
+    public long Delete(string hash)
+    {
+        string p = PathFor(hash);
+        if (!File.Exists(p)) return 0;
+        long size = new FileInfo(p).Length;
+        File.Delete(p);
+        return size;
+    }
+
     public bool Exists(string hash) => File.Exists(PathFor(hash));
 
     /// <summary>Resolves an abbreviated hash (≥4 hex chars) to a full hash, or null if absent/ambiguous.</summary>

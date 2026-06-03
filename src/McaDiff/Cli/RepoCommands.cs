@@ -275,6 +275,112 @@ public static class RepoCommands
         return result.HasConflicts ? 1 : 0;
     }
 
+    public static int Remote(string? dashC, string[] a)
+    {
+        if (Open(dashC) is not { } repo) return NoRepo();
+        if (a.Length == 0)
+        {
+            foreach (var kv in repo.Remotes) Console.WriteLine($"{kv.Key}\t{kv.Value}");
+            return 0;
+        }
+        if (a[0] == "add")
+        {
+            if (a.Length < 3) return Err("usage: remote add <name> <path>");
+            repo.AddRemote(a[1], a[2]);
+            Console.Error.WriteLine($"Added remote {a[1]} -> {repo.GetRemote(a[1])}");
+            return 0;
+        }
+        return Err("usage: remote | remote add <name> <path>");
+    }
+
+    public static int Clone(string? dashC, string[] a)
+    {
+        if (a.Length < 2) return Err("usage: clone <src-repo> <dest-repo>");
+        if (!Repository.IsRepository(a[0])) return Err($"not a repository: {a[0]}");
+        if (Repository.IsRepository(a[1])) return Err($"already a repository: {a[1]}");
+        RemoteOps.Clone(a[0], a[1]);
+        Console.Error.WriteLine($"Cloned {a[0]} -> {a[1]}");
+        return 0;
+    }
+
+    public static int Fetch(string? dashC, string[] a)
+    {
+        if (Open(dashC) is not { } repo) return NoRepo();
+        string remote = a.Length > 0 ? a[0] : "origin";
+        string? branch = a.Length > 1 ? a[1] : null;
+        try
+        {
+            int n = RemoteOps.Fetch(repo, remote, branch);
+            Console.Error.WriteLine($"Fetched {remote} ({n} objects copied)");
+            return 0;
+        }
+        catch (Exception ex) { return Err(ex.Message); }
+    }
+
+    public static int Push(string? dashC, string[] a)
+    {
+        var (pos, opts) = Parse(a, [], ["--force"]);
+        if (Open(dashC) is not { } repo) return NoRepo();
+        string remote = pos.Count > 0 ? pos[0] : "origin";
+        string? branch = pos.Count > 1 ? pos[1] : repo.CurrentBranch();
+        if (branch is null) return Err("detached HEAD — specify a branch to push");
+        try
+        {
+            RemoteOps.PushResult r = RemoteOps.Push(repo, remote, branch, opts.ContainsKey("--force"));
+            Console.Error.WriteLine($"Pushed {branch} -> {remote} ({r.ObjectsCopied} objects{(r.FastForward ? "" : ", forced")})");
+            return 0;
+        }
+        catch (Exception ex) { return Err(ex.Message); }
+    }
+
+    public static int Reflog(string? dashC, string[] a)
+    {
+        if (Open(dashC) is not { } repo) return NoRepo();
+        foreach (string line in repo.Reflog())
+        {
+            string[] parts = line.Split(' ', 3);
+            string to = parts.Length > 1 ? parts[1] : line;
+            string msg = parts.Length > 2 ? parts[2] : "";
+            Console.WriteLine($"{(to.Length >= 10 ? to[..10] : to)} {msg}");
+        }
+        return 0;
+    }
+
+    public static int CherryPick(string? dashC, string[] a)
+    {
+        if (Open(dashC) is not { } repo) return NoRepo();
+        if (a.Length < 1) return Err("usage: cherry-pick <commit>");
+        if (repo.CurrentBranch() is not { } branch) return Err("cherry-pick requires being on a branch");
+        if (repo.HeadCommit() is not { } head) return Err("nothing to cherry-pick onto (no commits)");
+        string target;
+        try { target = repo.ResolveRef(a[0]); } catch (Exception ex) { return Err(ex.Message); }
+
+        CommitObject tc = repo.ReadCommit(target);
+        string? parent = tc.Parents.Count > 0 ? tc.Parents[0] : null;
+        Manifest baseM = parent is not null ? repo.ReadManifest(repo.ReadCommit(parent).Tree) : new Manifest();
+        Manifest oursM = repo.ReadManifest(repo.ReadCommit(head).Tree);
+        Manifest theirsM = repo.ReadManifest(tc.Tree);
+
+        var conflicts = new List<MergeConflict>();
+        Manifest merged = Merger.MergeManifests(repo, baseM, oursM, theirsM, false, conflicts);
+        string tree = repo.WriteManifest(merged);
+        if (tree == repo.ReadCommit(head).Tree) { Console.Error.WriteLine("nothing to cherry-pick — no changes"); return 0; }
+
+        string commit = repo.CreateCommit(tree, [head], tc.Message, Author(null));
+        Console.Error.WriteLine($"[{branch} {commit[..10]}] {tc.Message} — {conflicts.Count} conflicts");
+        foreach (MergeConflict cf in conflicts.Take(20))
+            Console.Error.WriteLine($"  conflict: {cf.File}{(cf.Chunk is null ? "" : $" chunk {cf.Chunk}")}{(cf.Path.Length == 0 ? "" : $" {cf.Path}")} — {cf.Reason}");
+        return conflicts.Count > 0 ? 1 : 0;
+    }
+
+    public static int GcCmd(string? dashC, string[] a)
+    {
+        if (Open(dashC) is not { } repo) return NoRepo();
+        Gc.Result r = Gc.Prune(repo);
+        Console.Error.WriteLine($"Pruned {r.Pruned} objects ({r.BytesFreed / 1024} KiB freed), {r.Kept} reachable.");
+        return 0;
+    }
+
     public static int Config(string? dashC, string[] a)
     {
         if (Open(dashC) is not { } repo) return NoRepo();

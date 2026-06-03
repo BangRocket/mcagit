@@ -293,6 +293,85 @@ public class RepoTests
         Assert.DoesNotContain(m.Blobs.Keys, k => k.Contains("skip.sqlite"));
     }
 
+    [Fact]
+    public void Clone_Then_Push_FastForward()
+    {
+        Repository a = Repository.Init(TestAnvil.TempDir("rA"));
+        CommitWorld(a, World("a"), "c1");
+        CommitWorld(a, World("b"), "c2");
+
+        string bDir = TestAnvil.TempDir("rB");
+        RemoteOps.Clone(a.Dir, bDir);
+        Repository b = Repository.Open(bDir);
+        Assert.Equal(a.ReadBranch("main"), b.ReadBranch("main")); // clone copied the tip
+        Assert.True(b.Objects.Exists(b.ReadBranch("main")!));
+
+        string c3 = CommitWorld(b, World("c"), "c3");            // advance B
+        RemoteOps.Push(b, "origin", "main", force: false);
+
+        Repository a2 = Repository.Open(a.Dir);
+        Assert.Equal(c3, a2.ReadBranch("main"));                 // push fast-forwarded A
+        Assert.True(a2.Objects.Exists(c3));
+    }
+
+    [Fact]
+    public void Fetch_PopulatesRemoteTrackingRef()
+    {
+        Repository a = Repository.Init(TestAnvil.TempDir("fA"));
+        CommitWorld(a, World("a"), "c1");
+        string bDir = TestAnvil.TempDir("fB");
+        RemoteOps.Clone(a.Dir, bDir);
+        Repository b = Repository.Open(bDir);
+
+        string c2 = CommitWorld(a, World("b"), "c2");            // A moves ahead
+        RemoteOps.Fetch(b, "origin", "main");
+
+        Assert.Equal(c2, b.ReadRemoteRef("origin/main"));
+        Assert.True(b.Objects.Exists(c2));
+        Assert.Equal(c2, b.ResolveRef("origin/main"));          // resolvable as a revision
+    }
+
+    [Fact]
+    public void Gc_PrunesUnreachableObjects()
+    {
+        Repository repo = Repository.Init(TestAnvil.TempDir("gc"));
+        CommitWorld(repo, World("a"), "c1");
+        string orphan = repo.Objects.Write([7, 7, 7, 7]); // not referenced by any ref
+
+        Gc.Result r = Gc.Prune(repo);
+        Assert.True(r.Pruned >= 1);
+        Assert.False(repo.Objects.Exists(orphan));
+        Assert.True(repo.Objects.Exists(repo.HeadCommit()!)); // reachable kept
+    }
+
+    [Fact]
+    public void Reflog_RecordsCommits()
+    {
+        Repository repo = Repository.Init(TestAnvil.TempDir("rl"));
+        string c1 = CommitWorld(repo, World("a"), "c1");
+        List<string> log = repo.Reflog().ToList();
+        Assert.NotEmpty(log);
+        Assert.Contains(log, l => l.Contains(c1) && l.Contains("commit: c1"));
+    }
+
+    [Fact]
+    public void Merge_AddsRegionPresentOnlyOnTheirs()
+    {
+        Repository repo = Repository.Init(TestAnvil.TempDir("mr"));
+        // base/ours: only region/r.0.0; theirs adds region/r.1.0 (and an empty poi region).
+        Manifest baseM = new();
+        baseM.Regions["region/r.0.0.mca"] = new SortedDictionary<string, string>(StringComparer.Ordinal) { ["0,0"] = "hashA" };
+        Manifest oursM = baseM;
+        Manifest theirsM = new();
+        theirsM.Regions["region/r.0.0.mca"] = new SortedDictionary<string, string>(StringComparer.Ordinal) { ["0,0"] = "hashA" };
+        theirsM.Regions["region/r.1.0.mca"] = new SortedDictionary<string, string>(StringComparer.Ordinal) { ["32,0"] = "hashB" };
+        theirsM.Regions["poi/r.0.0.mca"] = new SortedDictionary<string, string>(StringComparer.Ordinal); // empty region
+
+        Manifest merged = Merger.MergeManifests(repo, baseM, oursM, theirsM, false, []);
+        Assert.True(merged.Regions.ContainsKey("region/r.1.0.mca")); // added region carried
+        Assert.True(merged.Regions.ContainsKey("poi/r.0.0.mca"));    // empty added region carried
+    }
+
     // ---- helpers ----
 
     private static NbtCompound Chunk(string status, long heightmap0) => TestAnvil.Root(

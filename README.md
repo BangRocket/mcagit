@@ -209,6 +209,23 @@ suffixes (e.g. `diff HEAD~2 HEAD`, `checkout main~1`). A `.mcaignore` in the wor
 (gitignore-lite: `*.ext`, `dir/`, `name`, `/anchored/path`) excludes files from
 commits.
 
+`cherry-pick <commit>` applies one commit onto HEAD via the 3-way engine.
+
+### Remotes & maintenance (filesystem)
+
+Sync history between repositories — e.g. push world backups to another drive or
+NAS. No network yet; remotes are repository directories. Because objects are
+content-addressed, transfer only copies what the other side lacks.
+
+```sh
+mcadiff clone <src-repo> <dest-repo>        # copy a repo + set origin
+mcadiff remote add <name> <path>            # register a remote
+mcadiff push  [<remote> [<branch>]] [--force]   # fast-forward-checked
+mcadiff fetch [<remote> [<branch>]]         # into refs/remotes/<remote>/* (e.g. origin/main)
+mcadiff reflog                              # HEAD movement history
+mcadiff gc                                  # prune objects unreachable from any ref
+```
+
 - **Whole-world snapshots:** region/entities/poi as deduped per-chunk objects,
   loose NBT as canonical objects, everything else (datapacks, stats, advancements)
   as raw blobs — so `checkout` restores a faithful, playable world.
@@ -291,6 +308,8 @@ theirs; fast-forward). One test additionally parses a real region file when
   per-repo decode cache, so an unchanged world re-commits in a fraction of the time.
 - `merge` uses the nearest common ancestor (fine for linear + single-merge
   histories; no criss-cross LCA), and conflicts are reported + kept-ours/theirs
-  with no in-place marker/resolve workflow. No remotes/fetch/push yet.
+  with no in-place marker/resolve workflow.
+- Remotes are filesystem-only (no ssh/http transport), and there's no staging
+  index — `commit` snapshots the whole worktree.
 - A compound key containing a literal `.` or `[` isn't addressable by patch/merge
   paths (real Minecraft keys don't use them).

@@ -95,7 +95,9 @@ public static class Snapshotter
                     continue;
                 }
 
-                NbtCompound root = ChunkCodec.Decode(rc); // throws on LZ4 → fall back to blob
+                // Retry so a transient parse hiccup never silently downgrades the whole
+                // region to a blob; a genuine UnsupportedChunkException (LZ4) still falls back.
+                NbtCompound root = Retry(() => ChunkCodec.Decode(rc));
                 string hash = Put(NbtCanonical.Serialize(root), ctx);
                 if (ctx.WriteCache) ctx.Cache?.Set(cacheKey, hash);
                 map[posKey] = hash;
@@ -104,14 +106,27 @@ public static class Snapshotter
         }
         catch
         {
-            return null; // unreadable/LZ4 → store the whole file as a blob instead
+            return null; // not a region container / undecodable → store as a raw blob
         }
     }
 
     private static string? TryNbt(string fullPath, Ctx ctx)
     {
-        try { return Put(NbtCanonical.Serialize(ChunkCodec.LoadNbtFile(fullPath)), ctx); }
+        // Retry so a rare transient failure can't misclassify valid NBT as a blob
+        // (which would make manifests nondeterministic); genuine non-NBT → blob.
+        try { return Put(NbtCanonical.Serialize(Retry(() => ChunkCodec.LoadNbtFile(fullPath))), ctx); }
         catch { return null; }
+    }
+
+    /// <summary>Runs <paramref name="action"/>, retrying twice on failure before letting it throw.</summary>
+    private static T Retry<T>(Func<T> action)
+    {
+        for (int i = 0; i < 2; i++)
+        {
+            try { return action(); }
+            catch { /* transient — retry */ }
+        }
+        return action();
     }
 
     private static string Put(byte[] content, Ctx ctx)

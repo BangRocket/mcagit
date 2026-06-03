@@ -63,9 +63,26 @@ public static class Merger
             var bm = b.Regions.GetValueOrDefault(rel);
             var om = o.Regions.GetValueOrDefault(rel);
             var tm = t.Regions.GetValueOrDefault(rel);
-            var map = MergeChunkMap(repo, rel, bm, om, tm, preferTheirs, conflicts);
-            if (map.Count > 0 || (om is not null && tm is not null)) // keep empty regions that exist on both sides
+            bool inB = bm is not null, inO = om is not null, inT = tm is not null;
+
+            if (inO && inT) // present on both → merge chunk-by-chunk (may be empty)
+            {
+                var map = MergeChunkMap(repo, rel, bm, om, tm, preferTheirs, conflicts);
                 merged.Regions[rel] = new SortedDictionary<string, string>(map, StringComparer.Ordinal);
+            }
+            else if (inO) // only ours has the region
+            {
+                if (!inB) merged.Regions[rel] = om!;                  // ours added it
+                else if (MapsEqual(om, bm)) { /* theirs deleted, ours unchanged → delete */ }
+                else { conflicts.Add(new MergeConflict(rel, null, "", "delete/modify conflict — kept ours")); merged.Regions[rel] = om!; }
+            }
+            else if (inT) // only theirs has the region
+            {
+                if (!inB) merged.Regions[rel] = tm!;                  // theirs added it
+                else if (MapsEqual(tm, bm)) { /* ours deleted, theirs unchanged → delete */ }
+                else conflicts.Add(new MergeConflict(rel, null, "", "delete/modify conflict — kept ours (deleted)"));
+            }
+            // present in base only (both deleted) → absent in merged
         }
 
         MergeScalarSet(repo, b.Nbt, o.Nbt, t.Nbt, preferTheirs, conflicts, nodeMerge: true, merged.Nbt);
@@ -177,6 +194,15 @@ public static class Merger
 
     private static bool SameValue(System.Text.Json.Nodes.JsonNode? a, System.Text.Json.Nodes.JsonNode? b)
         => (a is null && b is null) || (a is not null && b is not null && a.ToJsonString() == b.ToJsonString());
+
+    private static bool MapsEqual(SortedDictionary<string, string>? a, SortedDictionary<string, string>? b)
+    {
+        if (a is null || b is null) return ReferenceEquals(a, b);
+        if (a.Count != b.Count) return false;
+        foreach (var kv in a)
+            if (!b.TryGetValue(kv.Key, out string? v) || v != kv.Value) return false;
+        return true;
+    }
 
     private static IEnumerable<string> Union(IEnumerable<string>? a, IEnumerable<string>? b, IEnumerable<string>? c)
     {
