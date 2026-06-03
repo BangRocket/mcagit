@@ -37,7 +37,8 @@ public static class RepoCommands
         string hash = repo.CreateCommit(tree, head is null ? [] : [head], message, author);
         int chunks = manifest.Regions.Sum(r => r.Value.Count);
         int files = manifest.Regions.Count + manifest.Nbt.Count + manifest.Blobs.Count;
-        Console.Error.WriteLine($"[{repo.CurrentBranch()} {hash[..10]}] {message}  ({files} files, {chunks} chunks, {repo.Objects.Count()} objects in store)");
+        string where = repo.CurrentBranch() ?? "detached HEAD";
+        Console.Error.WriteLine($"[{where} {hash[..10]}] {message}  ({files} files, {chunks} chunks, {repo.Objects.Count()} objects in store)");
         return 0;
     }
 
@@ -99,9 +100,11 @@ public static class RepoCommands
         Manifest manifest = repo.ReadManifest(repo.ReadCommit(commit).Tree);
         Repo.Checkout.Materialize(repo, manifest, outDir);
 
-        if (repo.ReadBranch(refName) is not null) repo.SetHeadToBranch(refName);
+        bool onBranch = repo.ReadBranch(refName) is not null;
+        if (onBranch) repo.SetHeadToBranch(refName);
         else repo.SetHeadDetached(commit);
-        Console.Error.WriteLine($"Checked out {refName} ({commit[..10]}) into {outDir}");
+        string note = onBranch ? $"on branch {refName}" : "detached HEAD (commits won't move a branch)";
+        Console.Error.WriteLine($"Checked out {refName} ({commit[..10]}) into {outDir} — {note}");
         return 0;
     }
 

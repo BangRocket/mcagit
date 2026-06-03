@@ -267,8 +267,9 @@ theirs; fast-forward). One test additionally parses a real region file when
 - `diff`/`extract`/`commit`/`status` never modify a world. `apply` and `checkout`
   only write to the fresh output directory they create.
 - Objects are whole (zlib-compressed), not delta-packed; `apply` copies the whole
-  target world before editing (no hardlink/reflink yet). Commit decodes every
-  chunk (parallelized) — a full first commit of a large world takes a few seconds.
+  target world before editing (no hardlink/reflink yet). The first commit decodes
+  every chunk (parallelized, a few seconds on a large world); re-commits reuse a
+  per-repo decode cache, so an unchanged world re-commits in a fraction of the time.
 - `merge` uses the nearest common ancestor (fine for linear + single-merge
   histories; no criss-cross LCA), and conflicts are reported + kept-ours/theirs
   with no in-place marker/resolve workflow. No remotes/fetch/push yet.

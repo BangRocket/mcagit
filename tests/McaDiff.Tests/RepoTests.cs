@@ -122,6 +122,41 @@ public class RepoTests
         Assert.Equal(c1, repo.ReadBranch("main"));
     }
 
+    [Fact]
+    public void DetachedHead_Commit_DoesNotMoveBranch()
+    {
+        Repository repo = Repository.Init(TestAnvil.TempDir("det"));
+        string c0 = CommitWorld(repo, World("base"), "c0");   // main = c0
+        repo.SetHeadDetached(c0);
+        string c1 = CommitWorld(repo, World("other"), "c1");  // commit while detached
+
+        Assert.Equal(c0, repo.ReadBranch("main"));            // main NOT clobbered
+        Assert.Null(repo.CurrentBranch());                    // still detached
+        Assert.Equal(c1, repo.HeadCommit());                  // HEAD advanced
+        Assert.Equal(c0, repo.ReadCommit(c1).Parents[0]);     // parented on the detached commit
+    }
+
+    [Fact]
+    public void Canonical_ReorderedCompoundKeys_HashIdentically()
+    {
+        var a = TestAnvil.Root(new NbtInt("x", 1), new NbtString("y", "hi"), new NbtLong("z", 5));
+        var b = TestAnvil.Root(new NbtLong("z", 5), new NbtString("y", "hi"), new NbtInt("x", 1));
+        Assert.Equal(NbtCanonical.Serialize(a), NbtCanonical.Serialize(b)); // dedup despite key order
+    }
+
+    [Fact]
+    public void ReCommit_SameWorld_AddsNoObjects_AndMatchesHead()
+    {
+        Repository repo = Repository.Init(TestAnvil.TempDir("cache"));
+        string world = World("w");
+        CommitWorld(repo, world, "first");
+        int before = repo.Objects.Count();
+
+        Manifest again = Snapshotter.Snapshot(repo, world); // re-snapshot uses the chunk cache
+        Assert.Equal(before, repo.Objects.Count());          // dedup + cache: no new objects
+        Assert.Equal(repo.ReadCommit(repo.HeadCommit()!).Tree, repo.WriteManifest(again));
+    }
+
     // ---- helpers ----
 
     private static NbtCompound Chunk(string status, long heightmap0) => TestAnvil.Root(

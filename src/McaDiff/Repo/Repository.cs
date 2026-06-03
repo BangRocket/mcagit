@@ -12,6 +12,10 @@ public sealed class Repository
     public string Dir { get; }
     public ObjectStore Objects { get; }
 
+    private ChunkCache? _cache;
+    /// <summary>Lazily-loaded decode cache (see <see cref="ChunkCache"/>).</summary>
+    public ChunkCache Cache => _cache ??= ChunkCache.Load(Dir);
+
     private Repository(string dir)
     {
         Dir = dir;
@@ -115,9 +119,11 @@ public sealed class Repository
         };
         string hash = WriteCommit(commit);
 
-        string branch = CurrentBranch() ?? DefaultBranch;
-        WriteBranch(branch, hash);
-        if (CurrentBranch() is null) SetHeadToBranch(branch);
+        // Advance the current branch; if HEAD is detached, move HEAD itself and
+        // leave every branch untouched (committing on a detached HEAD must never
+        // silently clobber 'main').
+        if (CurrentBranch() is { } branch) WriteBranch(branch, hash);
+        else SetHeadDetached(hash);
         return hash;
     }
 

@@ -9,22 +9,27 @@ namespace McaDiff.Repo;
 /// <summary>
 /// Turns a world directory into a <see cref="Manifest"/>, storing each unique
 /// chunk / loose-NBT / file as a content-addressed object (or, when
-/// <c>store</c> is null, just computing hashes — used by status). Region/entities/
+/// <c>Store</c> is null, just computing hashes — used by status). Region/entities/
 /// poi <c>.mca</c> become per-chunk objects (max dedup); <c>.dat</c> become
-/// canonical NBT objects; everything else is a raw blob.
+/// canonical NBT objects; everything else is a raw blob. A <see cref="ChunkCache"/>
+/// lets unchanged chunks skip decoding on re-commit.
 /// </summary>
 public static class Snapshotter
 {
     private static readonly string[] SkipNames = ["session.lock"];
 
-    public static Manifest Snapshot(Repository repo, string worldDir) => Build(worldDir, repo.Objects);
+    public static Manifest Snapshot(Repository repo, string worldDir)
+        => Build(worldDir, new Ctx(repo.Objects, repo.Cache, WriteCache: true));
 
-    public static Manifest HashOnly(string worldDir) => Build(worldDir, store: null);
+    public static Manifest HashOnly(Repository repo, string worldDir)
+        => Build(worldDir, new Ctx(Store: null, repo.Cache, WriteCache: false));
 
-    private static Manifest Build(string worldDir, ObjectStore? store)
+    private readonly record struct Ctx(ObjectStore? Store, ChunkCache? Cache, bool WriteCache);
+
+    private static Manifest Build(string worldDir, Ctx ctx)
     {
         string root = Path.GetFullPath(worldDir);
-        var files = Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)
+        string[] files = Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)
             .Where(f => !SkipNames.Contains(Path.GetFileName(f)))
             .ToArray();
 
@@ -32,7 +37,7 @@ public static class Snapshotter
         Parallel.ForEach(files, f =>
         {
             string rel = Path.GetRelativePath(root, f).Replace('\\', '/');
-            results.Add(Classify(f, rel, store));
+            results.Add(Classify(f, rel, ctx));
         });
 
         var manifest = new Manifest();
@@ -45,21 +50,23 @@ public static class Snapshotter
                 default: manifest.Blobs[e.Rel] = e.Hash!; break;
             }
         }
+
+        if (ctx.WriteCache) ctx.Cache?.Save();
         return manifest;
     }
 
-    private static Entry Classify(string fullPath, string rel, ObjectStore? store)
+    private static Entry Classify(string fullPath, string rel, Ctx ctx)
     {
-        if (IsRegionFile(rel) && TryChunks(fullPath, store) is { } chunks)
+        if (IsRegionFile(rel) && TryChunks(fullPath, ctx) is { } chunks)
             return new Entry(rel, EntryKind.Region, chunks, null);
 
-        if (rel.EndsWith(".dat", StringComparison.OrdinalIgnoreCase) && TryNbt(fullPath, store) is { } nbtHash)
+        if (rel.EndsWith(".dat", StringComparison.OrdinalIgnoreCase) && TryNbt(fullPath, ctx) is { } nbtHash)
             return new Entry(rel, EntryKind.Nbt, null, nbtHash);
 
-        return new Entry(rel, EntryKind.Blob, null, Put(File.ReadAllBytes(fullPath), store));
+        return new Entry(rel, EntryKind.Blob, null, Put(File.ReadAllBytes(fullPath), ctx));
     }
 
-    private static Dictionary<string, string>? TryChunks(string fullPath, ObjectStore? store)
+    private static Dictionary<string, string>? TryChunks(string fullPath, Ctx ctx)
     {
         try
         {
@@ -67,8 +74,20 @@ public static class Snapshotter
             var map = new Dictionary<string, string>(region.Count);
             foreach (RawChunk rc in region.Chunks)
             {
+                string posKey = $"{rc.Pos.X},{rc.Pos.Z}";
+                string cacheKey = $"{(int)rc.Compression}:{Convert.ToHexStringLower(SHA256.HashData(rc.Payload))}";
+
+                if (ctx.Cache is not null && ctx.Cache.TryGet(cacheKey, out string hit)
+                    && (ctx.Store is null || ctx.Store.Exists(hit)))
+                {
+                    map[posKey] = hit; // unchanged chunk — no decode/canonicalize
+                    continue;
+                }
+
                 NbtCompound root = ChunkCodec.Decode(rc); // throws on LZ4 → fall back to blob
-                map[$"{rc.Pos.X},{rc.Pos.Z}"] = Put(NbtCanonical.Serialize(root), store);
+                string hash = Put(NbtCanonical.Serialize(root), ctx);
+                if (ctx.WriteCache) ctx.Cache?.Set(cacheKey, hash);
+                map[posKey] = hash;
             }
             return map; // may be empty (e.g. 0-byte poi region)
         }
@@ -78,14 +97,14 @@ public static class Snapshotter
         }
     }
 
-    private static string? TryNbt(string fullPath, ObjectStore? store)
+    private static string? TryNbt(string fullPath, Ctx ctx)
     {
-        try { return Put(NbtCanonical.Serialize(ChunkCodec.LoadNbtFile(fullPath)), store); }
+        try { return Put(NbtCanonical.Serialize(ChunkCodec.LoadNbtFile(fullPath)), ctx); }
         catch { return null; }
     }
 
-    private static string Put(byte[] content, ObjectStore? store)
-        => store is not null ? store.Write(content) : Convert.ToHexStringLower(SHA256.HashData(content));
+    private static string Put(byte[] content, Ctx ctx)
+        => ctx.Store is not null ? ctx.Store.Write(content) : Convert.ToHexStringLower(SHA256.HashData(content));
 
     private static bool IsRegionFile(string rel)
     {

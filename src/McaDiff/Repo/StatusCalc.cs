@@ -10,7 +10,7 @@ public static class StatusCalc
 {
     public static List<StatusEntry> Compute(Repository repo, string worldDir)
     {
-        Manifest work = Snapshotter.HashOnly(worldDir);
+        Manifest work = Snapshotter.HashOnly(repo, worldDir);
         Manifest head = HeadManifest(repo);
 
         var entries = new List<StatusEntry>();
