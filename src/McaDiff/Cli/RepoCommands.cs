@@ -31,6 +31,7 @@ public static class RepoCommands
         if (Open(dashC) is not { } repo) return NoRepo();
         string? message = opts.GetValueOrDefault("-m") ?? opts.GetValueOrDefault("--message");
         if (message is null) return Err("commit requires -m <message>");
+        if (Hooks.Run(repo, "pre-commit") != 0) return Err("pre-commit hook failed; commit aborted");
 
         // With a staging index, commit the staged tree; otherwise snapshot the whole worktree.
         bool fromIndex = StagingIndex.Exists(repo);
@@ -58,6 +59,7 @@ public static class RepoCommands
         string hash = repo.CreateCommit(tree, head is null ? [] : [head], message,
             Author(repo, opts.GetValueOrDefault("--author")), sign: signer);
         if (fromIndex) StagingIndex.Clear(repo);
+        Hooks.Run(repo, "post-commit");
         int chunks = manifest.Regions.Sum(r => r.Value.Count);
         int files = manifest.Regions.Count + manifest.Nbt.Count + manifest.Blobs.Count;
         string where = repo.CurrentBranch() ?? "detached HEAD";
@@ -69,41 +71,91 @@ public static class RepoCommands
     {
         var (pos, opts) = Parse(a, ["-n"], ["--oneline", "-p", "--stat", "--no-color"]);
         if (Open(dashC) is not { } repo) return NoRepo();
-        string? start = pos.Count > 0 ? TryResolve(repo, pos[0]) : repo.HeadCommit();
-        if (start is null) { Console.Error.WriteLine("no commits yet"); return 0; }
 
         int limit = opts.GetValueOrDefault("-n") is { } ns && int.TryParse(ns, out int lv) ? lv : int.MaxValue;
         bool oneline = opts.ContainsKey("--oneline"), patch = opts.ContainsKey("-p"),
              stat = opts.ContainsKey("--stat"), noColor = opts.ContainsKey("--no-color");
 
-        int count = 0;
-        for (string? cur = start; cur is not null && count < limit; count++)
+        List<string> commits;
+        if (pos.Count > 0 && (pos[0].Contains("...") || pos[0].Contains("..")))
         {
-            CommitObject c = repo.ReadCommit(cur);
-            if (oneline)
-            {
-                Console.WriteLine($"{cur[..10]} {c.Message}");
-            }
-            else
-            {
-                Console.WriteLine($"commit {cur}{(c.Signature is not null ? " (signed)" : "")}");
-                if (c.Parents.Count > 1) Console.WriteLine($"Merge:  {string.Join(" ", c.Parents.Select(p => p[..10]))}");
-                Console.WriteLine($"Author: {c.Author}");
-                if (!string.IsNullOrEmpty(c.Committer) && c.Committer != c.Author) Console.WriteLine($"Commit: {c.Committer}");
-                Console.WriteLine($"Date:   {c.Time}");
-                Console.WriteLine();
-                Console.WriteLine($"    {c.Message}");
-                Console.WriteLine();
-                if (stat || patch)
-                {
-                    WorldDiff d = CommitDiff(repo, cur);
-                    if (stat) Console.WriteLine("  " + Counts(d));
-                    if (patch) RenderDiff(d, noColor);
-                }
-            }
-            cur = c.Parents.Count > 0 ? c.Parents[0] : null;
+            try { commits = RangeCommits(repo, pos[0]); } catch (Exception ex) { return Err(ex.Message); }
         }
+        else
+        {
+            string? start = pos.Count > 0 ? TryResolve(repo, pos[0]) : repo.HeadCommit();
+            if (start is null) { Console.Error.WriteLine("no commits yet"); return 0; }
+            commits = LinearHistory(repo, start);
+        }
+
+        foreach (string h in commits.Take(limit)) PrintLogEntry(repo, h, oneline, stat, patch, noColor);
         return 0;
+    }
+
+    private static List<string> LinearHistory(Repository repo, string start)
+    {
+        var list = new List<string>();
+        for (string? cur = start; cur is not null;)
+        {
+            list.Add(cur);
+            List<string> parents = repo.ReadCommit(cur).Parents;
+            cur = parents.Count > 0 ? parents[0] : null;
+        }
+        return list;
+    }
+
+    /// <summary>Commits in <c>A..B</c> (reachable from B, not A) or <c>A...B</c> (symmetric
+    /// difference), newest first. An empty side defaults to HEAD.</summary>
+    private static List<string> RangeCommits(Repository repo, string spec)
+    {
+        bool sym = spec.Contains("...");
+        string sep = sym ? "..." : "..";
+        int i = spec.IndexOf(sep, StringComparison.Ordinal);
+        string aSpec = spec[..i] is { Length: > 0 } sa ? sa : "HEAD";
+        string bSpec = spec[(i + sep.Length)..] is { Length: > 0 } sb ? sb : "HEAD";
+
+        HashSet<string> ancA = Ancestors(repo, repo.ResolveRef(aSpec));
+        HashSet<string> ancB = Ancestors(repo, repo.ResolveRef(bSpec));
+        IEnumerable<string> set = sym
+            ? ancA.Except(ancB).Concat(ancB.Except(ancA))
+            : ancB.Except(ancA);
+        return set.OrderByDescending(h => repo.ReadCommit(h).Time, StringComparer.Ordinal)
+                  .ThenBy(h => h, StringComparer.Ordinal).ToList();
+    }
+
+    private static HashSet<string> Ancestors(Repository repo, string commit)
+    {
+        var set = new HashSet<string>(StringComparer.Ordinal);
+        var stack = new Stack<string>();
+        stack.Push(commit);
+        while (stack.Count > 0)
+        {
+            string h = stack.Pop();
+            if (!set.Add(h)) continue;
+            foreach (string p in repo.ReadCommit(h).Parents) stack.Push(p);
+        }
+        return set;
+    }
+
+    private static void PrintLogEntry(Repository repo, string hash, bool oneline, bool stat, bool patch, bool noColor)
+    {
+        CommitObject c = repo.ReadCommit(hash);
+        if (oneline) { Console.WriteLine($"{hash[..10]} {c.Message}"); return; }
+
+        Console.WriteLine($"commit {hash}{(c.Signature is not null ? " (signed)" : "")}");
+        if (c.Parents.Count > 1) Console.WriteLine($"Merge:  {string.Join(" ", c.Parents.Select(p => p[..10]))}");
+        Console.WriteLine($"Author: {c.Author}");
+        if (!string.IsNullOrEmpty(c.Committer) && c.Committer != c.Author) Console.WriteLine($"Commit: {c.Committer}");
+        Console.WriteLine($"Date:   {c.Time}");
+        Console.WriteLine();
+        Console.WriteLine($"    {c.Message}");
+        Console.WriteLine();
+        if (stat || patch)
+        {
+            WorldDiff d = CommitDiff(repo, hash);
+            if (stat) Console.WriteLine("  " + Counts(d));
+            if (patch) RenderDiff(d, noColor);
+        }
     }
 
     public static int Show(string? dashC, string[] a)
@@ -443,9 +495,29 @@ public static class RepoCommands
 
     public static int Push(string? dashC, string[] a)
     {
-        var (pos, opts) = Parse(a, ["--token"], ["--force"]);
+        var (pos, opts) = Parse(a, ["--token"], ["--force", "--all"]);
         if (Open(dashC) is not { } repo) return NoRepo();
         string remote = pos.Count > 0 ? pos[0] : "origin";
+        bool force = opts.ContainsKey("--force");
+        string? token = Token(opts);
+
+        if (opts.ContainsKey("--all"))
+        {
+            int total = 0;
+            foreach (string b in repo.Branches())
+            {
+                try
+                {
+                    RemoteOps.PushResult pr = RemoteOps.Push(repo, remote, b, force, token);
+                    total += pr.ObjectsCopied;
+                    Console.Error.WriteLine($"  {b} -> {remote} ({pr.ObjectsCopied} objects{(pr.FastForward ? "" : ", forced")})");
+                }
+                catch (Exception ex) { Console.Error.WriteLine($"  {b}: {ex.Message}"); }
+            }
+            Console.Error.WriteLine($"Pushed all branches to {remote} ({total} objects).");
+            return 0;
+        }
+
         string? branch = pos.Count > 1 ? pos[1] : repo.CurrentBranch();
         if (branch is null) return Err("detached HEAD — specify a branch to push");
         try
@@ -790,6 +862,136 @@ public static class RepoCommands
         if (repo.ReadBranch(orig) is { } tip) { repo.SetHeadToBranch(orig); commit = tip; }
         else { repo.SetHeadDetached(orig); commit = orig; }
         if (repo.Worktree is { } w) Repo.Checkout.Materialize(repo, repo.ReadManifest(repo.ReadCommit(commit).Tree), w, prune: true);
+    }
+
+    public static int StashCmd(string? dashC, string[] a)
+    {
+        var (pos, opts) = Parse(a, ["-m", "--message", "--author"], []);
+        if (Open(dashC) is not { } repo) return NoRepo();
+        string sub = pos.Count > 0 ? pos[0] : "push";
+        try
+        {
+            switch (sub)
+            {
+                case "push" or "save":
+                {
+                    string msg = opts.GetValueOrDefault("-m") ?? opts.GetValueOrDefault("--message") ?? "WIP";
+                    Stash.PushResult r = Stash.Push(repo, msg, Author(repo, opts.GetValueOrDefault("--author")));
+                    if (!r.Created) { Console.Error.WriteLine("No local changes to stash."); return 0; }
+                    Console.Error.WriteLine($"Saved working state in stash@{{0}} ({r.Commit![..10]}); worktree reset to HEAD.");
+                    return 0;
+                }
+                case "list":
+                {
+                    List<string> stack = Stash.Stack(repo);
+                    for (int i = 0; i < stack.Count; i++)
+                        Console.WriteLine($"stash@{{{i}}}: {stack[i][..10]} {repo.ReadCommit(stack[i]).Message}");
+                    return 0;
+                }
+                case "pop" or "apply":
+                {
+                    int n = ParseStashIndex(pos);
+                    List<MergeConflict> conflicts = Stash.Apply(repo, n, pop: sub == "pop");
+                    if (conflicts.Count > 0)
+                    {
+                        Console.Error.WriteLine($"Applied stash@{{{n}}} with {conflicts.Count} conflict(s) (kept ours; stash retained):");
+                        PrintConflicts(conflicts);
+                        return 1;
+                    }
+                    Console.Error.WriteLine($"{(sub == "pop" ? "Popped" : "Applied")} stash@{{{n}}}.");
+                    return 0;
+                }
+                case "drop":
+                {
+                    int n = ParseStashIndex(pos);
+                    if (!Stash.Drop(repo, n)) return Err($"no stash@{{{n}}}");
+                    Console.Error.WriteLine($"Dropped stash@{{{n}}}.");
+                    return 0;
+                }
+                case "clear":
+                    Stash.Clear(repo);
+                    Console.Error.WriteLine("Cleared the stash stack.");
+                    return 0;
+                default:
+                    return Err($"unknown stash subcommand: {sub} (push|list|pop|apply|drop|clear)");
+            }
+        }
+        catch (Exception ex) { return Err(ex.Message); }
+    }
+
+    private static int ParseStashIndex(List<string> pos)
+    {
+        foreach (string t in pos.Skip(1))
+        {
+            string s = t.StartsWith("stash@{") && t.EndsWith('}') ? t[7..^1] : t;
+            if (int.TryParse(s, out int n)) return n;
+        }
+        return 0;
+    }
+
+    public static int RebaseCmd(string? dashC, string[] a)
+    {
+        var (pos, opts) = Parse(a, ["--onto", "--author"], []);
+        if (Open(dashC) is not { } repo) return NoRepo();
+        if (pos.Count < 1) return Err("usage: rebase [--onto <newbase>] <upstream>");
+        try
+        {
+            Rebase.Result r = Rebase.Run(repo, pos[0], opts.GetValueOrDefault("--onto"), Author(repo, opts.GetValueOrDefault("--author")));
+            if (r.UpToDate) { Console.Error.WriteLine("Already up to date."); return 0; }
+            if (r.FastForward) { Console.Error.WriteLine($"Fast-forwarded to {r.NewTip![..10]}."); return 0; }
+            Console.Error.WriteLine($"Rebased {r.Replayed} commit(s) onto {r.NewTip![..10]} — {r.Conflicts.Count} conflict(s).");
+            PrintConflicts(r.Conflicts);
+            return r.Conflicts.Count > 0 ? 1 : 0;
+        }
+        catch (Exception ex) { return Err(ex.Message); }
+    }
+
+    public static int Clean(string? dashC, string[] a)
+    {
+        var (_, opts) = Parse(a, ["--world"], ["-n", "--dry-run", "-f", "--force"]);
+        if (Open(dashC) is not { } repo) return NoRepo();
+        string? world = opts.GetValueOrDefault("--world") ?? repo.Worktree;
+        if (world is null) return Err("no worktree bound; use --world <dir>");
+        bool dry = opts.ContainsKey("-n") || opts.ContainsKey("--dry-run");
+        bool force = opts.ContainsKey("-f") || opts.ContainsKey("--force");
+        if (!dry && !force) return Err("clean would remove untracked files; pass -f to remove or -n to preview");
+
+        Manifest head = repo.HeadCommit() is { } h ? repo.ReadManifest(repo.ReadCommit(h).Tree) : new Manifest();
+        var keep = new HashSet<string>(StringComparer.Ordinal);
+        foreach (string k in head.Regions.Keys) keep.Add(k);
+        foreach (string k in head.Nbt.Keys) keep.Add(k);
+        foreach (string k in head.Blobs.Keys) keep.Add(k);
+        IgnoreRules ignore = IgnoreRules.Load(world);
+
+        int n = 0;
+        foreach (string file in Directory.EnumerateFiles(world, "*", SearchOption.AllDirectories))
+        {
+            string rel = Path.GetRelativePath(world, file).Replace('\\', '/');
+            if (rel == "session.lock" || keep.Contains(rel) || ignore.IsIgnored(rel)) continue;
+            if (dry) Console.WriteLine($"Would remove {rel}");
+            else { File.Delete(file); Console.WriteLine($"Removing {rel}"); }
+            n++;
+        }
+        if (n == 0) Console.Error.WriteLine("Nothing to clean.");
+        return 0;
+    }
+
+    public static int LsRemote(string? dashC, string[] a)
+    {
+        var (pos, opts) = Parse(a, ["--token"], []);
+        if (Open(dashC) is not { } repo) return NoRepo();
+        string remote = pos.Count > 0 ? pos[0] : "origin";
+        string url = repo.GetRemote(remote) ?? remote;
+        try
+        {
+            using IRemoteTransport t = Transports.Connect(url, Token(opts));
+            RefAdvertisement refs = t.ListRefs();
+            foreach (var kv in refs.Branches) Console.WriteLine($"{kv.Value}\trefs/heads/{kv.Key}");
+            foreach (var kv in refs.Tags) Console.WriteLine($"{kv.Value}\trefs/tags/{kv.Key}");
+            if (refs.Head is { } hd) Console.WriteLine($"{refs.Branches.GetValueOrDefault(hd) ?? ""}\tHEAD -> {hd}");
+            return 0;
+        }
+        catch (Exception ex) { return Err(ex.Message); }
     }
 
     // ---- helpers ----

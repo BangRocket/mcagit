@@ -188,6 +188,15 @@ public sealed class Repository
         return File.Exists(p) ? File.ReadLines(p).Reverse() : [];
     }
 
+    /// <summary>The commit HEAD pointed at <paramref name="n"/> reflog entries ago (HEAD@{n}).</summary>
+    public string ReflogCommitAt(int n)
+    {
+        string? line = Reflog().ElementAtOrDefault(n)
+            ?? throw new InvalidOperationException($"reflog for HEAD has no entry @{{{n}}}");
+        string[] parts = line.Split(' ', 3);
+        return parts.Length > 1 ? parts[1] : throw new InvalidOperationException($"malformed reflog entry @{{{n}}}");
+    }
+
     // ---- in-progress merge state (MERGE_HEAD / MERGE_MSG / ORIG_HEAD / MERGE_CONFLICTS) ----
 
     private string MergeHeadPath => Path.Combine(Dir, "MERGE_HEAD");
@@ -385,6 +394,14 @@ public sealed class Repository
 
     private string ResolveBase(string name)
     {
+        // HEAD@{n} / @{n}: the nth-previous HEAD value from the reflog.
+        if (name.EndsWith('}') && name.Contains("@{"))
+        {
+            int at = name.IndexOf("@{", StringComparison.Ordinal);
+            string baseName = name[..at];
+            if ((baseName is "HEAD" or "") && int.TryParse(name[(at + 2)..^1], out int n))
+                return ReflogCommitAt(n);
+        }
         if (name == "HEAD")
             return HeadCommit() ?? throw new InvalidOperationException("HEAD has no commits yet");
         if (ReadBranch(name) is { } b) return b;

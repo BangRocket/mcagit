@@ -86,6 +86,7 @@ public static class Gc
             string[] parts = line.Split(' ', 3);
             if (parts.Length > 1 && parts[1].Length == 64 && repo.Objects.Exists(parts[1])) tips.Add(parts[1]);
         }
+        foreach (string s in Stash.Stack(repo)) tips.Add(s);       // keep stashed snapshots
         if (repo.HeadCommit() is { } head) tips.Add(head);
         return tips;
     }

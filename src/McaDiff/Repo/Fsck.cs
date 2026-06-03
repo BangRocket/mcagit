@@ -38,6 +38,7 @@ public static class Fsck
         foreach (string tg in repo.Tags())
             if (repo.ReadTag(tg) is { } h) { reachable.Add(h); Enqueue(repo.PeelToCommit(h), $"tag {tg}"); }
         foreach ((string name, string h) in RemoteRefs(repo)) Enqueue(h, $"remote {name}");
+        foreach (string s in Stash.Stack(repo)) Enqueue(s, "stash");
         if (repo.HeadCommit() is { } head) Enqueue(head, "HEAD");
         foreach (string line in repo.Reflog())
         {

@@ -39,11 +39,15 @@ return cmd switch
     "tag" => RepoCommands.Tag(dashC, tail[1..]),
     "merge" => RepoCommands.Merge(dashC, tail[1..]),
     "cherry-pick" => RepoCommands.CherryPick(dashC, tail[1..]),
+    "rebase" => RepoCommands.RebaseCmd(dashC, tail[1..]),
+    "stash" => RepoCommands.StashCmd(dashC, tail[1..]),
+    "clean" => RepoCommands.Clean(dashC, tail[1..]),
     "config" => RepoCommands.Config(dashC, tail[1..]),
     "remote" => RepoCommands.Remote(dashC, tail[1..]),
     "clone" => RepoCommands.Clone(dashC, tail[1..]),
     "fetch" => RepoCommands.Fetch(dashC, tail[1..]),
     "push" => RepoCommands.Push(dashC, tail[1..]),
+    "ls-remote" => RepoCommands.LsRemote(dashC, tail[1..]),
     "serve" => RepoCommands.Serve(dashC, tail[1..]),
     "serve-stdio" => RepoCommands.ServeStdio(dashC, tail[1..]),
     "reflog" => RepoCommands.Reflog(dashC, tail[1..]),
@@ -221,6 +225,9 @@ partial class Program
             mcadiff merge <ref> [--theirs|--ours]  3-way merge (stops on conflict)
             mcadiff merge --continue | --abort     Finish / undo a conflicted merge
             mcadiff cherry-pick <commit>          Apply one commit onto HEAD
+            mcadiff rebase [--onto <base>] <up>   Replay branch commits onto a new base
+            mcadiff stash [push|list|pop|apply|drop|clear]   Shelve / restore the worktree
+            mcadiff clean [-n|-f]                 Remove untracked worktree files
             mcadiff commit -S …                   Sign the commit (SSH key)
             mcadiff config [--global] <key> [<v>] | --list | --unset <key>
 
@@ -228,7 +235,8 @@ partial class Program
             mcadiff clone <src> <dest> [--token T]
             mcadiff remote [add <name> <url>]     url: path | http(s)://host:port | ssh://host/path
             mcadiff fetch [<remote> [<branch>]] [--token T]
-            mcadiff push  [<remote> [<branch>]] [--force] [--token T]
+            mcadiff push  [<remote> [<branch>]] [--force|--all] [--token T]
+            mcadiff ls-remote [<remote>] [--token T]   List a remote's refs
             mcadiff serve [<repo>] [--port N] [--host H] [--allow-push] [--token T]
             mcadiff reflog                        HEAD movement history
             mcadiff gc                            Prune unreachable objects
