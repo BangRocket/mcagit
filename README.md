@@ -144,8 +144,29 @@ new value (losslessly type-encoded), which is what makes it invertible:
 whole roots instead of node-level ops. `apply` flags: `--reverse`, `--force`,
 `--dry-run`, `--only`. Apply exits `0` clean, `1` if any conflicts were skipped.
 
-Round-trip is verified on real worlds: `extract` Older→Newer then `apply`
-reproduces Newer exactly (clean diff); `apply --reverse` reproduces Older.
+### Worked example
+
+Advance the older save to the newer one by extracting the changes and applying
+them onto **old** (`extract <base> <target>` — base first):
+
+```sh
+# 1. Capture old → new as a patch
+mcadiff extract New_World_Older New_World_Newer -o changes.mcapatch
+#   Wrote changes.mcapatch — 13 files, 4707 ops.
+
+# 2. Apply onto old → a fresh updated world (New_World_Older is never modified)
+mcadiff apply changes.mcapatch New_World_Older -o Old_Updated
+#   Applied 4711 ops across 13 files; 0 conflicts.
+
+# 3. Verify it now matches new
+mcadiff Old_Updated New_World_Newer
+#   No differences.
+```
+
+The reverse direction restores instead: keep the same patch and run
+`mcadiff apply --reverse changes.mcapatch New_World_Newer -o Old_Restored` to
+rebuild the older state from the newer world. Both directions are verified
+end-to-end against these worlds in the test suite.
 
 ## Performance
 
