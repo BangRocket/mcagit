@@ -34,6 +34,22 @@ public static class ChunkCodec
     }
 
     /// <summary>
+    /// Compresses an NBT root into a chunk payload (the body that follows the
+    /// length/compression header inside a region file). Companion to <see cref="Decode"/>.
+    /// </summary>
+    public static byte[] Encode(NbtCompound root, ChunkCompression compression)
+    {
+        NbtCompression mapped = compression switch
+        {
+            ChunkCompression.GZip => NbtCompression.GZip,
+            ChunkCompression.ZLib => NbtCompression.ZLib,
+            ChunkCompression.None => NbtCompression.None,
+            _ => throw new NotSupportedException($"Cannot encode chunk with compression {compression}."),
+        };
+        return new NbtFile(root) { BigEndian = true }.SaveToBuffer(mapped);
+    }
+
+    /// <summary>
     /// Loads a standalone NBT file (e.g. <c>level.dat</c>, <c>playerdata/*.dat</c>).
     /// Compression is auto-detected (these are usually GZip).
     /// </summary>
@@ -43,4 +59,8 @@ public static class ChunkCodec
         file.LoadFromFile(path); // single-arg overload auto-detects compression
         return file.RootTag;
     }
+
+    /// <summary>Saves a standalone NBT file (defaults to GZip, as Minecraft writes).</summary>
+    public static void SaveNbtFile(string path, NbtCompound root, NbtCompression compression = NbtCompression.GZip)
+        => new NbtFile(root) { BigEndian = true }.SaveToFile(path, compression);
 }

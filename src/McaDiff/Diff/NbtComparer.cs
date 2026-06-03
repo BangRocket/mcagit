@@ -1,55 +1,59 @@
 using fNbt;
+using McaDiff.Nbt;
 
 namespace McaDiff.Diff;
 
 /// <summary>
-/// Recursively diffs two NBT trees into a flat, path-addressed list of
-/// <see cref="NbtChange"/>. Compounds are matched by key, arrays compared
-/// element-wise (summarized unless <see cref="NbtDiffOptions.ExpandArrays"/>),
-/// and lists matched by identity where possible (see <see cref="ListMatcher"/>),
-/// else by index.
+/// Walks two NBT trees in parallel and reports leaf-level changes to an
+/// <see cref="IDiffSink"/>. Compounds are matched by key, lists matched by
+/// identity where possible (see <see cref="ListMatcher"/>) else by index. The
+/// walk is representation-agnostic — see <see cref="NbtChangeSink"/> for the
+/// display rendering used by <c>Compare</c>.
 /// </summary>
 public static class NbtComparer
 {
+    /// <summary>Convenience wrapper producing the flat, sorted display change list.</summary>
     public static List<NbtChange> Compare(NbtTag a, NbtTag b, NbtDiffOptions options)
     {
-        var changes = new List<NbtChange>();
-        CompareTag("", a, b, options, changes);
-        changes.Sort(static (x, y) => string.CompareOrdinal(x.Path, y.Path));
-        return changes;
+        var sink = new NbtChangeSink(options);
+        Walk(a, b, sink);
+        sink.Changes.Sort(static (x, y) => string.CompareOrdinal(x.Path, y.Path));
+        return sink.Changes;
     }
 
-    private static void CompareTag(string path, NbtTag a, NbtTag b, NbtDiffOptions opt, List<NbtChange> sink)
+    /// <summary>Drives the tree walk against an arbitrary sink (path prefix is the root "").</summary>
+    public static void Walk(NbtTag a, NbtTag b, IDiffSink sink) => CompareTag("", a, b, sink);
+
+    private static void CompareTag(string path, NbtTag a, NbtTag b, IDiffSink sink)
     {
         if (a.TagType != b.TagType)
         {
-            sink.Add(new NbtChange(path, ChangeKind.TypeChanged,
-                ValueRepr.Describe(a), ValueRepr.Describe(b), a.TagType, b.TagType));
+            sink.TypeChanged(path, a, b);
             return;
         }
 
         switch (a.TagType)
         {
             case NbtTagType.Compound:
-                CompareCompound(path, (NbtCompound)a, (NbtCompound)b, opt, sink);
+                CompareCompound(path, (NbtCompound)a, (NbtCompound)b, sink);
                 break;
             case NbtTagType.List:
-                CompareList(path, (NbtList)a, (NbtList)b, opt, sink);
+                CompareList(path, (NbtList)a, (NbtList)b, sink);
                 break;
             case NbtTagType.ByteArray:
             case NbtTagType.IntArray:
             case NbtTagType.LongArray:
-                CompareArray(path, a, b, opt, sink);
+                if (!NbtEquality.DeepEquals(a, b))
+                    sink.ArrayChanged(path, a, b);
                 break;
             default:
                 if (!ValueRepr.ScalarEquals(a, b))
-                    sink.Add(new NbtChange(path, ChangeKind.Modified,
-                        ValueRepr.Scalar(a), ValueRepr.Scalar(b), a.TagType, b.TagType));
+                    sink.Modified(path, a, b);
                 break;
         }
     }
 
-    private static void CompareCompound(string path, NbtCompound a, NbtCompound b, NbtDiffOptions opt, List<NbtChange> sink)
+    private static void CompareCompound(string path, NbtCompound a, NbtCompound b, IDiffSink sink)
     {
         var bByName = new Dictionary<string, NbtTag>(b.Count);
         foreach (NbtTag tb in b)
@@ -59,36 +63,36 @@ public static class NbtComparer
         {
             string child = Child(path, ta.Name!);
             if (bByName.Remove(ta.Name!, out NbtTag? tb))
-                CompareTag(child, ta, tb, opt, sink);
+                CompareTag(child, ta, tb, sink);
             else
-                Flatten(child, ta, ChangeKind.Removed, sink);
+                sink.Removed(child, ta);
         }
 
         foreach (NbtTag tb in bByName.Values)
-            Flatten(Child(path, tb.Name!), tb, ChangeKind.Added, sink);
+            sink.Added(Child(path, tb.Name!), tb);
     }
 
-    private static void CompareList(string path, NbtList a, NbtList b, NbtDiffOptions opt, List<NbtChange> sink)
+    private static void CompareList(string path, NbtList a, NbtList b, IDiffSink sink)
     {
         string[]? keysA = ListMatcher.TryGetKeys(a);
         string[]? keysB = keysA is null ? null : ListMatcher.TryGetKeys(b);
 
         if (keysA is not null && keysB is not null)
         {
-            CompareKeyedList(path, a, keysA, b, keysB, opt, sink);
+            CompareKeyedList(path, a, keysA, b, keysB, sink);
             return;
         }
 
         int common = Math.Min(a.Count, b.Count);
         for (int i = 0; i < common; i++)
-            CompareTag($"{path}[{i}]", a[i], b[i], opt, sink);
+            CompareTag($"{path}[{i}]", a[i], b[i], sink);
         for (int i = common; i < a.Count; i++)
-            Flatten($"{path}[{i}]", a[i], ChangeKind.Removed, sink);
+            sink.Removed($"{path}[{i}]", a[i]);
         for (int i = common; i < b.Count; i++)
-            Flatten($"{path}[{i}]", b[i], ChangeKind.Added, sink);
+            sink.Added($"{path}[{i}]", b[i]);
     }
 
-    private static void CompareKeyedList(string path, NbtList a, string[] keysA, NbtList b, string[] keysB, NbtDiffOptions opt, List<NbtChange> sink)
+    private static void CompareKeyedList(string path, NbtList a, string[] keysA, NbtList b, string[] keysB, IDiffSink sink)
     {
         var bIndex = new Dictionary<string, int>(keysB.Length);
         for (int i = 0; i < keysB.Length; i++)
@@ -98,112 +102,15 @@ public static class NbtComparer
         {
             string label = $"{path}[{keysA[i]}]";
             if (bIndex.Remove(keysA[i], out int j))
-                CompareTag(label, a[i], b[j], opt, sink);
+                CompareTag(label, a[i], b[j], sink);
             else
-                Flatten(label, a[i], ChangeKind.Removed, sink);
+                sink.Removed(label, a[i]);
         }
 
         foreach ((string key, int j) in bIndex)
-            Flatten($"{path}[{key}]", b[j], ChangeKind.Added, sink);
+            sink.Added($"{path}[{key}]", b[j]);
     }
 
-    private static void CompareArray(string path, NbtTag a, NbtTag b, NbtDiffOptions opt, List<NbtChange> sink)
-    {
-        ReadOnlySpan<long> la = AsLongs(a, out int lenA);
-        ReadOnlySpan<long> lb = AsLongs(b, out int lenB);
-
-        int common = Math.Min(lenA, lenB);
-        int diffCount = 0;
-        for (int i = 0; i < common; i++)
-            if (la[i] != lb[i]) diffCount++;
-
-        if (diffCount == 0 && lenA == lenB)
-            return; // identical
-
-        if (opt.ExpandArrays)
-        {
-            for (int i = 0; i < common; i++)
-                if (la[i] != lb[i])
-                    sink.Add(new NbtChange($"{path}[{i}]", ChangeKind.Modified,
-                        la[i].ToString(), lb[i].ToString(), a.TagType, b.TagType));
-            for (int i = common; i < lenA; i++)
-                sink.Add(new NbtChange($"{path}[{i}]", ChangeKind.Removed, la[i].ToString(), null, a.TagType));
-            for (int i = common; i < lenB; i++)
-                sink.Add(new NbtChange($"{path}[{i}]", ChangeKind.Added, null, lb[i].ToString(), null, b.TagType));
-            return;
-        }
-
-        string note = lenA == lenB
-            ? $"{diffCount} of {lenA} entries differ"
-            : $"length {lenA} → {lenB}" + (diffCount > 0 ? $", {diffCount} of {common} differ" : "");
-        sink.Add(new NbtChange(path, ChangeKind.Modified,
-            ValueRepr.ArraySummary(a), ValueRepr.ArraySummary(b), a.TagType, b.TagType, note));
-    }
-
-    /// <summary>Widens any NBT array to <see cref="long"/> for uniform comparison.</summary>
-    private static ReadOnlySpan<long> AsLongs(NbtTag tag, out int length)
-    {
-        switch (tag.TagType)
-        {
-            case NbtTagType.ByteArray:
-            {
-                byte[] src = tag.ByteArrayValue;
-                length = src.Length;
-                var dst = new long[src.Length];
-                for (int i = 0; i < src.Length; i++) dst[i] = (sbyte)src[i];
-                return dst;
-            }
-            case NbtTagType.IntArray:
-            {
-                int[] src = tag.IntArrayValue;
-                length = src.Length;
-                var dst = new long[src.Length];
-                for (int i = 0; i < src.Length; i++) dst[i] = src[i];
-                return dst;
-            }
-            case NbtTagType.LongArray:
-                length = tag.LongArrayValue.Length;
-                return tag.LongArrayValue;
-            default:
-                length = 0;
-                return ReadOnlySpan<long>.Empty;
-        }
-    }
-
-    /// <summary>Emits one change per leaf of an added/removed subtree (arrays summarized).</summary>
-    private static void Flatten(string path, NbtTag tag, ChangeKind kind, List<NbtChange> sink)
-    {
-        switch (tag.TagType)
-        {
-            case NbtTagType.Compound:
-                foreach (NbtTag child in (NbtCompound)tag)
-                    Flatten(Child(path, child.Name!), child, kind, sink);
-                // An empty compound still represents a change worth noting.
-                if (((NbtCompound)tag).Count == 0)
-                    AddLeaf(path, tag, kind, sink);
-                break;
-            case NbtTagType.List:
-            {
-                var list = (NbtList)tag;
-                if (list.Count == 0) { AddLeaf(path, tag, kind, sink); break; }
-                for (int i = 0; i < list.Count; i++)
-                    Flatten($"{path}[{i}]", list[i], kind, sink);
-                break;
-            }
-            default:
-                AddLeaf(path, tag, kind, sink);
-                break;
-        }
-    }
-
-    private static void AddLeaf(string path, NbtTag tag, ChangeKind kind, List<NbtChange> sink)
-    {
-        string repr = ValueRepr.Describe(tag);
-        sink.Add(kind == ChangeKind.Removed
-            ? new NbtChange(path, ChangeKind.Removed, repr, null, tag.TagType)
-            : new NbtChange(path, ChangeKind.Added, null, repr, null, tag.TagType));
-    }
-
-    private static string Child(string path, string name)
+    internal static string Child(string path, string name)
         => path.Length == 0 ? name : $"{path}.{name}";
 }

@@ -64,6 +64,24 @@ internal static class TestAnvil
         if (pad > 0) fs.Write(new byte[pad]);
     }
 
+    /// <summary>Writes a region file containing several chunks via the real RegionWriter.</summary>
+    public static void WriteRegion(string path, params (ChunkPos Pos, NbtCompound Root)[] chunks)
+    {
+        var raw = chunks
+            .Select(c => new RawChunk(c.Pos, ChunkCompression.ZLib,
+                ChunkCodec.Encode(c.Root, ChunkCompression.ZLib), external: false, timestamp: 100))
+            .ToList();
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        RegionWriter.Write(path, raw);
+    }
+
+    /// <summary>Writes a loose gzip NBT file (e.g. level.dat) with the given root.</summary>
+    public static void WriteLoose(string path, NbtCompound root)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        ChunkCodec.SaveNbtFile(path, root);
+    }
+
     /// <summary>Creates a unique temp directory for a test and returns its path.</summary>
     public static string TempDir(string label)
     {

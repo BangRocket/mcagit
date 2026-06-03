@@ -20,6 +20,10 @@ diff --nbt level.dat
 2 files changed (2 modified, 0 added, 0 deleted), 1 chunks, 5 nbt changes
 ```
 
+It can also **extract those changes into a portable patch and apply them to
+another save** — surgically and non-destructively — for restore/rollback or
+forward-porting. See [Patch & restore](#patch--restore).
+
 ## Requirements
 
 - .NET 9 SDK
@@ -103,6 +107,46 @@ For a world folder, across the overworld and the `DIM-1` / `DIM1` dimensions:
 - **Packed arrays** (block states, heightmaps, biomes) are summarized by default;
   `--expand` shows each changed index.
 
+## Patch & restore
+
+`mcadiff` can turn a diff into a portable, **bidirectional** patch and apply it
+to another world. Use it to roll a save forward, or — applied in reverse — to
+**restore** old, known-good state (undo griefing, corruption, accidental edits)
+without overwriting everything else.
+
+```sh
+# 1. Capture the changes from <old> to <new> as a patch file
+mcadiff extract <old> <new> -o changes.mcapatch
+
+# 2. Apply forward onto a base (writes a NEW world; never mutates the target)
+mcadiff apply changes.mcapatch <base-world> -o <output-world>
+
+# 3. …or apply in reverse onto the newer world to restore the old state
+mcadiff apply --reverse changes.mcapatch <new-world> -o <restored-world>
+```
+
+**Non-destructive by design:**
+- `apply` copies the target to a fresh `--output` world and only rewrites the
+  patched nodes — everything else is preserved byte-for-byte.
+- Every node is **guarded** (3-way): it's only changed if the target's current
+  value matches what the patch expects. A mismatch is reported as a *conflict*
+  and skipped — your data is never clobbered. `--force` overrides the guard;
+  `--dry-run` reports what would happen and writes nothing.
+
+The patch (`*.mcapatch`) is human-readable JSON. Each op records both the old and
+new value (losslessly type-encoded), which is what makes it invertible:
+
+```jsonc
+{ "path": "Data.Time", "base": {"long":"383"}, "value": {"long":"1574"} }
+```
+
+`extract` flags: `--only <cats>`, and `--whole-chunk` / `--whole-file` to store
+whole roots instead of node-level ops. `apply` flags: `--reverse`, `--force`,
+`--dry-run`, `--only`. Apply exits `0` clean, `1` if any conflicts were skipped.
+
+Round-trip is verified on real worlds: `extract` Older→Newer then `apply`
+reproduces Newer exactly (clean diff); `apply --reverse` reproduces Older.
+
 ## Performance
 
 Two fast paths keep whole-world diffs cheap:
@@ -118,17 +162,25 @@ in a couple of seconds.
 
 ```
 src/McaDiff/
-  Anvil/     RegionFile, RawChunk, ChunkPos, ChunkCodec   — region container + decompression
-  Diff/      NbtComparer, ListMatcher, ValueRepr,         — semantic NBT tree diff
-             WorldDiffer, DiffModels, NbtChange           — file/chunk/world orchestration
-  Model/     WorldSource                                  — world layout discovery
-  Output/    TextDiffFormatter, JsonDiffFormatter, Ansi   — rendering
-  Cli/       DiffOptions + Program.cs                     — command line
+  Anvil/     RegionFile, RegionWriter, RawChunk, ChunkPos, — region container
+             ChunkCodec                                      read + write
+  Nbt/       NbtIdentity, NbtEquality, NbtJson, NbtPath     — NBT identity, equality,
+                                                              lossless JSON, path resolve
+  Diff/      NbtComparer + IDiffSink (NbtChangeSink /       — one tree walk, two outputs
+             PatchOpSink), ListMatcher, ValueRepr,
+             WorldDiffer, DiffModels                        — file/chunk/world orchestration
+  Patch/     WorldPatch/PatchModels, PatchExtractor,        — extract & apply patches
+             PatchApplier
+  Model/     WorldSource                                    — world layout discovery
+  Output/    TextDiffFormatter, JsonDiffFormatter, Ansi     — rendering
+  Cli/       Diff/Extract/ApplyOptions + Program.cs         — subcommand dispatch
 tests/McaDiff.Tests/  xUnit suite (synthetic + real-region parse)
 ```
 
 The Anvil region container (8 KiB sector header + per-chunk compression) is parsed
-directly; `fNbt` handles the NBT tag tree (GZip/ZLib/uncompressed).
+and written directly; `fNbt` handles the NBT tag tree (GZip/ZLib/uncompressed). A
+single tree walk (`NbtComparer` + `IDiffSink`) feeds both the display diff and the
+patch extractor, so they can never drift.
 
 ## Tests
 
@@ -136,16 +188,24 @@ directly; `fNbt` handles the NBT tag tree (GZip/ZLib/uncompressed).
 dotnet test
 ```
 
-Covers the NBT comparer (add/remove/modify/type-change, identity-list matching,
-array summarize/expand), region round-trip, and full world-directory diffs. One
-test additionally parses a real region file when `MCADIFF_TEST_REGION` points at
-one (auto-skipped otherwise).
+48 tests covering: the NBT comparer (add/remove/modify/type-change, identity-list
+matching, array summarize/expand); the lossless `NbtJson` codec (incl. longs
+beyond 2^53); `NbtPath` get/set/remove by key, index and identity; `RegionWriter`
+round-trip; and the full patch pipeline — forward/reverse round-trips reproduce
+the target/base, conflicts are reported and the target is not clobbered, `--force`
+and `--dry-run` behave. One test additionally parses a real region file when
+`MCADIFF_TEST_REGION` points at one (auto-skipped otherwise).
 
 ## Limitations (v1)
 
 - **LZ4-compressed chunks** (compression type 4, an opt-in server setting) are
-  detected and reported as unsupported rather than decoded.
+  detected and reported as unsupported — neither decoded nor patched.
 - No block-coordinate-level decode of palettes (a changed `block_states` array is
   reported as an array diff, not as `(x,y,z): stone → air`).
-- Read-only: `mcadiff` never writes to either world.
-```
+- `diff` and `extract` never modify either world. `apply` only writes to the fresh
+  `--output` directory it creates; the target is copied, never mutated in place.
+- Patches store full arrays and whole added units (exact, not delta-compressed);
+  `apply` copies the whole target world before editing (no hardlink/reflink yet).
+- No automatic merge resolution — conflicts are reported and skipped (or `--force`d).
+- A compound key containing a literal `.` or `[` isn't addressable by patch paths
+  (real Minecraft keys don't use them).
