@@ -123,6 +123,20 @@ public class RepoTests
     }
 
     [Fact]
+    public void Checkout_RecreatesEmptyDirectories()
+    {
+        Repository repo = Repository.Init(TestAnvil.TempDir("ed"));
+        string world = World("w");
+        Directory.CreateDirectory(Path.Combine(world, "datapacks")); // empty dir, like a real save
+
+        string c = CommitWorld(repo, world, "init");
+        string outDir = TestAnvil.TempDir("edco");
+        Checkout.Materialize(repo, repo.ReadManifest(repo.ReadCommit(c).Tree), outDir);
+
+        Assert.True(Directory.Exists(Path.Combine(outDir, "datapacks")));
+    }
+
+    [Fact]
     public void DetachedHead_Commit_DoesNotMoveBranch()
     {
         Repository repo = Repository.Init(TestAnvil.TempDir("det"));

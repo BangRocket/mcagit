@@ -37,6 +37,9 @@ public static class Checkout
             Directory.CreateDirectory(Path.GetDirectoryName(outFile)!);
             File.WriteAllBytes(outFile, repo.Objects.Read(hash));
         }
+
+        foreach (string rel in manifest.EmptyDirs)
+            Directory.CreateDirectory(Path.Combine(worldOut, rel));
     }
 
     private static ChunkPos ParsePos(string key)

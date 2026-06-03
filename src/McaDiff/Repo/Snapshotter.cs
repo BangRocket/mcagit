@@ -51,6 +51,12 @@ public static class Snapshotter
             }
         }
 
+        // Record empty directories so checkout reproduces the layout faithfully.
+        foreach (string dir in Directory.EnumerateDirectories(root, "*", SearchOption.AllDirectories))
+            if (!Directory.EnumerateFileSystemEntries(dir).Any())
+                manifest.EmptyDirs.Add(Path.GetRelativePath(root, dir).Replace('\\', '/'));
+        manifest.EmptyDirs.Sort(StringComparer.Ordinal);
+
         if (ctx.WriteCache) ctx.Cache?.Save();
         return manifest;
     }

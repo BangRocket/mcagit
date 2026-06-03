@@ -14,6 +14,9 @@ public sealed class Manifest
     public SortedDictionary<string, string> Nbt { get; set; } = new(StringComparer.Ordinal);
     public SortedDictionary<string, string> Blobs { get; set; } = new(StringComparer.Ordinal);
 
+    /// <summary>Directories with no files — recorded so checkout reproduces them (git tracks none).</summary>
+    public List<string> EmptyDirs { get; set; } = [];
+
     public string ToJson() => JsonSerializer.Serialize(this, RepoJson.Options);
     public static Manifest FromJson(string json) =>
         JsonSerializer.Deserialize<Manifest>(json, RepoJson.Options) ?? new Manifest();
