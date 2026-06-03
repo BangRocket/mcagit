@@ -211,19 +211,33 @@ commits.
 
 `cherry-pick <commit>` applies one commit onto HEAD via the 3-way engine.
 
-### Remotes & maintenance (filesystem)
+### Remotes & maintenance
 
-Sync history between repositories — e.g. push world backups to another drive or
-NAS. No network yet; remotes are repository directories. Because objects are
-content-addressed, transfer only copies what the other side lacks.
+Sync history between repositories — push world backups offsite or pull them down.
+A remote is a **path**, an **`http(s)://`** URL, or **`ssh://`**. Because objects
+are content-addressed, transfer copies only what the other side lacks.
 
 ```sh
-mcadiff clone <src-repo> <dest-repo>        # copy a repo + set origin
-mcadiff remote add <name> <path>            # register a remote
-mcadiff push  [<remote> [<branch>]] [--force]   # fast-forward-checked
-mcadiff fetch [<remote> [<branch>]]         # into refs/remotes/<remote>/* (e.g. origin/main)
-mcadiff reflog                              # HEAD movement history
-mcadiff gc                                  # prune objects unreachable from any ref
+mcadiff clone <src> <dest> [--token T]        # src: path | http(s):// | ssh://
+mcadiff remote add origin <url>
+mcadiff push  [<remote> [<branch>]] [--force] [--token T]   # fast-forward-checked
+mcadiff fetch [<remote> [<branch>]] [--token T]            # into refs/remotes/<remote>/*
+mcadiff reflog                                # HEAD movement history
+mcadiff gc                                    # prune objects unreachable from any ref
+```
+
+**Serving over the network** (git's model — anonymous read, authenticated push):
+
+```sh
+# HTTP: run a daemon. Read is open; push needs --allow-push and (optionally) a token.
+mcadiff -C <repo> serve --port 8421 --allow-push --token s3cret
+mcadiff clone http://host:8421 ./world.mcagit          # anonymous
+mcadiff push origin main --token s3cret                # authenticated
+
+# SSH: no daemon — runs `mcadiff serve-stdio` on the remote over your ssh session.
+# Auth & encryption are ssh's job (keys/agent); requires mcadiff on the remote.
+mcadiff clone ssh://user@host/path/to/world.mcagit ./world.mcagit
+mcadiff push  ssh://user@host/path/to/world.mcagit main
 ```
 
 - **Whole-world snapshots:** region/entities/poi as deduped per-chunk objects,
@@ -309,7 +323,9 @@ theirs; fast-forward). One test additionally parses a real region file when
 - `merge` uses the nearest common ancestor (fine for linear + single-merge
   histories; no criss-cross LCA), and conflicts are reported + kept-ours/theirs
   with no in-place marker/resolve workflow.
-- Remotes are filesystem-only (no ssh/http transport), and there's no staging
-  index — `commit` snapshots the whole worktree.
+- Remotes support path / `http(s)://` / `ssh://`, but transfer is per-object (no
+  packfiles/delta), and the HTTP server is a simple built-in daemon (single token,
+  no TLS — put it behind a reverse proxy for `https`). There's no staging index —
+  `commit` snapshots the whole worktree.
 - A compound key containing a literal `.` or `[` isn't addressable by patch/merge
   paths (real Minecraft keys don't use them).

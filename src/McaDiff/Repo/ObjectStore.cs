@@ -56,6 +56,36 @@ public sealed class ObjectStore
         File.Copy(src.PathFor(hash), dst);
     }
 
+    /// <summary>The raw, compressed on-disk bytes of an object (for network transfer).</summary>
+    public byte[] ReadRaw(string hash) => File.ReadAllBytes(PathFor(hash));
+
+    /// <summary>
+    /// Stores compressed object bytes received from elsewhere, after verifying they
+    /// decompress to content whose SHA-256 equals <paramref name="hash"/> (so a
+    /// corrupt or hostile peer can't poison the store). No-op if already present.
+    /// </summary>
+    public void ImportRaw(string hash, byte[] compressed)
+    {
+        if (Exists(hash)) return;
+        byte[] content;
+        using (var ms = new MemoryStream(compressed))
+        using (var z = new ZLibStream(ms, CompressionMode.Decompress))
+        using (var outMs = new MemoryStream())
+        {
+            z.CopyTo(outMs);
+            content = outMs.ToArray();
+        }
+        string actual = Convert.ToHexStringLower(SHA256.HashData(content));
+        if (actual != hash)
+            throw new InvalidDataException($"object hash mismatch: expected {hash}, got {actual}");
+
+        string dst = PathFor(hash);
+        Directory.CreateDirectory(Path.GetDirectoryName(dst)!);
+        string tmp = dst + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        File.WriteAllBytes(tmp, compressed);
+        if (File.Exists(dst)) File.Delete(tmp); else File.Move(tmp, dst);
+    }
+
     /// <summary>Deletes an object. Returns its on-disk (compressed) size, or 0 if absent.</summary>
     public long Delete(string hash)
     {

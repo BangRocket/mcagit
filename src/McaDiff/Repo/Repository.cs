@@ -82,10 +82,11 @@ public sealed class Repository
 
     public IReadOnlyDictionary<string, string> Remotes => ReadConfig().Remotes;
     public string? GetRemote(string name) => ReadConfig().Remotes.GetValueOrDefault(name);
-    public void AddRemote(string name, string path)
+    public void AddRemote(string name, string urlOrPath)
     {
         RepoConfig c = ReadConfig();
-        c.Remotes[name] = Path.GetFullPath(path);
+        // Leave URLs (http://, https://, ssh://) intact; only resolve filesystem paths.
+        c.Remotes[name] = urlOrPath.Contains("://") ? urlOrPath : Path.GetFullPath(urlOrPath);
         WriteConfig(c);
     }
 

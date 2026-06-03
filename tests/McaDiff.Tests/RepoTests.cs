@@ -301,13 +301,13 @@ public class RepoTests
         CommitWorld(a, World("b"), "c2");
 
         string bDir = TestAnvil.TempDir("rB");
-        RemoteOps.Clone(a.Dir, bDir);
+        RemoteOps.Clone(a.Dir, bDir, null);
         Repository b = Repository.Open(bDir);
         Assert.Equal(a.ReadBranch("main"), b.ReadBranch("main")); // clone copied the tip
         Assert.True(b.Objects.Exists(b.ReadBranch("main")!));
 
         string c3 = CommitWorld(b, World("c"), "c3");            // advance B
-        RemoteOps.Push(b, "origin", "main", force: false);
+        RemoteOps.Push(b, "origin", "main", force: false, null);
 
         Repository a2 = Repository.Open(a.Dir);
         Assert.Equal(c3, a2.ReadBranch("main"));                 // push fast-forwarded A
@@ -320,11 +320,11 @@ public class RepoTests
         Repository a = Repository.Init(TestAnvil.TempDir("fA"));
         CommitWorld(a, World("a"), "c1");
         string bDir = TestAnvil.TempDir("fB");
-        RemoteOps.Clone(a.Dir, bDir);
+        RemoteOps.Clone(a.Dir, bDir, null);
         Repository b = Repository.Open(bDir);
 
         string c2 = CommitWorld(a, World("b"), "c2");            // A moves ahead
-        RemoteOps.Fetch(b, "origin", "main");
+        RemoteOps.Fetch(b, "origin", "main", null);
 
         Assert.Equal(c2, b.ReadRemoteRef("origin/main"));
         Assert.True(b.Objects.Exists(c2));

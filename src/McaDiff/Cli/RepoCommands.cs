@@ -295,22 +295,24 @@ public static class RepoCommands
 
     public static int Clone(string? dashC, string[] a)
     {
-        if (a.Length < 2) return Err("usage: clone <src-repo> <dest-repo>");
-        if (!Repository.IsRepository(a[0])) return Err($"not a repository: {a[0]}");
-        if (Repository.IsRepository(a[1])) return Err($"already a repository: {a[1]}");
-        RemoteOps.Clone(a[0], a[1]);
-        Console.Error.WriteLine($"Cloned {a[0]} -> {a[1]}");
+        var (pos, opts) = Parse(a, ["--token"], []);
+        if (pos.Count < 2) return Err("usage: clone <src> <dest> [--token T]  (src: path, http(s)://, or ssh://)");
+        if (Repository.IsRepository(pos[1])) return Err($"already a repository: {pos[1]}");
+        try { RemoteOps.Clone(pos[0], pos[1], Token(opts)); }
+        catch (Exception ex) { return Err(ex.Message); }
+        Console.Error.WriteLine($"Cloned {pos[0]} -> {pos[1]}");
         return 0;
     }
 
     public static int Fetch(string? dashC, string[] a)
     {
+        var (pos, opts) = Parse(a, ["--token"], []);
         if (Open(dashC) is not { } repo) return NoRepo();
-        string remote = a.Length > 0 ? a[0] : "origin";
-        string? branch = a.Length > 1 ? a[1] : null;
+        string remote = pos.Count > 0 ? pos[0] : "origin";
+        string? branch = pos.Count > 1 ? pos[1] : null;
         try
         {
-            int n = RemoteOps.Fetch(repo, remote, branch);
+            int n = RemoteOps.Fetch(repo, remote, branch, Token(opts));
             Console.Error.WriteLine($"Fetched {remote} ({n} objects copied)");
             return 0;
         }
@@ -319,18 +321,55 @@ public static class RepoCommands
 
     public static int Push(string? dashC, string[] a)
     {
-        var (pos, opts) = Parse(a, [], ["--force"]);
+        var (pos, opts) = Parse(a, ["--token"], ["--force"]);
         if (Open(dashC) is not { } repo) return NoRepo();
         string remote = pos.Count > 0 ? pos[0] : "origin";
         string? branch = pos.Count > 1 ? pos[1] : repo.CurrentBranch();
         if (branch is null) return Err("detached HEAD — specify a branch to push");
         try
         {
-            RemoteOps.PushResult r = RemoteOps.Push(repo, remote, branch, opts.ContainsKey("--force"));
+            RemoteOps.PushResult r = RemoteOps.Push(repo, remote, branch, opts.ContainsKey("--force"), Token(opts));
             Console.Error.WriteLine($"Pushed {branch} -> {remote} ({r.ObjectsCopied} objects{(r.FastForward ? "" : ", forced")})");
             return 0;
         }
         catch (Exception ex) { return Err(ex.Message); }
+    }
+
+    private static string? Token(Dictionary<string, string?> opts)
+        => opts.GetValueOrDefault("--token") ?? Environment.GetEnvironmentVariable("MCADIFF_TOKEN");
+
+    public static int Serve(string? dashC, string[] a)
+    {
+        var (pos, opts) = Parse(a, ["--port", "--host", "--token"], ["--allow-push"]);
+        string? dir = dashC ?? (pos.Count > 0 ? pos[0] : Directory.GetCurrentDirectory());
+        if (!Repository.IsRepository(dir)) return Err($"not a repository: {dir}");
+
+        Repository repo = Repository.Open(dir);
+        int port = opts.GetValueOrDefault("--port") is { } ps && int.TryParse(ps, out int p) ? p : 8421;
+        string host = opts.GetValueOrDefault("--host") ?? "localhost";
+        bool allowPush = opts.ContainsKey("--allow-push");
+        string? token = Token(opts);
+
+        var server = new RepoServer(repo, allowPush, token);
+        try { server.Start(host, port); }
+        catch (Exception ex) { return Err($"could not bind http://{host}:{port}/ — {ex.Message}"); }
+
+        string mode = allowPush ? (token is not null ? "push: token required" : "push: OPEN (no token)") : "read-only";
+        Console.Error.WriteLine($"Serving {dir} at http://{host}:{port}/  ({mode}). Ctrl-C to stop.");
+        Console.CancelKeyPress += (_, e) => { e.Cancel = true; server.Stop(); };
+        server.Run();
+        return 0;
+    }
+
+    public static int ServeStdio(string? dashC, string[] a)
+    {
+        string? dir = dashC ?? (a.Length > 0 ? a[0] : null);
+        if (dir is null || !Repository.IsRepository(dir)) { Console.Error.WriteLine("serve-stdio: not a repository"); return 2; }
+        var svc = new RemoteService(Repository.Open(dir), allowWrite: true); // ssh already authenticated the user
+        using Stream input = Console.OpenStandardInput();
+        using Stream output = Console.OpenStandardOutput();
+        StdioServer.Serve(svc, input, output);
+        return 0;
     }
 
     public static int Reflog(string? dashC, string[] a)
