@@ -27,8 +27,9 @@ public static class RepoCommands
 
     public static int Commit(string? dashC, string[] a)
     {
-        var (pos, opts) = Parse(a, ["-m", "--message", "--author"], ["-S"]);
+        var (pos, opts) = Parse(a, ["-m", "--message", "--author", "--push", "--token"], ["-S", "--json"]);
         if (Open(dashC) is not { } repo) return NoRepo();
+        bool json = opts.ContainsKey("--json");
         string? message = opts.GetValueOrDefault("-m") ?? opts.GetValueOrDefault("--message");
         if (message is null) return Err("commit requires -m <message>");
         if (Hooks.Run(repo, "pre-commit") != 0) return Err("pre-commit hook failed; commit aborted");
@@ -44,27 +45,75 @@ public static class RepoCommands
         }
         string tree = repo.WriteManifest(manifest);
         string? head = repo.HeadCommit();
+        bool sign = opts.ContainsKey("-S") || string.Equals(repo.GetConfig("commit.gpgsign"), "true", StringComparison.OrdinalIgnoreCase);
+
+        bool committed;
+        string commitHash;
         if (head is not null && repo.ReadCommit(head).Tree == tree)
         {
-            Console.Error.WriteLine($"nothing to commit — {(fromIndex ? "index" : "world")} matches HEAD");
+            committed = false;
+            commitHash = head; // nothing changed — HEAD stays put (a backup driver can detect this via --json)
             if (fromIndex) StagingIndex.Clear(repo);
-            return 0;
+        }
+        else
+        {
+            Func<string, string>? signer;
+            try { signer = Signer(repo, sign); }
+            catch (Exception ex) { return Err(ex.Message); }
+            commitHash = repo.CreateCommit(tree, head is null ? [] : [head], message,
+                Author(repo, opts.GetValueOrDefault("--author")), sign: signer);
+            committed = true;
+            if (fromIndex) StagingIndex.Clear(repo);
+            Hooks.Run(repo, "post-commit");
         }
 
-        bool sign = opts.ContainsKey("-S") || string.Equals(repo.GetConfig("commit.gpgsign"), "true", StringComparison.OrdinalIgnoreCase);
-        Func<string, string>? signer;
-        try { signer = Signer(repo, sign); }
-        catch (Exception ex) { return Err(ex.Message); }
-
-        string hash = repo.CreateCommit(tree, head is null ? [] : [head], message,
-            Author(repo, opts.GetValueOrDefault("--author")), sign: signer);
-        if (fromIndex) StagingIndex.Clear(repo);
-        Hooks.Run(repo, "post-commit");
         int chunks = manifest.Regions.Sum(r => r.Value.Count);
         int files = manifest.Regions.Count + manifest.Nbt.Count + manifest.Blobs.Count;
-        string where = repo.CurrentBranch() ?? "detached HEAD";
-        Console.Error.WriteLine($"[{where} {hash[..10]}] {message}  ({files} files, {chunks} chunks{(sign ? ", signed" : "")}{(fromIndex ? ", from index" : "")})");
-        return 0;
+        string? branch = repo.CurrentBranch();
+
+        // Optional one-shot push (runs even if nothing was committed, to keep the offsite in sync).
+        int rc = 0;
+        System.Text.Json.Nodes.JsonObject? pushJson = null;
+        string? pushHuman = null;
+        if (opts.TryGetValue("--push", out string? pushRaw))
+        {
+            string remote = string.IsNullOrEmpty(pushRaw) ? "origin" : pushRaw;
+            if (branch is null) { pushHuman = "skipped push (detached HEAD)"; pushJson = new() { ["error"] = "detached HEAD" }; rc = 1; }
+            else
+                try
+                {
+                    RemoteOps.PushResult pr = RemoteOps.Push(repo, remote, branch, force: false, Token(opts));
+                    pushHuman = $"pushed {branch} -> {remote} ({pr.ObjectsCopied} objects{(pr.FastForward ? "" : ", forced")})";
+                    pushJson = new() { ["remote"] = remote, ["branch"] = branch, ["objects"] = pr.ObjectsCopied, ["fastForward"] = pr.FastForward };
+                }
+                catch (Exception ex) { pushHuman = $"push failed: {ex.Message}"; pushJson = new() { ["remote"] = remote, ["error"] = ex.Message }; rc = 1; }
+        }
+
+        if (json)
+        {
+            var obj = new System.Text.Json.Nodes.JsonObject
+            {
+                ["committed"] = committed,
+                ["commit"] = commitHash,
+                ["branch"] = branch,
+                ["message"] = message,
+                ["files"] = files,
+                ["chunks"] = chunks,
+                ["signed"] = committed && sign,
+                ["fromIndex"] = fromIndex,
+            };
+            if (!committed) obj["reason"] = $"nothing to commit — {(fromIndex ? "index" : "world")} matches HEAD";
+            if (pushJson is not null) obj["push"] = pushJson;
+            Console.WriteLine(obj.ToJsonString());
+        }
+        else
+        {
+            Console.Error.WriteLine(committed
+                ? $"[{branch ?? "detached HEAD"} {commitHash[..10]}] {message}  ({files} files, {chunks} chunks{(sign ? ", signed" : "")}{(fromIndex ? ", from index" : "")})"
+                : $"nothing to commit — {(fromIndex ? "index" : "world")} matches HEAD");
+            if (pushHuman is not null) Console.Error.WriteLine($"  {pushHuman}");
+        }
+        return rc;
     }
 
     public static int Log(string? dashC, string[] a)

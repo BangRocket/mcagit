@@ -209,7 +209,9 @@ partial class Program
         REPOSITORY (content-addressed, deduplicated)
             mcadiff init [<repo>] [--worktree <world>]
             mcadiff add <path>... | add .         Stage paths into the index
-            mcadiff commit [-m <msg>] [<world>]   Commit the index, else the worktree
+            mcadiff commit [-m <msg>] [<world>] [--push <remote>] [--json]
+                                                  Commit the index/worktree; optionally
+                                                  push, and emit a machine-readable result
             mcadiff restore --staged <path>...    Unstage paths (index → HEAD)
             mcadiff status [<world>]              Staged / unstaged changes
             mcadiff diff --staged                 Staged changes (index vs HEAD)
