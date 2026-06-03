@@ -464,9 +464,17 @@ public static class RepoCommands
 
     public static int GcCmd(string? dashC, string[] a)
     {
+        var (_, opts) = Parse(a, [], ["--prune-only"]);
         if (Open(dashC) is not { } repo) return NoRepo();
-        Gc.Result r = Gc.Prune(repo);
-        Console.Error.WriteLine($"Pruned {r.Pruned} objects ({r.BytesFreed / 1024} KiB freed), {r.Kept} reachable.");
+        if (opts.ContainsKey("--prune-only"))
+        {
+            Gc.Result p = Gc.Prune(repo);
+            Console.Error.WriteLine($"Pruned {p.Pruned} objects ({p.BytesFreed / 1024} KiB freed), {p.Kept} reachable.");
+            return 0;
+        }
+        Gc.RepackResult r = Gc.Repack(repo);
+        Console.Error.WriteLine($"Packed {r.Packed} objects, pruned {r.Pruned} unreachable "
+            + $"({r.BytesFreed / 1024} KiB freed){(r.PackId is null ? "" : $", pack {r.PackId[..10]}")}.");
         return 0;
     }
 
