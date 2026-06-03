@@ -22,7 +22,10 @@ diff --nbt level.dat
 
 It can also **extract those changes into a portable patch and apply them to
 another save** — surgically and non-destructively — for restore/rollback or
-forward-porting. See [Patch & restore](#patch--restore).
+forward-porting (see [Patch & restore](#patch--restore)), and it includes a
+**content-addressed, deduplicating version-control system** for worlds —
+`init`/`commit`/`log`/`checkout`/`branch` plus a true 3-way `merge`
+(see [Version control](#version-control)).
 
 ## Requirements
 
@@ -168,6 +171,38 @@ The reverse direction restores instead: keep the same patch and run
 rebuild the older state from the newer world. Both directions are verified
 end-to-end against these worlds in the test suite.
 
+## Version control
+
+A semantic VCS for worlds — like git, but it understands chunks. The repository is
+an **external, content-addressed object store**: each chunk is hashed by its
+*decoded NBT*, so an unchanged chunk is stored **once** no matter how many
+snapshots reference it (the thing fastback + git-LFS can't do — they store whole
+region blobs per snapshot).
+
+```sh
+mcadiff init    <repo>                          # create a repository
+mcadiff commit  <repo> <world> -m "before raid" # snapshot a world
+mcadiff commit  <repo> <world> -m "after raid"  # …only changed chunks add objects
+mcadiff log     <repo>
+mcadiff status  <repo> <world>                   # what changed vs HEAD (by hash; fast)
+mcadiff checkout <repo> <ref> <world-out>        # materialize a snapshot (branch or commit)
+mcadiff branch  <repo> [name]                    # list / create branches
+mcadiff merge   <repo> <other-branch>            # true 3-way merge
+```
+
+- **Whole-world snapshots:** region/entities/poi as deduped per-chunk objects,
+  loose NBT as canonical objects, everything else (datapacks, stats, advancements)
+  as raw blobs — so `checkout` restores a faithful, playable world.
+- **True 3-way merge:** finds the common ancestor and merges **per NBT node** —
+  changes from both sides that touch different nodes both land; only a genuine
+  same-node clash is a conflict (kept *ours*, or *theirs* with `--theirs`, and
+  reported). Far finer than git's line-based merge on these files.
+- Verified on the example worlds: committing Older then Newer reproduces each
+  exactly on `checkout`, and the shared chunks are stored once.
+
+> Stop the server before `checkout` (it rewrites world files), and keep the repo
+> outside the world directory.
+
 ## Performance
 
 Two fast paths keep whole-world diffs cheap:
@@ -185,16 +220,19 @@ in a couple of seconds.
 src/McaDiff/
   Anvil/     RegionFile, RegionWriter, RawChunk, ChunkPos, — region container
              ChunkCodec                                      read + write
-  Nbt/       NbtIdentity, NbtEquality, NbtJson, NbtPath     — NBT identity, equality,
-                                                              lossless JSON, path resolve
+  Nbt/       NbtIdentity, NbtEquality, NbtJson, NbtPath,    — NBT identity, equality,
+             NbtCanonical                                    lossless JSON, paths, canonical form
   Diff/      NbtComparer + IDiffSink (NbtChangeSink /       — one tree walk, two outputs
              PatchOpSink), ListMatcher, ValueRepr,
              WorldDiffer, DiffModels                        — file/chunk/world orchestration
   Patch/     WorldPatch/PatchModels, PatchExtractor,        — extract & apply patches
              PatchApplier
+  Repo/      ObjectStore, Repository, Manifest, Snapshotter,— content-addressed VCS:
+             Checkout, StatusCalc, MergeBase, Merger          commit/log/status/checkout/merge
   Model/     WorldSource                                    — world layout discovery
   Output/    TextDiffFormatter, JsonDiffFormatter, Ansi     — rendering
-  Cli/       Diff/Extract/ApplyOptions + Program.cs         — subcommand dispatch
+  Cli/       Diff/Extract/ApplyOptions, RepoCommands,       — subcommand dispatch
+             + Program.cs
 tests/McaDiff.Tests/  xUnit suite (synthetic + real-region parse)
 ```
 
@@ -209,24 +247,30 @@ patch extractor, so they can never drift.
 dotnet test
 ```
 
-48 tests covering: the NBT comparer (add/remove/modify/type-change, identity-list
+55 tests covering: the NBT comparer (add/remove/modify/type-change, identity-list
 matching, array summarize/expand); the lossless `NbtJson` codec (incl. longs
 beyond 2^53); `NbtPath` get/set/remove by key, index and identity; `RegionWriter`
-round-trip; and the full patch pipeline — forward/reverse round-trips reproduce
-the target/base, conflicts are reported and the target is not clobbered, `--force`
-and `--dry-run` behave. One test additionally parses a real region file when
+round-trip; the full patch pipeline (forward/reverse round-trips, conflict guard,
+`--force`, `--dry-run`); and the VCS — object-store dedup, canonical-form
+determinism, commit→checkout reproduces a world, merge-base, and 3-way merge
+(non-overlapping node changes combine; same-node clashes conflict, keeping ours or
+theirs; fast-forward). One test additionally parses a real region file when
 `MCADIFF_TEST_REGION` points at one (auto-skipped otherwise).
 
-## Limitations (v1)
+## Limitations
 
 - **LZ4-compressed chunks** (compression type 4, an opt-in server setting) are
-  detected and reported as unsupported — neither decoded nor patched.
+  detected and reported as unsupported — neither decoded, patched, nor committed
+  semantically (such a region is stored as a raw blob instead).
 - No block-coordinate-level decode of palettes (a changed `block_states` array is
   reported as an array diff, not as `(x,y,z): stone → air`).
-- `diff` and `extract` never modify either world. `apply` only writes to the fresh
-  `--output` directory it creates; the target is copied, never mutated in place.
-- Patches store full arrays and whole added units (exact, not delta-compressed);
-  `apply` copies the whole target world before editing (no hardlink/reflink yet).
-- No automatic merge resolution — conflicts are reported and skipped (or `--force`d).
-- A compound key containing a literal `.` or `[` isn't addressable by patch paths
-  (real Minecraft keys don't use them).
+- `diff`/`extract`/`commit`/`status` never modify a world. `apply` and `checkout`
+  only write to the fresh output directory they create.
+- Objects are whole (zlib-compressed), not delta-packed; `apply` copies the whole
+  target world before editing (no hardlink/reflink yet). Commit decodes every
+  chunk (parallelized) — a full first commit of a large world takes a few seconds.
+- `merge` uses the nearest common ancestor (fine for linear + single-merge
+  histories; no criss-cross LCA), and conflicts are reported + kept-ours/theirs
+  with no in-place marker/resolve workflow. No remotes/fetch/push yet.
+- A compound key containing a literal `.` or `[` isn't addressable by patch/merge
+  paths (real Minecraft keys don't use them).

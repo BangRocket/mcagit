@@ -11,6 +11,13 @@ if (args.Length > 0)
         case "diff": return RunDiff(args[1..]);
         case "extract": return RunExtract(args[1..]);
         case "apply": return RunApply(args[1..]);
+        case "init": return RepoCommands.Init(args[1..]);
+        case "commit": return RepoCommands.Commit(args[1..]);
+        case "log": return RepoCommands.Log(args[1..]);
+        case "status": return RepoCommands.Status(args[1..]);
+        case "checkout": return RepoCommands.Checkout(args[1..]);
+        case "branch": return RepoCommands.Branch(args[1..]);
+        case "merge": return RepoCommands.Merge(args[1..]);
         case "-h" or "--help": Console.WriteLine(TopUsage); return 0;
     }
 }
@@ -96,15 +103,23 @@ static int Fail(string message, string? usage = null)
 partial class Program
 {
     private const string TopUsage = """
-        mcadiff — semantic diff & patch for Anvil Minecraft worlds
+        mcadiff — semantic diff, patch & version control for Anvil Minecraft worlds
 
-        USAGE:
+        DIFF / PATCH
             mcadiff diff    <A> <B> [options]                 Show a git-style diff
             mcadiff extract <old> <new> -o <patch> [options]  Write a portable patch
             mcadiff apply   <patch> <target> -o <out> [opts]  Apply a patch (non-destructive)
-
             mcadiff <A> <B>                                   Shorthand for `diff`
 
-        Run any subcommand with --help for its options.
+        REPOSITORY (semantic VCS — content-addressed, deduplicated)
+            mcadiff init     <repo>                           Create a repository
+            mcadiff commit   <repo> <world> -m <msg>          Snapshot a world
+            mcadiff log      <repo> [--branch b]              Show history
+            mcadiff status   <repo> <world>                   Changes vs HEAD
+            mcadiff checkout <repo> <ref> <world-out>         Materialize a snapshot
+            mcadiff branch   <repo> [name]                    List / create branches
+            mcadiff merge    <repo> <ref> [--theirs]          3-way merge a branch
+
+        Run diff/extract/apply with --help for their options.
         """;
 }
