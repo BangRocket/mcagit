@@ -46,6 +46,11 @@ return cmd switch
     "serve-stdio" => RepoCommands.ServeStdio(dashC, tail[1..]),
     "reflog" => RepoCommands.Reflog(dashC, tail[1..]),
     "gc" => RepoCommands.GcCmd(dashC, tail[1..]),
+    "fsck" => RepoCommands.FsckCmd(dashC, tail[1..]),
+    "rev-parse" => RepoCommands.RevParse(dashC, tail[1..]),
+    "cat-file" => RepoCommands.CatFile(dashC, tail[1..]),
+    "hash-object" => RepoCommands.HashObject(dashC, tail[1..]),
+    "ls-tree" => RepoCommands.LsTree(dashC, tail[1..]),
     null or "-h" or "--help" => Help(),
     _ => RunDiff(tail, dashC), // shorthand: `mcadiff <A> <B>`
 };
@@ -197,10 +202,11 @@ partial class Program
             mcadiff restore <ref> <path>...       Restore paths from a snapshot
             mcadiff revert <commit>               New commit undoing a commit
             mcadiff branch [<name>]               List / create branches
-            mcadiff tag [<name> [<ref>]] | -d <name>
+            mcadiff tag [-a -m <msg> [-s]] [<name> [<ref>]] | -d <name> | -v <name>
             mcadiff merge <ref> [--theirs]        3-way merge
             mcadiff cherry-pick <commit>          Apply one commit onto HEAD
-            mcadiff config worktree [<path>]      Get / set the bound world
+            mcadiff commit -S …                   Sign the commit (SSH key)
+            mcadiff config [--global] <key> [<v>] | --list | --unset <key>
 
         REMOTES (path, http://, ssh://) & MAINTENANCE
             mcadiff clone <src> <dest> [--token T]
@@ -210,6 +216,16 @@ partial class Program
             mcadiff serve [<repo>] [--port N] [--host H] [--allow-push] [--token T]
             mcadiff reflog                        HEAD movement history
             mcadiff gc                            Prune unreachable objects
+            mcadiff fsck                          Verify object integrity + reachability
+
+        PLUMBING
+            mcadiff rev-parse [--short|--abbrev-ref] <rev>...
+            mcadiff cat-file (-t|-s|-p|-e) <object>
+            mcadiff hash-object [-w] <file>
+            mcadiff ls-tree [-r] [--name-only] <tree-ish>
+
+        Identity comes from user.name / user.email config; signing uses user.signingkey
+        (an SSH private key) and gpg.ssh.allowedSignersFile for verification.
 
         Revisions accept HEAD, branches, tags, short hashes, and ~n / ^n suffixes.
 

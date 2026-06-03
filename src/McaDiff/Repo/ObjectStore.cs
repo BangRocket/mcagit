@@ -98,6 +98,14 @@ public sealed class ObjectStore
 
     public bool Exists(string hash) => File.Exists(PathFor(hash));
 
+    /// <summary>True if the object is present and its decompressed content still
+    /// hashes to its name (i.e. it isn't truncated or corrupted on disk).</summary>
+    public bool VerifyIntegrity(string hash)
+    {
+        try { return Convert.ToHexStringLower(SHA256.HashData(Read(hash))) == hash; }
+        catch { return false; }
+    }
+
     /// <summary>Resolves an abbreviated hash (≥4 hex chars) to a full hash, or null if absent/ambiguous.</summary>
     public string? ResolvePrefix(string prefix)
     {

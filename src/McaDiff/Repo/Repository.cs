@@ -76,7 +76,76 @@ public sealed class Repository
     {
         public string? Worktree { get; set; }
         public Dictionary<string, string> Remotes { get; set; } = new();
+        /// <summary>Arbitrary dotted config keys (user.name, user.email, user.signingkey, …).</summary>
+        public Dictionary<string, string> Settings { get; set; } = new();
     }
+
+    // ---- generic config (dotted keys; repo overrides ~/.mcaconfig) ----
+
+    private static string GlobalConfigPath =>
+        Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".mcaconfig");
+
+    /// <summary>Reads a config value, repo-level first then global, or null.</summary>
+    public string? GetConfig(string key)
+    {
+        if (ReadConfig().Settings.TryGetValue(key, out string? v)) return v;
+        return ReadGlobalConfig().GetValueOrDefault(key);
+    }
+
+    public void SetConfig(string key, string value, bool global)
+    {
+        if (global)
+        {
+            Dictionary<string, string> g = ReadGlobalConfig();
+            g[key] = value;
+            WriteGlobalConfig(g);
+        }
+        else
+        {
+            RepoConfig c = ReadConfig();
+            c.Settings[key] = value;
+            WriteConfig(c);
+        }
+    }
+
+    public bool UnsetConfig(string key, bool global)
+    {
+        if (global)
+        {
+            Dictionary<string, string> g = ReadGlobalConfig();
+            if (!g.Remove(key)) return false;
+            WriteGlobalConfig(g);
+            return true;
+        }
+        RepoConfig c = ReadConfig();
+        if (!c.Settings.Remove(key)) return false;
+        WriteConfig(c);
+        return true;
+    }
+
+    /// <summary>All effective config entries (global first, then repo, which wins on display).</summary>
+    public IEnumerable<(string Key, string Value, bool Global)> ListConfig()
+    {
+        foreach (var kv in ReadGlobalConfig()) yield return (kv.Key, kv.Value, true);
+        RepoConfig c = ReadConfig();
+        if (c.Worktree is not null) yield return ("worktree", c.Worktree, false);
+        foreach (var kv in c.Settings) yield return (kv.Key, kv.Value, false);
+    }
+
+    /// <summary>"<c>Name &lt;email&gt;</c>" from config, or just one part, or null if neither is set.</summary>
+    public string? ConfiguredIdentity()
+    {
+        string? name = GetConfig("user.name");
+        string? email = GetConfig("user.email");
+        if (name is not null && email is not null) return $"{name} <{email}>";
+        return name ?? (email is not null ? $"<{email}>" : null);
+    }
+
+    private static Dictionary<string, string> ReadGlobalConfig() => File.Exists(GlobalConfigPath)
+        ? System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(GlobalConfigPath)) ?? new()
+        : new();
+    private static void WriteGlobalConfig(Dictionary<string, string> g) => File.WriteAllText(GlobalConfigPath,
+        System.Text.Json.JsonSerializer.Serialize(g, new System.Text.Json.JsonSerializerOptions { WriteIndented = true }));
 
     // ---- remotes ----
 
@@ -181,6 +250,33 @@ public sealed class Repository
         File.WriteAllText(p, commitHash + "\n");
     }
 
+    /// <summary>Stores an annotated tag object and points <c>refs/tags/&lt;name&gt;</c> at it.</summary>
+    public string WriteAnnotatedTag(TagObject tag)
+    {
+        string hash = Objects.WriteText(tag.ToJson());
+        WriteTag(tag.Tag, hash);
+        return hash;
+    }
+
+    /// <summary>The tag object a tag ref points at, or null for a lightweight tag (or absent).</summary>
+    public TagObject? ReadAnnotatedTag(string name)
+    {
+        string? target = ReadTag(name);
+        return target is not null && Objects.Exists(target) ? TagObject.TryFromJson(Objects.ReadText(target)) : null;
+    }
+
+    /// <summary>Follows a chain of annotated tag objects down to the commit it names.</summary>
+    public string PeelToCommit(string hash)
+    {
+        for (int i = 0; i < 100; i++)
+        {
+            if (!Objects.Exists(hash)) return hash; // not present — let the caller surface the error
+            if (TagObject.TryFromJson(Objects.ReadText(hash)) is { } tag) hash = tag.Object;
+            else return hash;
+        }
+        throw new InvalidOperationException("tag chain too deep (cycle?)");
+    }
+
     public bool DeleteTag(string name)
     {
         string p = TagPath(name);
@@ -217,10 +313,10 @@ public sealed class Repository
         if (name == "HEAD")
             return HeadCommit() ?? throw new InvalidOperationException("HEAD has no commits yet");
         if (ReadBranch(name) is { } b) return b;
-        if (ReadTag(name) is { } t) return t;
+        if (ReadTag(name) is { } t) return PeelToCommit(t);          // annotated tags peel to their commit
         if (name.Contains('/') && ReadRemoteRef(name) is { } rr) return rr; // e.g. origin/main
-        if (Objects.Exists(name)) return name;
-        if (Objects.ResolvePrefix(name) is { } full) return full;
+        if (Objects.Exists(name)) return PeelToCommit(name);
+        if (Objects.ResolvePrefix(name) is { } full) return PeelToCommit(full);
         throw new InvalidOperationException($"unknown revision: {name}");
     }
 
@@ -261,20 +357,55 @@ public sealed class Repository
     public Manifest ReadManifest(string hash) => Manifest.FromJson(Objects.ReadText(hash));
     public string WriteManifest(Manifest m) => Objects.WriteText(m.ToJson());
 
+    /// <summary>The four object kinds, git-style (a manifest is our "tree").</summary>
+    public enum ObjectKind { Commit, Tree, Tag, Blob }
+
+    /// <summary>
+    /// Classifies a stored object by its content shape: commit/tree/tag are camelCase
+    /// JSON with disjoint key sets; everything else (canonical NBT, raw files) is a blob.
+    /// </summary>
+    public ObjectKind Classify(string hash)
+    {
+        byte[] raw = Objects.Read(hash);
+        if (raw.Length == 0 || raw[0] != (byte)'{') return ObjectKind.Blob;
+        string text = System.Text.Encoding.UTF8.GetString(raw);
+        if (TagObject.TryFromJson(text) is not null) return ObjectKind.Tag;
+        try
+        {
+            using var doc = System.Text.Json.JsonDocument.Parse(text);
+            System.Text.Json.JsonElement r = doc.RootElement;
+            if (r.ValueKind == System.Text.Json.JsonValueKind.Object)
+            {
+                if (r.TryGetProperty("tree", out _) && r.TryGetProperty("parents", out _)) return ObjectKind.Commit;
+                if (r.TryGetProperty("regions", out _) && r.TryGetProperty("nbt", out _) && r.TryGetProperty("blobs", out _))
+                    return ObjectKind.Tree;
+            }
+        }
+        catch (System.Text.Json.JsonException) { /* not our JSON → blob */ }
+        return ObjectKind.Blob;
+    }
+
     /// <summary>
     /// Writes a commit object and advances the current branch (creating it if this
     /// is the first commit). Returns the new commit hash.
     /// </summary>
-    public string CreateCommit(string treeHash, IReadOnlyList<string> parents, string message, string author)
+    public string CreateCommit(string treeHash, IReadOnlyList<string> parents, string message, string author,
+        string? committer = null, string? authorTime = null, Func<string, string>? sign = null)
     {
+        string now = DateTimeOffset.Now.ToString("o");
         var commit = new CommitObject
         {
             Tree = treeHash,
             Parents = [.. parents],
             Message = message,
             Author = author,
-            Time = DateTimeOffset.Now.ToString("o"),
+            Time = authorTime ?? now,
+            Committer = committer ?? author,
+            CommitTime = now,
         };
+        // Sign over the payload with the signature field cleared; the object hash then
+        // covers the signature (git's model), so a signed commit is its own object.
+        if (sign is not null) commit.Signature = sign(commit.SignablePayload());
         string? oldTip = HeadCommit();
         string hash = WriteCommit(commit);
 

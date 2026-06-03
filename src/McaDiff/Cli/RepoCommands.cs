@@ -27,7 +27,7 @@ public static class RepoCommands
 
     public static int Commit(string? dashC, string[] a)
     {
-        var (pos, opts) = Parse(a, ["-m", "--message", "--author"], []);
+        var (pos, opts) = Parse(a, ["-m", "--message", "--author"], ["-S"]);
         if (Open(dashC) is not { } repo) return NoRepo();
         string? message = opts.GetValueOrDefault("-m") ?? opts.GetValueOrDefault("--message");
         if (message is null) return Err("commit requires -m <message>");
@@ -42,11 +42,17 @@ public static class RepoCommands
             return 0;
         }
 
-        string hash = repo.CreateCommit(tree, head is null ? [] : [head], message, Author(opts.GetValueOrDefault("--author")));
+        bool sign = opts.ContainsKey("-S") || string.Equals(repo.GetConfig("commit.gpgsign"), "true", StringComparison.OrdinalIgnoreCase);
+        Func<string, string>? signer;
+        try { signer = Signer(repo, sign); }
+        catch (Exception ex) { return Err(ex.Message); }
+
+        string hash = repo.CreateCommit(tree, head is null ? [] : [head], message,
+            Author(repo, opts.GetValueOrDefault("--author")), sign: signer);
         int chunks = manifest.Regions.Sum(r => r.Value.Count);
         int files = manifest.Regions.Count + manifest.Nbt.Count + manifest.Blobs.Count;
         string where = repo.CurrentBranch() ?? "detached HEAD";
-        Console.Error.WriteLine($"[{where} {hash[..10]}] {message}  ({files} files, {chunks} chunks)");
+        Console.Error.WriteLine($"[{where} {hash[..10]}] {message}  ({files} files, {chunks} chunks{(sign ? ", signed" : "")})");
         return 0;
     }
 
@@ -71,9 +77,10 @@ public static class RepoCommands
             }
             else
             {
-                Console.WriteLine($"commit {cur}");
+                Console.WriteLine($"commit {cur}{(c.Signature is not null ? " (signed)" : "")}");
                 if (c.Parents.Count > 1) Console.WriteLine($"Merge:  {string.Join(" ", c.Parents.Select(p => p[..10]))}");
                 Console.WriteLine($"Author: {c.Author}");
+                if (!string.IsNullOrEmpty(c.Committer) && c.Committer != c.Author) Console.WriteLine($"Commit: {c.Committer}");
                 Console.WriteLine($"Date:   {c.Time}");
                 Console.WriteLine();
                 Console.WriteLine($"    {c.Message}");
@@ -99,9 +106,10 @@ public static class RepoCommands
         try { commit = repo.ResolveRef(spec); } catch (Exception ex) { return Err(ex.Message); }
 
         CommitObject c = repo.ReadCommit(commit);
-        Console.WriteLine($"commit {commit}");
+        Console.WriteLine($"commit {commit}{(c.Signature is not null ? " (signed)" : "")}");
         if (c.Parents.Count > 1) Console.WriteLine($"Merge:  {string.Join(" ", c.Parents.Select(p => p[..10]))}");
         Console.WriteLine($"Author: {c.Author}");
+        if (!string.IsNullOrEmpty(c.Committer) && c.Committer != c.Author) Console.WriteLine($"Commit: {c.Committer}");
         Console.WriteLine($"Date:   {c.Time}");
         Console.WriteLine();
         Console.WriteLine($"    {c.Message}");
@@ -151,7 +159,7 @@ public static class RepoCommands
         string tree = repo.WriteManifest(merged);
         if (tree == repo.ReadCommit(head).Tree) { Console.Error.WriteLine("nothing to revert — already absent"); return 0; }
 
-        string commit = repo.CreateCommit(tree, [head], $"Revert \"{tc.Message}\"", Author(opts.GetValueOrDefault("--author")));
+        string commit = repo.CreateCommit(tree, [head], $"Revert \"{tc.Message}\"", Author(repo, opts.GetValueOrDefault("--author")));
         Console.Error.WriteLine($"[{branch} {commit[..10]}] revert {target[..10]} — {conflicts.Count} conflicts");
         foreach (MergeConflict cf in conflicts.Take(20))
             Console.Error.WriteLine($"  conflict: {cf.File}{(cf.Chunk is null ? "" : $" chunk {cf.Chunk}")}{(cf.Path.Length == 0 ? "" : $" {cf.Path}")} — {cf.Reason}");
@@ -181,24 +189,65 @@ public static class RepoCommands
 
     public static int Tag(string? dashC, string[] a)
     {
-        var (pos, opts) = Parse(a, [], ["-d"]);
+        var (pos, opts) = Parse(a, ["-m", "--message"], ["-d", "-a", "-s", "-v", "-n"]);
         if (Open(dashC) is not { } repo) return NoRepo();
+
         if (opts.ContainsKey("-d"))
         {
             if (pos.Count < 1) return Err("usage: tag -d <name>");
             return repo.DeleteTag(pos[0]) ? 0 : Err($"tag not found: {pos[0]}");
         }
+        if (opts.ContainsKey("-v"))
+        {
+            if (pos.Count < 1) return Err("usage: tag -v <name>");
+            return VerifyTag(repo, pos[0]);
+        }
         if (pos.Count == 0)
         {
-            foreach (string t in repo.Tags()) Console.WriteLine(t);
+            foreach (string t in repo.Tags())
+                Console.WriteLine(opts.ContainsKey("-n") && repo.ReadAnnotatedTag(t) is { } at
+                    ? $"{t,-15} {at.Message.Split('\n')[0]}"
+                    : t);
             return 0;
         }
-        string at = pos.Count > 1 ? pos[1] : "HEAD";
+
+        string atRef = pos.Count > 1 ? pos[1] : "HEAD";
         string commit;
-        try { commit = repo.ResolveRef(at); } catch (Exception ex) { return Err(ex.Message); }
-        repo.WriteTag(pos[0], commit);
-        Console.Error.WriteLine($"Created tag {pos[0]} at {commit[..10]}");
+        try { commit = repo.ResolveRef(atRef); } catch (Exception ex) { return Err(ex.Message); }
+
+        bool sign = opts.ContainsKey("-s");
+        bool annotated = sign || opts.ContainsKey("-a") || opts.ContainsKey("-m") || opts.ContainsKey("--message");
+        if (!annotated)
+        {
+            repo.WriteTag(pos[0], commit);
+            Console.Error.WriteLine($"Created tag {pos[0]} at {commit[..10]}");
+            return 0;
+        }
+
+        string? msg = opts.GetValueOrDefault("-m") ?? opts.GetValueOrDefault("--message");
+        if (msg is null) return Err("annotated tag requires -m <message>");
+        var tag = new TagObject
+        {
+            Object = commit, Type = "commit", Tag = pos[0],
+            Tagger = Author(repo, null), Time = DateTimeOffset.Now.ToString("o"), Message = msg,
+        };
+        if (sign)
+        {
+            try { tag.Signature = Signer(repo, true)!(tag.SignablePayload()); }
+            catch (Exception ex) { return Err($"signing failed: {ex.Message}"); }
+        }
+        string h = repo.WriteAnnotatedTag(tag);
+        Console.Error.WriteLine($"Created {(sign ? "signed " : "")}annotated tag {pos[0]} at {commit[..10]} (tag {h[..10]})");
         return 0;
+    }
+
+    private static int VerifyTag(Repository repo, string name)
+    {
+        if (repo.ReadAnnotatedTag(name) is not { } tag) return Err($"{name} is not an annotated tag");
+        if (tag.Signature is null) { Console.Error.WriteLine($"{name}: tag is not signed"); return 1; }
+        SshSigner.VerifyResult r = SshSigner.Verify(tag.SignablePayload(), tag.Signature, repo.GetConfig("gpg.ssh.allowedSignersFile"));
+        Console.Error.WriteLine($"{name}: {r.Detail}");
+        return r.Valid ? 0 : 1;
     }
 
     public static int Status(string? dashC, string[] a)
@@ -262,7 +311,7 @@ public static class RepoCommands
         if (pos.Count < 1) return Err("usage: merge <ref> [--theirs] [--author X]");
 
         MergeResult result;
-        try { result = Merger.Merge(repo, pos[0], opts.ContainsKey("--theirs"), Author(opts.GetValueOrDefault("--author"))); }
+        try { result = Merger.Merge(repo, pos[0], opts.ContainsKey("--theirs"), Author(repo, opts.GetValueOrDefault("--author"))); }
         catch (Exception ex) { return Err(ex.Message); }
 
         if (result.AlreadyUpToDate) { Console.Error.WriteLine("Already up to date."); return 0; }
@@ -405,7 +454,8 @@ public static class RepoCommands
         string tree = repo.WriteManifest(merged);
         if (tree == repo.ReadCommit(head).Tree) { Console.Error.WriteLine("nothing to cherry-pick — no changes"); return 0; }
 
-        string commit = repo.CreateCommit(tree, [head], tc.Message, Author(null));
+        string commit = repo.CreateCommit(tree, [head], tc.Message,
+            author: tc.Author, committer: Author(repo, null), authorTime: tc.Time);
         Console.Error.WriteLine($"[{branch} {commit[..10]}] {tc.Message} — {conflicts.Count} conflicts");
         foreach (MergeConflict cf in conflicts.Take(20))
             Console.Error.WriteLine($"  conflict: {cf.File}{(cf.Chunk is null ? "" : $" chunk {cf.Chunk}")}{(cf.Path.Length == 0 ? "" : $" {cf.Path}")} — {cf.Reason}");
@@ -420,13 +470,140 @@ public static class RepoCommands
         return 0;
     }
 
+    public static int FsckCmd(string? dashC, string[] a)
+    {
+        if (Open(dashC) is not { } repo) return NoRepo();
+        Fsck.Report r = Fsck.Check(repo);
+        foreach (string c in r.Corrupt) Console.Error.WriteLine($"error: corrupt object {c}");
+        foreach (string m in r.Missing) Console.Error.WriteLine($"error: missing object {m}");
+        foreach (string d in r.DanglingCommits) Console.WriteLine($"dangling commit {d}");
+        Console.Error.WriteLine($"checked {r.Checked} objects — {r.Corrupt.Count} corrupt, "
+            + $"{r.Missing.Count} missing, {r.Unreachable} unreachable ({r.DanglingCommits.Count} dangling commits)");
+        return r.Ok ? 0 : 1;
+    }
+
+    // ---- plumbing ----
+
+    public static int RevParse(string? dashC, string[] a)
+    {
+        var (pos, opts) = Parse(a, [], ["--short", "--abbrev-ref", "--verify"]);
+        if (Open(dashC) is not { } repo) return NoRepo();
+        if (pos.Count == 0) return Err("usage: rev-parse [--short|--abbrev-ref] <rev>...");
+        int rc = 0;
+        foreach (string spec in pos)
+        {
+            if (opts.ContainsKey("--abbrev-ref"))
+            {
+                string? br = spec == "HEAD" ? repo.CurrentBranch() : (repo.ReadBranch(spec) is not null ? spec : null);
+                if (br is not null) { Console.WriteLine(br); continue; }
+            }
+            try { string h = repo.ResolveRef(spec); Console.WriteLine(opts.ContainsKey("--short") ? h[..10] : h); }
+            catch (Exception ex) { Console.Error.WriteLine($"mcadiff: {ex.Message}"); rc = 1; }
+        }
+        return rc;
+    }
+
+    public static int CatFile(string? dashC, string[] a)
+    {
+        var (pos, opts) = Parse(a, [], ["-t", "-s", "-p", "-e"]);
+        if (Open(dashC) is not { } repo) return NoRepo();
+        if (pos.Count < 1) return Err("usage: cat-file (-t|-s|-p|-e) <object>");
+        if (ResolveObject(repo, pos[0]) is not { } obj || !repo.Objects.Exists(obj))
+            return opts.ContainsKey("-e") ? 1 : Err($"not a valid object name: {pos[0]}");
+
+        if (opts.ContainsKey("-e")) return 0;
+        Repository.ObjectKind kind = repo.Classify(obj);
+        if (opts.ContainsKey("-t")) { Console.WriteLine(kind.ToString().ToLowerInvariant()); return 0; }
+
+        byte[] content = repo.Objects.Read(obj);
+        if (opts.ContainsKey("-s")) { Console.WriteLine(content.Length); return 0; }
+        if (opts.ContainsKey("-p"))
+        {
+            if (kind == Repository.ObjectKind.Blob) { using Stream o = Console.OpenStandardOutput(); o.Write(content); }
+            else Console.Write(System.Text.Encoding.UTF8.GetString(content));
+            return 0;
+        }
+        return Err("cat-file needs one of -t, -s, -p, -e");
+    }
+
+    public static int HashObject(string? dashC, string[] a)
+    {
+        var (pos, opts) = Parse(a, [], ["-w"]);
+        if (pos.Count < 1) return Err("usage: hash-object [-w] <file>");
+        if (!File.Exists(pos[0])) return Err($"file not found: {pos[0]}");
+        byte[] bytes = File.ReadAllBytes(pos[0]);
+        if (opts.ContainsKey("-w"))
+        {
+            if (Open(dashC) is not { } repo) return NoRepo();
+            Console.WriteLine(repo.Objects.Write(bytes));
+        }
+        else Console.WriteLine(Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(bytes)));
+        return 0;
+    }
+
+    public static int LsTree(string? dashC, string[] a)
+    {
+        var (pos, opts) = Parse(a, [], ["-r", "--name-only"]);
+        if (Open(dashC) is not { } repo) return NoRepo();
+        if (pos.Count < 1) return Err("usage: ls-tree [-r] [--name-only] <tree-ish>");
+        string treeHash;
+        try
+        {
+            string resolved = repo.ResolveRef(pos[0]);
+            treeHash = repo.Classify(resolved) == Repository.ObjectKind.Tree ? resolved : repo.ReadCommit(resolved).Tree;
+        }
+        catch (Exception ex) { return Err(ex.Message); }
+
+        Manifest m = repo.ReadManifest(treeHash);
+        bool nameOnly = opts.ContainsKey("--name-only"), recurse = opts.ContainsKey("-r");
+        foreach (var r in m.Regions)
+        {
+            if (recurse)
+                foreach (var ch in r.Value)
+                    Console.WriteLine(nameOnly ? $"{r.Key}#{ch.Key}" : $"chunk {ch.Value[..10]}\t{r.Key}#{ch.Key}");
+            else
+                Console.WriteLine(nameOnly ? r.Key : $"region -          \t{r.Key} ({r.Value.Count} chunks)");
+        }
+        foreach (var n in m.Nbt) Console.WriteLine(nameOnly ? n.Key : $"nbt    {n.Value[..10]}\t{n.Key}");
+        foreach (var b in m.Blobs) Console.WriteLine(nameOnly ? b.Key : $"blob   {b.Value[..10]}\t{b.Key}");
+        return 0;
+    }
+
     public static int Config(string? dashC, string[] a)
     {
         if (Open(dashC) is not { } repo) return NoRepo();
-        if (a.Length == 0 || a[0] != "worktree") return Err("usage: config worktree [<path>]");
-        if (a.Length == 1) { Console.WriteLine(repo.Worktree ?? "(unset)"); return 0; }
-        repo.Worktree = a[1];
-        Console.Error.WriteLine($"worktree = {repo.Worktree}");
+        var (pos, opts) = Parse(a, [], ["--global", "--list", "-l", "--unset"]);
+        bool global = opts.ContainsKey("--global");
+
+        if (opts.ContainsKey("--list") || opts.ContainsKey("-l"))
+        {
+            foreach (var (k, v, _) in repo.ListConfig()) Console.WriteLine($"{k}={v}");
+            return 0;
+        }
+        if (opts.ContainsKey("--unset"))
+        {
+            if (pos.Count < 1) return Err("usage: config --unset [--global] <key>");
+            return repo.UnsetConfig(pos[0], global) ? 0 : Err($"key not set: {pos[0]}");
+        }
+        if (pos.Count == 0)
+            return Err("usage: config [--global] <key> [<value>] | config --list | config --unset <key>");
+
+        string key = pos[0];
+        if (key == "worktree") // first-class repo setting (binds the world)
+        {
+            if (pos.Count == 1) { Console.WriteLine(repo.Worktree ?? "(unset)"); return 0; }
+            repo.Worktree = pos[1];
+            Console.Error.WriteLine($"worktree = {repo.Worktree}");
+            return 0;
+        }
+        if (pos.Count == 1)
+        {
+            string? v = repo.GetConfig(key);
+            if (v is null) return 1; // git: reading an unset key exits 1
+            Console.WriteLine(v);
+            return 0;
+        }
+        repo.SetConfig(key, pos[1], global);
         return 0;
     }
 
@@ -477,7 +654,29 @@ public static class RepoCommands
         try { return repo.ResolveRef(refName); } catch { return null; }
     }
 
-    private static string Author(string? flag) => flag ?? Environment.UserName ?? "unknown";
+    private static string Author(Repository repo, string? flag)
+        => flag ?? repo.ConfiguredIdentity() ?? Environment.UserName ?? "unknown";
+
+    /// <summary>A signing delegate when signing is requested (throws if no key is configured), else null.</summary>
+    private static Func<string, string>? Signer(Repository repo, bool wantSign)
+    {
+        if (!wantSign) return null;
+        string key = repo.GetConfig("user.signingkey")
+            ?? throw new InvalidOperationException("signing requested but user.signingkey is not set");
+        return payload => SshSigner.Sign(payload, key);
+    }
+
+    /// <summary>Resolves a name to a stored object hash <em>without</em> peeling annotated
+    /// tags (so cat-file/ls-tree can inspect the tag object itself).</summary>
+    private static string? ResolveObject(Repository repo, string spec)
+    {
+        if (repo.Objects.Exists(spec)) return spec;
+        if (repo.Objects.ResolvePrefix(spec) is { } full) return full;
+        if (repo.ReadTag(spec) is { } t) return t;
+        if (repo.ReadBranch(spec) is { } b) return b;
+        if (spec == "HEAD") return repo.HeadCommit();
+        try { return repo.ResolveRef(spec); } catch { return null; }
+    }
 
     private static (List<string> Positionals, Dictionary<string, string?> Opts) Parse(
         string[] args, string[] valueFlags, string[] boolFlags)
