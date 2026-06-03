@@ -49,6 +49,36 @@ public sealed class ObjectStore
 
     public bool Exists(string hash) => File.Exists(PathFor(hash));
 
+    /// <summary>Resolves an abbreviated hash (≥4 hex chars) to a full hash, or null if absent/ambiguous.</summary>
+    public string? ResolvePrefix(string prefix)
+    {
+        if (prefix.Length < 4 || prefix.Length > 64) return null;
+        string dir = Path.Combine(_objectsDir, prefix[..2]);
+        if (!Directory.Exists(dir)) return null;
+        string rest = prefix[2..];
+        string? match = null;
+        foreach (string f in Directory.EnumerateFiles(dir))
+        {
+            string name = Path.GetFileName(f);
+            if (name.EndsWith(".tmp") || !name.StartsWith(rest, StringComparison.Ordinal)) continue;
+            if (match is not null) return null; // ambiguous
+            match = prefix[..2] + name;
+        }
+        return match;
+    }
+
+    /// <summary>Enumerates every stored object hash (used by gc/transfer).</summary>
+    public IEnumerable<string> AllHashes()
+    {
+        if (!Directory.Exists(_objectsDir)) yield break;
+        foreach (string sub in Directory.EnumerateDirectories(_objectsDir))
+            foreach (string f in Directory.EnumerateFiles(sub))
+            {
+                string name = Path.GetFileName(f);
+                if (!name.EndsWith(".tmp")) yield return Path.GetFileName(sub) + name;
+            }
+    }
+
     /// <summary>Total number of stored objects (used to demonstrate dedup in tests).</summary>
     public int Count() => Directory.Exists(_objectsDir)
         ? Directory.EnumerateFiles(_objectsDir, "*", SearchOption.AllDirectories).Count(f => !f.EndsWith(".tmp"))

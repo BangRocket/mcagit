@@ -193,11 +193,21 @@ mcadiff commit -m "after raid"              # only changed chunks add objects
 mcadiff status                              # changes vs HEAD (by hash; fast)
 mcadiff diff                                # worktree vs HEAD
 mcadiff diff <refA> <refB>                  # any two snapshots (branch/commit/HEAD/path)
-mcadiff log
+mcadiff log [--oneline|-p|--stat]           # history (optionally with diffs)
+mcadiff show <ref>                          # a commit's metadata + diff
 mcadiff checkout <ref> [<world-out>]        # materialize a snapshot
+mcadiff reset <ref> [--hard]                # move the branch (─ worktree with --hard)
+mcadiff restore <ref> <path>...             # restore specific files from a snapshot
+mcadiff revert <commit>                     # new commit that undoes a commit
 mcadiff branch [name]                       # list / create branches
+mcadiff tag [name [<ref>]]                  # list / create tags (-d to delete)
 mcadiff merge <other-branch>               # true 3-way merge
 ```
+
+Revisions accept `HEAD`, branch/tag names, abbreviated hashes, and `~n` / `^n`
+suffixes (e.g. `diff HEAD~2 HEAD`, `checkout main~1`). A `.mcaignore` in the world
+(gitignore-lite: `*.ext`, `dir/`, `name`, `/anchored/path`) excludes files from
+commits.
 
 - **Whole-world snapshots:** region/entities/poi as deduped per-chunk objects,
   loose NBT as canonical objects, everything else (datapacks, stats, advancements)

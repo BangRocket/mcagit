@@ -27,9 +27,14 @@ return cmd switch
     "init" => RepoCommands.Init(dashC, tail[1..]),
     "commit" => RepoCommands.Commit(dashC, tail[1..]),
     "log" => RepoCommands.Log(dashC, tail[1..]),
+    "show" => RepoCommands.Show(dashC, tail[1..]),
     "status" => RepoCommands.Status(dashC, tail[1..]),
     "checkout" => RepoCommands.Checkout(dashC, tail[1..]),
+    "reset" => RepoCommands.Reset(dashC, tail[1..]),
+    "restore" => RepoCommands.Restore(dashC, tail[1..]),
+    "revert" => RepoCommands.Revert(dashC, tail[1..]),
     "branch" => RepoCommands.Branch(dashC, tail[1..]),
+    "tag" => RepoCommands.Tag(dashC, tail[1..]),
     "merge" => RepoCommands.Merge(dashC, tail[1..]),
     "config" => RepoCommands.Config(dashC, tail[1..]),
     null or "-h" or "--help" => Help(),
@@ -176,11 +181,18 @@ partial class Program
             mcadiff init [<repo>] [--worktree <world>]
             mcadiff commit [-m <msg>] [<world>]   Snapshot the worktree (or <world>)
             mcadiff status [<world>]              Changes vs HEAD
-            mcadiff log [<ref>]                   History
+            mcadiff log [--oneline|-p|--stat] [-n N] [<ref>]
+            mcadiff show [<ref>]                  A commit's metadata + diff
             mcadiff checkout <ref> [<world-out>]  Materialize a snapshot
+            mcadiff reset <ref> [--hard]          Move the branch (─ worktree with --hard)
+            mcadiff restore <ref> <path>...       Restore paths from a snapshot
+            mcadiff revert <commit>               New commit undoing a commit
             mcadiff branch [<name>]               List / create branches
+            mcadiff tag [<name> [<ref>]] | -d <name>
             mcadiff merge <ref> [--theirs]        3-way merge
             mcadiff config worktree [<path>]      Get / set the bound world
+
+        Revisions accept HEAD, branches, tags, short hashes, and ~n / ^n suffixes.
 
         Run diff/extract/apply with --help for their options.
         """;

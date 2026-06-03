@@ -121,15 +121,92 @@ public sealed class Repository
         return branch is not null ? ReadBranch(branch) : ReadHeadRaw();
     }
 
-    /// <summary>Resolves <c>HEAD</c>, a branch name, or a commit hash to a commit hash.</summary>
-    public string ResolveRef(string refName)
+    // ---- tags (refs/tags/*) ----
+
+    public string? ReadTag(string name)
     {
-        if (refName == "HEAD")
-            return HeadCommit() ?? throw new InvalidOperationException("HEAD has no commits yet");
-        if (ReadBranch(refName) is { } byBranch) return byBranch;
-        if (Objects.Exists(refName)) return refName;
-        throw new InvalidOperationException($"unknown ref: {refName}");
+        string p = TagPath(name);
+        return File.Exists(p) ? File.ReadAllText(p).Trim() : null;
     }
+
+    public void WriteTag(string name, string commitHash)
+    {
+        string p = TagPath(name);
+        Directory.CreateDirectory(Path.GetDirectoryName(p)!);
+        File.WriteAllText(p, commitHash + "\n");
+    }
+
+    public bool DeleteTag(string name)
+    {
+        string p = TagPath(name);
+        if (!File.Exists(p)) return false;
+        File.Delete(p);
+        return true;
+    }
+
+    public IEnumerable<string> Tags()
+    {
+        string dir = Path.Combine(Dir, "refs", "tags");
+        if (!Directory.Exists(dir)) yield break;
+        foreach (string f in Directory.EnumerateFiles(dir).OrderBy(x => x, StringComparer.Ordinal))
+            yield return Path.GetFileName(f);
+    }
+
+    /// <summary>
+    /// Resolves a revision to a commit hash, git-style: a base (<c>HEAD</c>, branch,
+    /// tag, full or abbreviated hash) optionally followed by <c>~n</c> / <c>^n</c>
+    /// ancestor operators (e.g. <c>main~2</c>, <c>HEAD^</c>, <c>a1b2c3d~1</c>).
+    /// </summary>
+    public string ResolveRef(string refSpec)
+    {
+        int op = refSpec.IndexOfAny(['~', '^']);
+        string baseName = op < 0 ? refSpec : refSpec[..op];
+        string ops = op < 0 ? "" : refSpec[op..];
+
+        string commit = ResolveBase(baseName.Length == 0 ? "HEAD" : baseName);
+        return ApplyRevOps(commit, ops, refSpec);
+    }
+
+    private string ResolveBase(string name)
+    {
+        if (name == "HEAD")
+            return HeadCommit() ?? throw new InvalidOperationException("HEAD has no commits yet");
+        if (ReadBranch(name) is { } b) return b;
+        if (ReadTag(name) is { } t) return t;
+        if (Objects.Exists(name)) return name;
+        if (Objects.ResolvePrefix(name) is { } full) return full;
+        throw new InvalidOperationException($"unknown revision: {name}");
+    }
+
+    private string ApplyRevOps(string commit, string ops, string full)
+    {
+        for (int i = 0; i < ops.Length;)
+        {
+            char c = ops[i++];
+            int start = i;
+            while (i < ops.Length && char.IsDigit(ops[i])) i++;
+            int n = start < i ? int.Parse(ops[start..i]) : 1;
+
+            if (c == '^')
+            {
+                List<string> parents = ReadCommit(commit).Parents;
+                if (n < 1 || n > parents.Count) throw new InvalidOperationException($"{full}: no parent {n}");
+                commit = parents[n - 1];
+            }
+            else // '~' : walk n first-parents
+            {
+                for (int k = 0; k < n; k++)
+                {
+                    List<string> parents = ReadCommit(commit).Parents;
+                    if (parents.Count == 0) throw new InvalidOperationException($"{full}: no ancestor");
+                    commit = parents[0];
+                }
+            }
+        }
+        return commit;
+    }
+
+    private string TagPath(string name) => Path.Combine(Dir, "refs", "tags", name);
 
     // ---- typed object IO ----
 

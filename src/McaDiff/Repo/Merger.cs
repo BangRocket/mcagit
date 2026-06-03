@@ -50,7 +50,11 @@ public static class Merger
         return new MergeResult { CommitHash = commit, Conflicts = conflicts };
     }
 
-    private static Manifest MergeManifests(Repository repo, Manifest b, Manifest o, Manifest t, bool preferTheirs, List<MergeConflict> conflicts)
+    /// <summary>
+    /// Three-way merges three manifests (base, ours, theirs) into one, recording
+    /// conflicts. Exposed so revert/cherry-pick can reuse the per-node merge.
+    /// </summary>
+    public static Manifest MergeManifests(Repository repo, Manifest b, Manifest o, Manifest t, bool preferTheirs, List<MergeConflict> conflicts)
     {
         var merged = new Manifest();
 

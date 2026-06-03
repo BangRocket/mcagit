@@ -212,6 +212,87 @@ public class RepoTests
         Assert.Equal(repo.ReadCommit(repo.HeadCommit()!).Tree, repo.WriteManifest(again));
     }
 
+    [Fact]
+    public void ResolveRef_RevisionSyntaxAndShortHash()
+    {
+        Repository repo = Repository.Init(TestAnvil.TempDir("rev"));
+        string c0 = CommitWorld(repo, World("a"), "c0");
+        string c1 = CommitWorld(repo, World("b"), "c1");
+        string c2 = CommitWorld(repo, World("c"), "c2");
+
+        Assert.Equal(c2, repo.ResolveRef("HEAD"));
+        Assert.Equal(c2, repo.ResolveRef("main"));
+        Assert.Equal(c1, repo.ResolveRef("HEAD~1"));
+        Assert.Equal(c1, repo.ResolveRef("HEAD^"));
+        Assert.Equal(c0, repo.ResolveRef("HEAD~2"));
+        Assert.Equal(c0, repo.ResolveRef("main~2"));
+        Assert.Equal(c1, repo.ResolveRef(c1[..8])); // abbreviated hash
+    }
+
+    [Fact]
+    public void Tags_Resolve_List_Delete()
+    {
+        Repository repo = Repository.Init(TestAnvil.TempDir("tag"));
+        string c = CommitWorld(repo, World("a"), "c0");
+        repo.WriteTag("v1", c);
+
+        Assert.Equal(c, repo.ResolveRef("v1")); // tag resolves as a revision base
+        Assert.Contains("v1", repo.Tags());
+        Assert.True(repo.DeleteTag("v1"));
+        Assert.DoesNotContain("v1", repo.Tags());
+    }
+
+    [Fact]
+    public void ObjectStore_ResolvePrefix()
+    {
+        var store = new ObjectStore(TestAnvil.TempDir("pfx"));
+        string h = store.Write([1, 2, 3, 4, 5]);
+        Assert.Equal(h, store.ResolvePrefix(h[..10]));
+        Assert.Null(store.ResolvePrefix("ffffffff")); // no such object
+    }
+
+    [Fact]
+    public void Revert_RestoresPreviousTree()
+    {
+        Repository repo = Repository.Init(TestAnvil.TempDir("rvt"));
+        string c0 = CommitWorld(repo, World("a"), "c0");
+        string c1 = CommitWorld(repo, World("b"), "c1");
+
+        // revert c1 = 3-way(base=c1, ours=c1, theirs=c1.parent) → c0's tree
+        Manifest baseM = repo.ReadManifest(repo.ReadCommit(c1).Tree);
+        Manifest theirsM = repo.ReadManifest(repo.ReadCommit(c0).Tree);
+        Manifest merged = Merger.MergeManifests(repo, baseM, baseM, theirsM, false, []);
+        Assert.Equal(repo.ReadCommit(c0).Tree, repo.WriteManifest(merged));
+    }
+
+    [Fact]
+    public void IgnoreRules_MatchForms()
+    {
+        string dir = TestAnvil.TempDir("ign");
+        File.WriteAllText(Path.Combine(dir, ".mcaignore"), "*.sqlite\nlogs/\ndata/foo.dat\n");
+        IgnoreRules ig = IgnoreRules.Load(dir);
+
+        Assert.True(ig.IsIgnored("data/DistantHorizons.sqlite")); // *.ext glob
+        Assert.True(ig.IsIgnored("logs/latest.log"));             // dir/
+        Assert.True(ig.IsIgnored("data/foo.dat"));                // anchored path
+        Assert.False(ig.IsIgnored("level.dat"));
+        Assert.False(ig.IsIgnored("data/keep.dat"));
+    }
+
+    [Fact]
+    public void Commit_HonorsMcaIgnore()
+    {
+        Repository repo = Repository.Init(TestAnvil.TempDir("igc"));
+        string world = TestAnvil.TempDir("igw");
+        TestAnvil.WriteRegion(Path.Combine(world, "region", "r.0.0.mca"), (new ChunkPos(0, 0), AB(1, 1)));
+        Directory.CreateDirectory(Path.Combine(world, "data"));
+        File.WriteAllText(Path.Combine(world, "data", "skip.sqlite"), "x");
+        File.WriteAllText(Path.Combine(world, ".mcaignore"), "*.sqlite\n");
+
+        Manifest m = Snapshotter.Snapshot(repo, world);
+        Assert.DoesNotContain(m.Blobs.Keys, k => k.Contains("skip.sqlite"));
+    }
+
     // ---- helpers ----
 
     private static NbtCompound Chunk(string status, long heightmap0) => TestAnvil.Root(

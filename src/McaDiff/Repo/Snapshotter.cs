@@ -29,8 +29,10 @@ public static class Snapshotter
     private static Manifest Build(string worldDir, Ctx ctx)
     {
         string root = Path.GetFullPath(worldDir);
+        IgnoreRules ignore = IgnoreRules.Load(root);
         string[] files = Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)
-            .Where(f => !SkipNames.Contains(Path.GetFileName(f)))
+            .Where(f => !SkipNames.Contains(Path.GetFileName(f))
+                        && !ignore.IsIgnored(Path.GetRelativePath(root, f).Replace('\\', '/')))
             .ToArray();
 
         var results = new ConcurrentBag<Entry>();
@@ -53,8 +55,11 @@ public static class Snapshotter
 
         // Record empty directories so checkout reproduces the layout faithfully.
         foreach (string dir in Directory.EnumerateDirectories(root, "*", SearchOption.AllDirectories))
-            if (!Directory.EnumerateFileSystemEntries(dir).Any())
-                manifest.EmptyDirs.Add(Path.GetRelativePath(root, dir).Replace('\\', '/'));
+        {
+            string rel = Path.GetRelativePath(root, dir).Replace('\\', '/');
+            if (!ignore.IsIgnored(rel) && !Directory.EnumerateFileSystemEntries(dir).Any())
+                manifest.EmptyDirs.Add(rel);
+        }
         manifest.EmptyDirs.Sort(StringComparer.Ordinal);
 
         if (ctx.WriteCache) ctx.Cache?.Save();
