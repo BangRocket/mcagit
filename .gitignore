@@ -11,7 +11,3 @@ obj/
 
 # OS
 .DS_Store
-
-# Local Minecraft world saves used for manual testing — NOT for publishing
-# (contain personal player data; add a small sanitized sample separately if needed)
-compare-worlds/
