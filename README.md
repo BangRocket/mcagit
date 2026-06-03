@@ -200,16 +200,30 @@ mcadiff reset <ref> [--hard]                # move the branch (─ worktree with
 mcadiff restore <ref> <path>...             # restore specific files from a snapshot
 mcadiff revert <commit>                     # new commit that undoes a commit
 mcadiff branch [name]                       # list / create branches
-mcadiff tag [name [<ref>]]                  # list / create tags (-d to delete)
-mcadiff merge <other-branch>               # true 3-way merge
+mcadiff tag -a v1 -m "season 1" [-s]        # annotated (optionally SSH-signed) tags
+mcadiff merge <other-branch>               # 3-way merge (stops on conflict)
+mcadiff merge --continue | --abort          # finish / undo a conflicted merge
+
+mcadiff add <path>... | restore --staged …  # stage / unstage (the index)
+mcadiff stash [push|pop|list|drop|clear]    # shelve / restore the worktree
+mcadiff rebase [--onto <base>] <upstream>   # replay commits onto a new base
+mcadiff bisect start|good|bad|reset         # binary-search for a bad commit
+mcadiff clean [-n|-f]                        # remove untracked worktree files
+mcadiff fsck                                 # verify object integrity + reachability
+mcadiff rev-parse|cat-file|hash-object|ls-tree   # plumbing
 ```
 
-Revisions accept `HEAD`, branch/tag names, abbreviated hashes, and `~n` / `^n`
-suffixes (e.g. `diff HEAD~2 HEAD`, `checkout main~1`). A `.mcaignore` in the world
+Revisions accept `HEAD`, branch/tag names, abbreviated hashes, `~n` / `^n` suffixes,
+`HEAD@{n}` reflog positions, and ranges `A..B` / `A...B` for `log` (e.g.
+`diff HEAD~2 HEAD`, `checkout main~1`, `log v1..HEAD`). A `.mcaignore` in the world
 (gitignore-lite: `*.ext`, `dir/`, `name`, `/anchored/path`) excludes files from
-commits.
+commits. Identity comes from `config user.name` / `user.email`; commits and tags can
+be SSH-signed (`commit -S`, `tag -s`, `user.signingkey`) and verified (`tag -v`).
 
-`cherry-pick <commit>` applies one commit onto HEAD via the 3-way engine.
+`cherry-pick <commit>` applies one commit onto HEAD via the 3-way engine. A conflicted
+`merge` stops without committing, records MERGE_HEAD + a conflict list, and lays the
+partial result into the worktree; resolve it and `merge --continue`, or `merge --abort`.
+Pre-commit / post-commit **hooks** run from `<repo>/hooks/`.
 
 ### Remotes & maintenance
 
@@ -222,8 +236,10 @@ mcadiff clone <src> <dest> [--token T]        # src: path | http(s):// | ssh://
 mcadiff remote add origin <url>
 mcadiff push  [<remote> [<branch>]] [--force] [--token T]   # fast-forward-checked
 mcadiff fetch [<remote> [<branch>]] [--token T]            # into refs/remotes/<remote>/*
+mcadiff push  [<remote>] --all                # push every branch
+mcadiff ls-remote [<remote>]                  # list a remote's refs
 mcadiff reflog                                # HEAD movement history
-mcadiff gc                                    # prune objects unreachable from any ref
+mcadiff gc                                    # repack reachable objects + prune the rest
 ```
 
 **Serving over the network** (git's model — anonymous read, authenticated push):
@@ -242,7 +258,11 @@ mcadiff push  ssh://user@host/path/to/world.mcagit main
 
 - **Whole-world snapshots:** region/entities/poi as deduped per-chunk objects,
   loose NBT as canonical objects, everything else (datapacks, stats, advancements)
-  as raw blobs — so `checkout` restores a faithful, playable world.
+  as raw blobs — so `checkout` restores a faithful, playable world (a full checkout
+  prunes worktree files absent from the snapshot; `.mcaignore`'d files are kept).
+- **Delta-packed storage:** `gc` repacks reachable objects into a single packfile
+  with delta compression between similar chunks (a chunk whose only change is a
+  ticking `InhabitedTime` packs to a few bytes) and prunes the unreachable rest.
 - **True 3-way merge:** finds the common ancestor and merges **per NBT node** —
   changes from both sides that touch different nodes both land; only a genuine
   same-node clash is a conflict (kept *ours*, or *theirs* with `--theirs`, and
@@ -297,14 +317,18 @@ patch extractor, so they can never drift.
 dotnet test
 ```
 
-55 tests covering: the NBT comparer (add/remove/modify/type-change, identity-list
+122 tests covering: the NBT comparer (add/remove/modify/type-change, identity-list
 matching, array summarize/expand); the lossless `NbtJson` codec (incl. longs
 beyond 2^53); `NbtPath` get/set/remove by key, index and identity; `RegionWriter`
 round-trip; the full patch pipeline (forward/reverse round-trips, conflict guard,
 `--force`, `--dry-run`); and the VCS — object-store dedup, canonical-form
-determinism, commit→checkout reproduces a world, merge-base, and 3-way merge
-(non-overlapping node changes combine; same-node clashes conflict, keeping ours or
-theirs; fast-forward). One test additionally parses a real region file when
+determinism, commit→checkout reproduces a world, merge-base, and 3-way merge.
+The git-likeness tiers add: fsck integrity/reachability, config + identity, the
+author/committer split, annotated & SSH-signed tags, object classification + plumbing;
+the binary delta codec, packfile round-trips/compression and gc repacking; the
+recursive merge base (incl. criss-cross) and the merge stop/continue/abort workflow;
+bisect convergence and the staging index; and HEAD@{n}, stash (+gc survival), rebase
+(+`--onto`), clean, and hooks. One test additionally parses a real region file when
 `MCADIFF_TEST_REGION` points at one (auto-skipped otherwise).
 
 ## Limitations
@@ -314,18 +338,22 @@ theirs; fast-forward). One test additionally parses a real region file when
   semantically (such a region is stored as a raw blob instead).
 - No block-coordinate-level decode of palettes (a changed `block_states` array is
   reported as an array diff, not as `(x,y,z): stone → air`).
-- `diff`/`extract`/`commit`/`status` never modify a world. `apply` and `checkout`
-  only write to the fresh output directory they create.
-- Objects are whole (zlib-compressed), not delta-packed; `apply` copies the whole
-  target world before editing (no hardlink/reflink yet). The first commit decodes
-  every chunk (parallelized, a few seconds on a large world); re-commits reuse a
-  per-repo decode cache, so an unchanged world re-commits in a fraction of the time.
-- `merge` uses the nearest common ancestor (fine for linear + single-merge
-  histories; no criss-cross LCA), and conflicts are reported + kept-ours/theirs
-  with no in-place marker/resolve workflow.
-- Remotes support path / `http(s)://` / `ssh://`, but transfer is per-object (no
-  packfiles/delta), and the HTTP server is a simple built-in daemon (single token,
-  no TLS — put it behind a reverse proxy for `https`). There's no staging index —
-  `commit` snapshots the whole worktree.
+- `diff`/`extract`/`status` never modify a world. `apply` writes only to the fresh
+  output directory it creates; `checkout` / `reset --hard` / `bisect` / `merge` update
+  the bound worktree in place (a full checkout prunes files not in the snapshot).
+- Loose objects are whole (zlib-compressed); `gc` delta-packs them into a packfile,
+  but **network transfer is still per-object** (no pack/delta on the wire yet), and
+  `apply` copies the whole target world before editing (no hardlink/reflink yet). The
+  first commit decodes every chunk (parallelized, a few seconds on a large world);
+  re-commits reuse a per-repo decode cache.
+- `merge` uses a recursive merge base (folds multiple bases on a criss-cross), and a
+  conflicted merge stops with MERGE_HEAD + a conflict list for `merge --continue` /
+  `--abort` (resolution is by re-snapshotting the worktree, not in-file markers — the
+  files are binary). `merge --ours`/`--theirs` still auto-resolve in one shot.
+- Tag/commit signing is SSH-key based (`ssh-keygen`), not GPG. `rebase` is
+  non-interactive (no `-i`); on a conflict it keeps the replayed change and reports.
+- The HTTP server is a simple built-in daemon (single token, no TLS — put it behind a
+  reverse proxy for `https`); `push --all` and `ls-remote` work, but pushing tag refs
+  over the network isn't wired up yet.
 - A compound key containing a literal `.` or `[` isn't addressable by patch/merge
   paths (real Minecraft keys don't use them).
