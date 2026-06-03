@@ -81,7 +81,7 @@ public class RepoTests
         CommitWorld(repo, ChunkWorld(a: 1, b: 20), "their change B");  // side
         repo.SetHeadToBranch("main");
 
-        MergeResult r = Merger.Merge(repo, "side", preferTheirs: false, "test");
+        MergeResult r = Merger.Merge(repo, "side", preferTheirs: false, autoResolve: false, "test");
         Assert.False(r.HasConflicts);
         NbtCompound merged = MergedChunk(repo, r.CommitHash!);
         Assert.Equal(2, merged.Get("a")!.IntValue);   // ours' change kept
@@ -102,7 +102,7 @@ public class RepoTests
             CommitWorld(repo, ChunkWorld(a: 3, b: 10), "theirs"); // side: a -> 3
             repo.SetHeadToBranch("main");
 
-            MergeResult r = Merger.Merge(repo, "side", preferTheirs, "test");
+            MergeResult r = Merger.Merge(repo, "side", preferTheirs, autoResolve: true, "test");
             Assert.True(r.HasConflicts);
             Assert.Equal(preferTheirs ? 3 : 2, MergedChunk(repo, r.CommitHash!).Get("a")!.IntValue);
         }
@@ -118,7 +118,7 @@ public class RepoTests
         string c1 = CommitWorld(repo, ChunkWorld(2, 10), "c1");  // side ahead
         repo.SetHeadToBranch("main");                            // main still at c0
 
-        MergeResult r = Merger.Merge(repo, "side", false, "test");
+        MergeResult r = Merger.Merge(repo, "side", false, autoResolve: false, "test");
         Assert.True(r.FastForward);
         Assert.Equal(c1, repo.ReadBranch("main"));
     }

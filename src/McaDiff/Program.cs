@@ -203,7 +203,8 @@ partial class Program
             mcadiff revert <commit>               New commit undoing a commit
             mcadiff branch [<name>]               List / create branches
             mcadiff tag [-a -m <msg> [-s]] [<name> [<ref>]] | -d <name> | -v <name>
-            mcadiff merge <ref> [--theirs]        3-way merge
+            mcadiff merge <ref> [--theirs|--ours]  3-way merge (stops on conflict)
+            mcadiff merge --continue | --abort     Finish / undo a conflicted merge
             mcadiff cherry-pick <commit>          Apply one commit onto HEAD
             mcadiff commit -S …                   Sign the commit (SSH key)
             mcadiff config [--global] <key> [<v>] | --list | --unset <key>

@@ -12,6 +12,8 @@ public sealed class MergeResult
     public string? CommitHash { get; init; }
     public bool AlreadyUpToDate { get; init; }
     public bool FastForward { get; init; }
+    /// <summary>True when the merge stopped on conflicts without committing (awaiting resolution).</summary>
+    public bool Stopped { get; init; }
     public List<MergeConflict> Conflicts { get; init; } = [];
     public bool HasConflicts => Conflicts.Count > 0;
 }
@@ -24,30 +26,111 @@ public sealed class MergeResult
 /// </summary>
 public static class Merger
 {
-    public static MergeResult Merge(Repository repo, string theirRef, bool preferTheirs, string author)
+    /// <param name="autoResolve">When true, conflicts are resolved (keeping ours, or
+    /// theirs when <paramref name="preferTheirs"/>) and the merge commits immediately —
+    /// git's <c>-X ours/theirs</c>. When false, a conflicted merge stops and records
+    /// MERGE_HEAD for <c>merge --continue</c>/<c>--abort</c>.</param>
+    public static MergeResult Merge(Repository repo, string theirRef, bool preferTheirs, bool autoResolve, string author)
     {
         string branch = repo.CurrentBranch()
             ?? throw new InvalidOperationException("merge requires being on a branch (detached HEAD).");
+        if (repo.InMerge)
+            throw new InvalidOperationException("a merge is already in progress (use merge --continue or --abort)");
         string theirs = repo.ResolveRef(theirRef);
         string? ours = repo.ReadBranch(branch);
 
         if (ours is null) { repo.WriteBranch(branch, theirs); return new MergeResult { CommitHash = theirs, FastForward = true }; }
         if (ours == theirs) return new MergeResult { CommitHash = ours, AlreadyUpToDate = true };
 
-        string? mergeBase = MergeBase.Find(repo, ours, theirs);
-        if (mergeBase == ours) { repo.WriteBranch(branch, theirs); return new MergeResult { CommitHash = theirs, FastForward = true }; }
-        if (mergeBase == theirs) return new MergeResult { CommitHash = ours, AlreadyUpToDate = true };
+        List<string> bases = MergeBase.FindAll(repo, ours, theirs);
+        if (bases.Contains(ours)) { repo.WriteBranch(branch, theirs); return new MergeResult { CommitHash = theirs, FastForward = true }; }
+        if (bases.Contains(theirs)) return new MergeResult { CommitHash = ours, AlreadyUpToDate = true };
 
-        Manifest baseM = mergeBase is not null ? repo.ReadManifest(repo.ReadCommit(mergeBase).Tree) : new Manifest();
+        Manifest baseM = BaseManifest(repo, bases, out string? baseCommit);
         Manifest oursM = repo.ReadManifest(repo.ReadCommit(ours).Tree);
         Manifest theirsM = repo.ReadManifest(repo.ReadCommit(theirs).Tree);
 
         var conflicts = new List<MergeConflict>();
         Manifest merged = MergeManifests(repo, baseM, oursM, theirsM, preferTheirs, conflicts);
-
         string treeHash = repo.WriteManifest(merged);
-        string commit = repo.CreateCommit(treeHash, [ours, theirs], $"Merge {theirRef} into {branch}", author);
-        return new MergeResult { CommitHash = commit, Conflicts = conflicts };
+        string msg = $"Merge {theirRef} into {branch}";
+
+        if (conflicts.Count == 0 || autoResolve)
+        {
+            string commit = repo.CreateCommit(treeHash, [ours, theirs], msg, author);
+            return new MergeResult { CommitHash = commit, Conflicts = conflicts };
+        }
+
+        // Stop: record the in-progress merge and lay the partial result into the worktree.
+        repo.BeginMergeState(ours, theirs, baseCommit, msg, conflicts);
+        if (repo.Worktree is { } w) Checkout.Materialize(repo, merged, w);
+        return new MergeResult { Conflicts = conflicts, Stopped = true };
+    }
+
+    /// <summary>Completes a stopped merge by snapshotting the (resolved) worktree.</summary>
+    public static MergeResult Continue(Repository repo, string author)
+    {
+        if (!repo.InMerge) throw new InvalidOperationException("no merge in progress");
+        string theirs = repo.ReadMergeHead()!;
+        string ours = repo.HeadCommit() ?? throw new InvalidOperationException("no HEAD");
+        string world = repo.Worktree
+            ?? throw new InvalidOperationException("merge --continue needs a bound worktree to snapshot the resolution");
+
+        Manifest m = Snapshotter.Snapshot(repo, world);
+        string tree = repo.WriteManifest(m);
+        string msg = repo.ReadMergeMsg() ?? $"Merge {theirs[..10]}";
+        string commit = repo.CreateCommit(tree, [ours, theirs], msg, author);
+        repo.ClearMergeState();
+        return new MergeResult { CommitHash = commit };
+    }
+
+    /// <summary>Aborts a stopped merge, restoring the pre-merge branch tip and worktree.</summary>
+    public static void Abort(Repository repo)
+    {
+        if (!repo.InMerge) throw new InvalidOperationException("no merge in progress");
+        string orig = repo.ReadOrigHead() ?? throw new InvalidOperationException("ORIG_HEAD missing — cannot abort");
+        string branch = repo.CurrentBranch() ?? throw new InvalidOperationException("abort requires being on a branch");
+        string? from = repo.HeadCommit();
+
+        repo.WriteBranch(branch, orig);
+        if (repo.Worktree is { } w) Checkout.Materialize(repo, repo.ReadManifest(repo.ReadCommit(orig).Tree), w);
+        repo.RecordHead(from, orig, "merge --abort");
+        repo.ClearMergeState();
+    }
+
+    /// <summary>The 3-way base manifest, using a recursively-merged virtual base when the
+    /// histories criss-cross (more than one merge base).</summary>
+    private static Manifest BaseManifest(Repository repo, List<string> bases, out string? baseCommit)
+    {
+        if (bases.Count == 0) { baseCommit = null; return new Manifest(); }
+        baseCommit = bases.Count == 1 ? bases[0] : VirtualBase(repo, bases);
+        return repo.ReadManifest(repo.ReadCommit(baseCommit).Tree);
+    }
+
+    /// <summary>Folds multiple merge bases into one virtual base commit (git's recursive
+    /// strategy): merge the bases pairwise over their own recursive base, writing an
+    /// unreferenced commit so further merge-base math sees a real DAG node.</summary>
+    private static string VirtualBase(Repository repo, List<string> bases)
+    {
+        string acc = bases[0];
+        for (int i = 1; i < bases.Count; i++)
+        {
+            List<string> sub = MergeBase.FindAll(repo, acc, bases[i]);
+            Manifest bm = BaseManifest(repo, sub, out _);
+            Manifest om = repo.ReadManifest(repo.ReadCommit(acc).Tree);
+            Manifest tm = repo.ReadManifest(repo.ReadCommit(bases[i]).Tree);
+            Manifest merged = MergeManifests(repo, bm, om, tm, preferTheirs: false, []);
+            string tree = repo.WriteManifest(merged);
+            acc = repo.WriteCommit(new CommitObject
+            {
+                Tree = tree,
+                Parents = [acc, bases[i]],
+                Message = "virtual merge base",
+                Author = "mcadiff",
+                Time = "1970-01-01T00:00:00.0000000+00:00", // fixed ⇒ deterministic, dedupable
+            });
+        }
+        return acc;
     }
 
     /// <summary>

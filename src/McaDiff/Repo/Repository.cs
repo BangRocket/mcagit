@@ -188,6 +188,39 @@ public sealed class Repository
         return File.Exists(p) ? File.ReadLines(p).Reverse() : [];
     }
 
+    // ---- in-progress merge state (MERGE_HEAD / MERGE_MSG / ORIG_HEAD / MERGE_CONFLICTS) ----
+
+    private string MergeHeadPath => Path.Combine(Dir, "MERGE_HEAD");
+    private string MergeMsgPath => Path.Combine(Dir, "MERGE_MSG");
+    private string OrigHeadPath => Path.Combine(Dir, "ORIG_HEAD");
+    private string MergeConflictsPath => Path.Combine(Dir, "MERGE_CONFLICTS");
+
+    /// <summary>True while a conflicted merge awaits resolution.</summary>
+    public bool InMerge => File.Exists(MergeHeadPath);
+
+    public void BeginMergeState(string ours, string theirs, string? baseCommit, string message, IReadOnlyList<MergeConflict> conflicts)
+    {
+        File.WriteAllText(OrigHeadPath, ours + "\n");
+        File.WriteAllText(MergeHeadPath, theirs + "\n");
+        File.WriteAllText(MergeMsgPath, message + "\n");
+        File.WriteAllText(MergeConflictsPath, System.Text.Json.JsonSerializer.Serialize(conflicts, RepoJson.Options));
+    }
+
+    public string? ReadMergeHead() => File.Exists(MergeHeadPath) ? File.ReadAllText(MergeHeadPath).Trim() : null;
+    public string? ReadOrigHead() => File.Exists(OrigHeadPath) ? File.ReadAllText(OrigHeadPath).Trim() : null;
+    public string? ReadMergeMsg() => File.Exists(MergeMsgPath) ? File.ReadAllText(MergeMsgPath).Trim() : null;
+
+    public List<MergeConflict> ReadMergeConflicts() => File.Exists(MergeConflictsPath)
+        ? System.Text.Json.JsonSerializer.Deserialize<List<MergeConflict>>(File.ReadAllText(MergeConflictsPath), RepoJson.Options) ?? []
+        : [];
+
+    /// <summary>Clears the in-progress merge markers (leaves ORIG_HEAD, like git).</summary>
+    public void ClearMergeState()
+    {
+        foreach (string p in new[] { MergeHeadPath, MergeMsgPath, MergeConflictsPath })
+            if (File.Exists(p)) File.Delete(p);
+    }
+
     // ---- HEAD & branches ----
 
     public string ReadHeadRaw() => File.ReadAllText(Path.Combine(Dir, "HEAD")).Trim();

@@ -255,6 +255,13 @@ public static class RepoCommands
         if (Open(dashC) is not { } repo) return NoRepo();
         if (World(repo, a.ToList(), 0) is not { } world) return NoWorld();
 
+        if (repo.InMerge)
+        {
+            Console.WriteLine($"merging {repo.ReadMergeHead()?[..10]} — fix conflicts then `merge --continue` (or `merge --abort`):");
+            PrintConflicts(repo.ReadMergeConflicts());
+            Console.WriteLine();
+        }
+
         List<StatusEntry> entries = StatusCalc.Compute(repo, world);
         if (entries.Count == 0) { Console.WriteLine("clean — world matches HEAD"); return 0; }
         Console.WriteLine($"changes vs HEAD ({repo.CurrentBranch() ?? "detached"}):");
@@ -306,22 +313,56 @@ public static class RepoCommands
 
     public static int Merge(string? dashC, string[] a)
     {
-        var (pos, opts) = Parse(a, ["--author"], ["--theirs"]);
+        var (pos, opts) = Parse(a, ["--author"], ["--theirs", "--ours", "--continue", "--abort"]);
         if (Open(dashC) is not { } repo) return NoRepo();
-        if (pos.Count < 1) return Err("usage: merge <ref> [--theirs] [--author X]");
 
+        if (opts.ContainsKey("--abort"))
+        {
+            try { Merger.Abort(repo); } catch (Exception ex) { return Err(ex.Message); }
+            Console.Error.WriteLine("Merge aborted; HEAD and worktree restored.");
+            return 0;
+        }
+        if (opts.ContainsKey("--continue"))
+        {
+            MergeResult cr;
+            try { cr = Merger.Continue(repo, Author(repo, opts.GetValueOrDefault("--author"))); }
+            catch (Exception ex) { return Err(ex.Message); }
+            Console.Error.WriteLine($"Merge complete: {cr.CommitHash![..10]}");
+            return 0;
+        }
+        if (pos.Count < 1) return Err("usage: merge <ref> [--theirs|--ours] | merge --continue | merge --abort");
+
+        bool preferTheirs = opts.ContainsKey("--theirs");
+        bool autoResolve = preferTheirs || opts.ContainsKey("--ours");
         MergeResult result;
-        try { result = Merger.Merge(repo, pos[0], opts.ContainsKey("--theirs"), Author(repo, opts.GetValueOrDefault("--author"))); }
+        try { result = Merger.Merge(repo, pos[0], preferTheirs, autoResolve, Author(repo, opts.GetValueOrDefault("--author"))); }
         catch (Exception ex) { return Err(ex.Message); }
 
         if (result.AlreadyUpToDate) { Console.Error.WriteLine("Already up to date."); return 0; }
         if (result.FastForward) { Console.Error.WriteLine($"Fast-forward to {result.CommitHash![..10]}"); return 0; }
 
-        Console.Error.WriteLine($"Merge commit {result.CommitHash![..10]} — {result.Conflicts.Count} conflicts.");
-        foreach (MergeConflict c in result.Conflicts.Take(30))
+        if (result.Stopped)
+        {
+            Console.Error.WriteLine($"Automatic merge stopped — {result.Conflicts.Count} conflict(s) need resolution.");
+            PrintConflicts(result.Conflicts);
+            Console.Error.WriteLine("Resolve in the worktree, then `mcadiff merge --continue` (or `mcadiff merge --abort`).");
+            return 1;
+        }
+        if (result.HasConflicts)
+        {
+            Console.Error.WriteLine($"Merge commit {result.CommitHash![..10]} — {result.Conflicts.Count} conflicts auto-resolved (kept {(preferTheirs ? "theirs" : "ours")}).");
+            PrintConflicts(result.Conflicts);
+            return 0;
+        }
+        Console.Error.WriteLine($"Merge commit {result.CommitHash![..10]}.");
+        return 0;
+    }
+
+    private static void PrintConflicts(IReadOnlyList<MergeConflict> conflicts)
+    {
+        foreach (MergeConflict c in conflicts.Take(30))
             Console.Error.WriteLine($"  conflict: {c.File}{(c.Chunk is null ? "" : $" chunk {c.Chunk}")}{(c.Path.Length == 0 ? "" : $" {c.Path}")} — {c.Reason}");
-        if (result.Conflicts.Count > 30) Console.Error.WriteLine($"  … and {result.Conflicts.Count - 30} more");
-        return result.HasConflicts ? 1 : 0;
+        if (conflicts.Count > 30) Console.Error.WriteLine($"  … and {conflicts.Count - 30} more");
     }
 
     public static int Remote(string? dashC, string[] a)
