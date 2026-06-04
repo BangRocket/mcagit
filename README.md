@@ -27,17 +27,28 @@ forward-porting (see [Patch & restore](#patch--restore)), and it includes a
 `init`/`commit`/`log`/`checkout`/`branch` plus a true 3-way `merge`
 (see [Version control](#version-control)).
 
-## Requirements
+## Install
 
-- .NET 9 SDK
-- [`fNbt`](https://www.nuget.org/packages/fNbt) (restored automatically)
+Grab a self-contained binary from the [Releases](https://github.com/BangRocket/mcadiff/releases) page — no .NET runtime required. Builds are published for `win-x64`, `linux-x64`, `linux-arm64`, `osx-x64`, and `osx-arm64`, each with a `SHA256SUMS` file.
 
-## Build & run
+```sh
+# Linux / macOS (adjust RID + tag)
+curl -sSfL -o mcadiff.tar.gz https://github.com/BangRocket/mcadiff/releases/latest/download/mcadiff-<tag>-linux-x64.tar.gz
+tar -xzf mcadiff.tar.gz && chmod +x mcadiff && ./mcadiff --help
+```
+
+On Windows, download the `win-x64` `.zip` and run `mcadiff.exe`.
+
+## Build from source
+
+Requires the **.NET 9 SDK**; the only NuGet dependencies (`fNbt`, `K4os.Compression.LZ4`) restore automatically.
 
 ```sh
 dotnet build -c Release
 dotnet run --project src/McaDiff -- <A> <B>     # or run the built mcadiff binary
 ```
+
+If your machine's default runtime is newer than .NET 9, set `DOTNET_ROLL_FORWARD=LatestMajor`. (.NET 9 is an STS release, out of support 2026-11-10 — prefer .NET 10 LTS for long-term source builds; published binaries are self-contained and unaffected.)
 
 `<A>` and `<B>` are either **two world folders** or **two single files**
 (`.mca` region files or `.dat` loose NBT files).
@@ -428,6 +439,13 @@ Excluded: Alpha/Beta/MCRegion (`.mcr`, pre-1.2.1) — a different container.
   over the network isn't wired up yet.
 - A compound key containing a literal `.` or `[` isn't addressable by patch/merge
   paths (real Minecraft keys don't use them).
+
+## More documentation
+
+- [`docs/repo-format.md`](docs/repo-format.md) — the on-disk repository format (objects, manifest, commit/tag, packfiles).
+- [`docs/mcapatch-format.md`](docs/mcapatch-format.md) — the `.mcapatch` JSON schema, type-tagged NBT encoding, and `NbtPath` grammar.
+- [`docs/cloud-backend.md`](docs/cloud-backend.md) — the serverless `azure://` / `s3://` bucket backend.
+- [`SECURITY.md`](SECURITY.md) — threat model and trust boundaries. [`CONTRIBUTING.md`](CONTRIBUTING.md) and [`TESTING.md`](TESTING.md) — development.
 
 ## License
 
