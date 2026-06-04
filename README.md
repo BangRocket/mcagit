@@ -227,6 +227,16 @@ be SSH-signed (`commit -S`, `tag -s`, `user.signingkey`) and verified (`tag -v`)
 partial result into the worktree; resolve it and `merge --continue`, or `merge --abort`.
 Pre-commit / post-commit **hooks** run from `<repo>/hooks/`.
 
+**Automating backups.** `commit --push <remote>` snapshots and pushes in one shot (and
+still pushes when nothing changed, to keep the offsite current); `commit --json` prints a
+machine-readable result with a `committed` boolean (so a scheduler can tell "snapshotted"
+from "nothing changed" — exit code stays `0` for both). `commit` and `push` take a coarse
+repository lock (git's `index.lock` model) for their duration: a second concurrent
+invocation **fails fast** (exit `2`) instead of racing branch advancement, so two
+overlapping backup runs can't silently drop a commit. The lock is an OS advisory lock that
+releases automatically if the process crashes — a leftover `mcadiff.lock` never wedges the
+repo.
+
 ### Remotes & maintenance
 
 Sync history between repositories — push world backups offsite or pull them down.

@@ -41,6 +41,10 @@ public static class RepoCommands
         bool json = opts.ContainsKey("--json");
         string? message = opts.GetValueOrDefault("-m") ?? opts.GetValueOrDefault("--message");
         if (message is null) return Err("commit requires -m <message>");
+        // Serialize against a concurrent commit/push (e.g. a backup driver whose run overran its
+        // interval) — branch advancement is last-writer-wins, so overlapping runs could drop a commit.
+        if (TryLock(repo, "commit") is not { } commitLock) return Err(LockedMsg);
+        using var _commitLock = commitLock;
         if (Hooks.Run(repo, "pre-commit") != 0) return Err("pre-commit hook failed; commit aborted");
 
         // With a staging index, commit the staged tree; otherwise snapshot the whole worktree.
@@ -630,6 +634,8 @@ public static class RepoCommands
     {
         var (pos, opts) = Parse(a, ["--token"], ["--force", "--all"]);
         if (Open(dashC) is not { } repo) return NoRepo();
+        if (TryLock(repo, "push") is not { } pushLock) return Err(LockedMsg);
+        using var _pushLock = pushLock;
         string remote = pos.Count > 0 ? pos[0] : "origin";
         bool force = opts.ContainsKey("--force");
         string? token = Token(opts);
@@ -1310,5 +1316,15 @@ public static class RepoCommands
     {
         Console.Error.WriteLine($"mcadiff: {message}");
         return 2;
+    }
+
+    private const string LockedMsg =
+        "repository is locked by another mcadiff process (concurrent commit/push) — retry once it finishes";
+
+    /// <summary>Takes the repo lock, or returns null if another process holds it (caller exits 2).</summary>
+    private static RepoLock? TryLock(Repository repo, string operation)
+    {
+        try { return RepoLock.Acquire(repo.Dir, operation); }
+        catch (RepoLockedException) { return null; }
     }
 }
