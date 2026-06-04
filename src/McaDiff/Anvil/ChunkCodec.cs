@@ -1,5 +1,7 @@
+using System.IO.Compression;
 using fNbt;
 using K4os.Compression.LZ4.Streams;
+using McaDiff.Nbt;
 
 namespace McaDiff.Anvil;
 
@@ -19,38 +21,52 @@ public static class ChunkCodec
     /// fNbt handles GZip/ZLib/None directly; LZ4 throws
     /// <see cref="UnsupportedChunkException"/>.
     /// </summary>
+    // Generous per-object inflate cap: real chunks and loose files are far below this, but a crafted
+    // payload could otherwise inflate to gigabytes and OOM the process (issue #21).
+    private const long MaxNbtBytes = 128L * 1024 * 1024;
+
     public static NbtCompound Decode(RawChunk chunk)
     {
-        // LZ4 (type 4, region-file-compression=lz4 since 1.20.5) is an LZ4 *frame* wrapping
-        // uncompressed NBT — decode the frame, then hand the plain NBT to fNbt.
-        if (chunk.Compression == ChunkCompression.Lz4)
+        // We decompress every scheme ourselves (bounded), then parse the plain NBT — so the inflate is
+        // size-capped and the depth scan runs before fNbt's recursive parser (issues #21, #22). LZ4
+        // (type 4, since 1.20.5) is an LZ4 frame wrapping uncompressed NBT; type 127 Custom is opaque.
+        byte[] raw = chunk.Compression switch
         {
-            byte[] nbt = Lz4Decode(chunk.Payload);
-            var lz4File = new NbtFile { BigEndian = true };
-            lz4File.LoadFromBuffer(nbt, 0, nbt.Length, NbtCompression.None);
-            return lz4File.RootTag;
-        }
-
-        NbtCompression compression = chunk.Compression switch
-        {
-            ChunkCompression.GZip => NbtCompression.GZip,
-            ChunkCompression.ZLib => NbtCompression.ZLib,
-            ChunkCompression.None => NbtCompression.None,
+            ChunkCompression.None => chunk.Payload,
+            ChunkCompression.ZLib => InflateBounded(new ZLibStream(new MemoryStream(chunk.Payload), CompressionMode.Decompress)),
+            ChunkCompression.GZip => InflateBounded(new GZipStream(new MemoryStream(chunk.Payload), CompressionMode.Decompress)),
+            ChunkCompression.Lz4 => InflateBounded(LZ4Stream.Decode(new MemoryStream(chunk.Payload))),
             _ => throw new UnsupportedChunkException(chunk.Pos, chunk.Compression), // type 127 Custom
         };
-
-        var file = new NbtFile { BigEndian = true };
-        file.LoadFromBuffer(chunk.Payload, 0, chunk.Payload.Length, compression);
-        return file.RootTag;
+        return ParseChecked(raw);
     }
 
-    private static byte[] Lz4Decode(byte[] frame)
+    /// <summary>Drains a decompressor to a byte[], throwing past <see cref="MaxNbtBytes"/>.</summary>
+    private static byte[] InflateBounded(Stream decompressor)
     {
-        using var input = new MemoryStream(frame);
-        using var lz4 = LZ4Stream.Decode(input);
-        using var output = new MemoryStream();
-        lz4.CopyTo(output);
-        return output.ToArray();
+        using (decompressor)
+        using (var outMs = new MemoryStream())
+        {
+            byte[] buf = new byte[81920];
+            long total = 0;
+            int r;
+            while ((r = decompressor.Read(buf, 0, buf.Length)) > 0)
+            {
+                total += r;
+                if (total > MaxNbtBytes) throw new InvalidDataException($"NBT inflates past {MaxNbtBytes} bytes (decompression bomb?)");
+                outMs.Write(buf, 0, r);
+            }
+            return outMs.ToArray();
+        }
+    }
+
+    /// <summary>Depth-scans raw NBT (pre-parse, can't be skipped) then parses with fNbt.</summary>
+    private static NbtCompound ParseChecked(byte[] raw)
+    {
+        NbtDepthGuard.Check(raw); // reject pathological nesting before fNbt recurses into a stack overflow
+        var file = new NbtFile { BigEndian = true };
+        file.LoadFromBuffer(raw, 0, raw.Length, NbtCompression.None);
+        return file.RootTag;
     }
 
     private static byte[] Lz4Encode(byte[] plain)
@@ -85,9 +101,13 @@ public static class ChunkCodec
     /// </summary>
     public static NbtCompound LoadNbtFile(string path)
     {
-        var file = new NbtFile { BigEndian = true };
-        file.LoadFromFile(path); // single-arg overload auto-detects compression
-        return file.RootTag;
+        byte[] bytes = File.ReadAllBytes(path);
+        // Auto-detect compression by magic (as fNbt does), but decompress ourselves (bounded) and
+        // depth-check before parsing — same untrusted-input guards as chunk decode (issues #21, #22).
+        byte[] raw = bytes is [0x1f, 0x8b, ..] ? InflateBounded(new GZipStream(new MemoryStream(bytes), CompressionMode.Decompress))
+            : bytes is [0x78, _, ..] ? InflateBounded(new ZLibStream(new MemoryStream(bytes), CompressionMode.Decompress))
+            : bytes;
+        return ParseChecked(raw);
     }
 
     /// <summary>Saves a standalone NBT file (defaults to GZip, as Minecraft writes).</summary>
