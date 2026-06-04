@@ -431,9 +431,11 @@ Excluded: Alpha/Beta/MCRegion (`.mcr`, pre-1.2.1) — a different container.
 - `diff`/`extract`/`status` never modify a world. `apply` writes only to the fresh
   output directory it creates; `checkout` / `reset --hard` / `bisect` / `merge` update
   the bound worktree in place (a full checkout prunes files not in the snapshot).
-- Loose objects are whole (zlib-compressed); `gc` delta-packs them into a packfile,
-  but **network transfer is still per-object** (no pack/delta on the wire yet), and
-  `apply` copies the whole target world before editing (no hardlink/reflink yet). The
+- Loose objects are whole (zlib-compressed); `gc` delta-packs them into a packfile.
+  **Push** bundles new objects into one delta-compressed pack on every transport
+  (path / http / ssh / bucket); **fetch** is still per-object (it walks the commit
+  graph to know what to pull — batched fetch is planned). `apply` copies the whole
+  target world before editing (no hardlink/reflink yet). The
   first commit decodes every chunk (parallelized, a few seconds on a large world);
   re-commits reuse a per-repo decode cache.
 - `merge` uses a recursive merge base (folds multiple bases on a criss-cross), and a
