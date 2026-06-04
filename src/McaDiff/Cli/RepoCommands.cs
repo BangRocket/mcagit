@@ -441,7 +441,12 @@ public static class RepoCommands
         if (tag.Signature is null) { Console.Error.WriteLine($"{name}: tag is not signed"); return 1; }
         SshSigner.VerifyResult r = SshSigner.Verify(tag.SignablePayload(), tag.Signature, repo.GetConfig("gpg.ssh.allowedSignersFile"));
         Console.Error.WriteLine($"{name}: {r.Detail}");
-        return r.Valid ? 0 : 1;
+        // Exit 0 ONLY when the signer is verified against an allowed-signers file. A signature that is
+        // merely cryptographically well-formed (check-novalidate) is NOT trust — exiting 0 there would
+        // fool a `tag -v … && deploy` gate into trusting any throwaway key (issue #24).
+        if (r.Valid && !r.SignerVerified)
+            Console.Error.WriteLine($"{name}: signer NOT verified — set gpg.ssh.allowedSignersFile to establish trust; treating as unverified.");
+        return r.SignerVerified ? 0 : 1;
     }
 
     public static int Status(string? dashC, string[] a)

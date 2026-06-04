@@ -191,6 +191,32 @@ public class GitLikeTier1Tests
         Assert.True(SshSigner.Verify(co.SignablePayload(), co.Signature!, null).Valid);
     }
 
+    [Fact]
+    public void TagVerify_ValidButUntrustedSigner_ExitsOne_WhenAvailable()
+    {
+        if (!SshSigner.Available) return;
+        string dir = TestAnvil.TempDir("sshv");
+        string key = Path.Combine(dir, "id_ed25519");
+        if (!GenerateKey(key)) return;
+
+        Repository repo = Repository.Init(TestAnvil.TempDir("sshvr"));
+        repo.SetConfig("user.signingkey", key, global: false);
+        repo.SetConfig("user.name", "Ada", global: false);
+        repo.SetConfig("user.email", "a@x", global: false);
+        string c = repo.CreateCommit(repo.WriteManifest(new Manifest()), [], "c0", "Ada <a@x>");
+        repo.WriteBranch("main", c);
+        repo.SetHeadToBranch("main");
+
+        Assert.Equal(0, Cli.RepoCommands.Tag(repo.Dir, ["-a", "v1", "-m", "release", "-s"])); // signed tag
+
+        // The signature is cryptographically valid on its own...
+        TagObject t = repo.ReadAnnotatedTag("v1")!;
+        Assert.True(SshSigner.Verify(t.SignablePayload(), t.Signature!, null).Valid);
+        // ...but with no gpg.ssh.allowedSignersFile the signer is untrusted, so `tag -v` must exit 1,
+        // not 0 — exit 0 would fool a `tag -v … && deploy` gate (issue #24).
+        Assert.Equal(1, Cli.RepoCommands.Tag(repo.Dir, ["-v", "v1"]));
+    }
+
     private static bool GenerateKey(string path)
     {
         try

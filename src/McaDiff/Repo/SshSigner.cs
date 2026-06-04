@@ -103,18 +103,33 @@ public static class SshSigner
 
     private static string? Which(string exe)
     {
+        // On Windows the binary is ssh-keygen.exe; probing only "ssh-keygen" made Available always
+        // false even with OpenSSH installed, silently disabling signing/verify (issue #24).
+        string[] names = OperatingSystem.IsWindows() ? [exe + ".exe", exe] : [exe];
         foreach (string dir in (Environment.GetEnvironmentVariable("PATH") ?? "").Split(Path.PathSeparator))
         {
             if (dir.Length == 0) continue;
-            string cand = Path.Combine(dir, exe);
-            if (File.Exists(cand)) return cand;
+            foreach (string name in names)
+            {
+                string cand = Path.Combine(dir, name);
+                if (File.Exists(cand)) return cand;
+            }
         }
         return null;
     }
 
-    private static string ExpandHome(string path) => path.StartsWith('~')
-        ? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), path.TrimStart('~', '/', '\\'))
-        : path;
+    /// <summary>Expands a leading <c>~</c> to the home directory, confined to it (a key path like
+    /// <c>~/../../etc/x</c> must not escape — issue #24). Absolute paths are passed through.</summary>
+    private static string ExpandHome(string path)
+    {
+        if (!path.StartsWith('~')) return path;
+        string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        string full = Path.GetFullPath(Path.Combine(home, path.TrimStart('~', '/', '\\')));
+        string root = home.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        if (full != home.TrimEnd(Path.DirectorySeparatorChar) && !full.StartsWith(root, StringComparison.Ordinal))
+            throw new InvalidOperationException($"key path escapes home directory: {path}");
+        return full;
+    }
 
     private static void TryDelete(string dir) { try { Directory.Delete(dir, true); } catch { /* best effort */ } }
 }
