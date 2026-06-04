@@ -15,6 +15,8 @@ public static class Checkout
         Directory.CreateDirectory(worldOut);
         if (prune) PruneStray(manifest, worldOut);
 
+        // Every output path is confined to worldOut: a hostile manifest can carry
+        // entry keys like "../../.ssh/authorized_keys" and Path.Combine would honor them.
         foreach ((string rel, SortedDictionary<string, string> chunks) in manifest.Regions)
         {
             var raws = new List<RawChunk>(chunks.Count);
@@ -25,25 +27,25 @@ public static class Checkout
                 raws.Add(new RawChunk(pos, ChunkCompression.ZLib,
                     ChunkCodec.Encode(root, ChunkCompression.ZLib), external: false, timestamp: 0));
             }
-            RegionWriter.Write(Path.Combine(worldOut, rel), raws); // empty list → valid empty region
+            RegionWriter.Write(PathGuard.Confine(worldOut, rel), raws); // empty list → valid empty region
         }
 
         foreach ((string rel, string hash) in manifest.Nbt)
         {
-            string outFile = Path.Combine(worldOut, rel);
+            string outFile = PathGuard.Confine(worldOut, rel);
             Directory.CreateDirectory(Path.GetDirectoryName(outFile)!);
             ChunkCodec.SaveNbtFile(outFile, NbtCanonical.Deserialize(repo.Objects.Read(hash)));
         }
 
         foreach ((string rel, string hash) in manifest.Blobs)
         {
-            string outFile = Path.Combine(worldOut, rel);
+            string outFile = PathGuard.Confine(worldOut, rel);
             Directory.CreateDirectory(Path.GetDirectoryName(outFile)!);
             File.WriteAllBytes(outFile, repo.Objects.Read(hash));
         }
 
         foreach (string rel in manifest.EmptyDirs)
-            Directory.CreateDirectory(Path.Combine(worldOut, rel));
+            Directory.CreateDirectory(PathGuard.Confine(worldOut, rel));
     }
 
     /// <summary>Deletes worktree files absent from the snapshot, so a full checkout is an

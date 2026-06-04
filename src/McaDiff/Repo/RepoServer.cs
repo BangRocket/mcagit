@@ -91,18 +91,25 @@ public sealed class RepoServer
     {
         if (string.IsNullOrEmpty(header)) return false;
         if (header.StartsWith("Bearer ", StringComparison.OrdinalIgnoreCase))
-            return header["Bearer ".Length..].Trim() == token;
+            return ConstantTimeEquals(header["Bearer ".Length..].Trim(), token);
         if (header.StartsWith("Basic ", StringComparison.OrdinalIgnoreCase))
         {
             try
             {
                 string decoded = Encoding.UTF8.GetString(Convert.FromBase64String(header["Basic ".Length..].Trim()));
-                return decoded[(decoded.IndexOf(':') + 1)..] == token; // password field
+                int colon = decoded.IndexOf(':');
+                if (colon < 0) return false; // RFC 7617: user:pass — no colon is malformed
+                return ConstantTimeEquals(decoded[(colon + 1)..], token); // password field
             }
             catch { return false; }
         }
         return false;
     }
+
+    /// <summary>Compares token bytes without an early-out, so response timing can't leak the token.</summary>
+    private static bool ConstantTimeEquals(string a, string b)
+        => System.Security.Cryptography.CryptographicOperations.FixedTimeEquals(
+            Encoding.UTF8.GetBytes(a), Encoding.UTF8.GetBytes(b));
 
     private static void WriteJson(HttpListenerContext ctx, object value)
     {
@@ -123,13 +130,25 @@ public sealed class RepoServer
         try { ctx.Response.OutputStream.Write(Encoding.UTF8.GetBytes(message)); } catch { }
     }
 
+    /// <summary>Largest request body we'll buffer (anonymous /have and authenticated PUT).</summary>
+    private const long MaxBody = 256L * 1024 * 1024;
+
     private static T ReadJson<T>(HttpListenerRequest req)
-        => JsonSerializer.Deserialize<T>(req.InputStream, HttpProtocol.Json)!;
+        => JsonSerializer.Deserialize<T>(ReadBytes(req), HttpProtocol.Json)!;
 
     private static byte[] ReadBytes(HttpListenerRequest req)
     {
+        if (req.ContentLength64 > MaxBody) throw new InvalidDataException("request body too large");
         using var ms = new MemoryStream();
-        req.InputStream.CopyTo(ms);
+        byte[] buf = new byte[81920];
+        long total = 0;
+        int r;
+        while ((r = req.InputStream.Read(buf, 0, buf.Length)) > 0)
+        {
+            total += r;
+            if (total > MaxBody) throw new InvalidDataException("request body too large"); // also bounds chunked encoding
+            ms.Write(buf, 0, r);
+        }
         return ms.ToArray();
     }
 }

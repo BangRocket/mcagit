@@ -71,7 +71,7 @@ public static class PatchApplier
 
     private static void ApplyRegion(PatchFileEntry entry, string workRoot, ApplySettings s, ApplyReport report)
     {
-        string outFile = Path.Combine(workRoot, entry.Path);
+        string outFile = PathGuard.Confine(workRoot, entry.Path); // reject ../ escapes from an untrusted patch
         var chunks = new Dictionary<ChunkPos, RawChunk>();
         if (File.Exists(outFile))
             foreach (RawChunk rc in RegionFile.Open(outFile).Chunks)
@@ -166,7 +166,7 @@ public static class PatchApplier
 
     private static void ApplyLoose(PatchFileEntry entry, string workRoot, ApplySettings s, ApplyReport report)
     {
-        string outFile = Path.Combine(workRoot, entry.Path);
+        string outFile = PathGuard.Confine(workRoot, entry.Path); // reject ../ escapes from an untrusted patch
         NbtCompound? root = File.Exists(outFile) ? ChunkCodec.LoadNbtFile(outFile) : null;
         List<PatchOp> ops = entry.Ops ?? [];
 

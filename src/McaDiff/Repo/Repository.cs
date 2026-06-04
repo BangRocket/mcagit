@@ -161,13 +161,14 @@ public sealed class Repository
 
     public string? ReadRemoteRef(string remoteSlashBranch)
     {
-        string p = Path.Combine(Dir, "refs", "remotes", remoteSlashBranch.Replace('/', Path.DirectorySeparatorChar));
+        string p = PathGuard.Confine(Path.Combine(Dir, "refs", "remotes"), remoteSlashBranch);
         return File.Exists(p) ? File.ReadAllText(p).Trim() : null;
     }
 
     public void WriteRemoteTracking(string remote, string branch, string commitHash)
     {
-        string p = Path.Combine(Dir, "refs", "remotes", remote, branch);
+        // remote/branch can come from a remote's ref advertisement — confine it to refs/remotes.
+        string p = PathGuard.Confine(Path.Combine(Dir, "refs", "remotes"), Path.Combine(remote, branch));
         Directory.CreateDirectory(Path.GetDirectoryName(p)!);
         File.WriteAllText(p, commitHash + "\n");
     }
@@ -440,7 +441,9 @@ public sealed class Repository
         return commit;
     }
 
-    private string TagPath(string name) => Path.Combine(Dir, "refs", "tags", name);
+    // Ref names can arrive from the network (push/fetch over stdio/http) — confine them so
+    // a name like "../../HEAD" or "../config" can't escape refs/heads or refs/tags.
+    private string TagPath(string name) => PathGuard.Confine(Path.Combine(Dir, "refs", "tags"), name);
 
     // ---- typed object IO ----
 
@@ -510,5 +513,5 @@ public sealed class Repository
         return hash;
     }
 
-    private string BranchPath(string branch) => Path.Combine(Dir, "refs", "heads", branch);
+    private string BranchPath(string branch) => PathGuard.Confine(Path.Combine(Dir, "refs", "heads"), branch);
 }

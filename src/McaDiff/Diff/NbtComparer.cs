@@ -22,10 +22,12 @@ public static class NbtComparer
     }
 
     /// <summary>Drives the tree walk against an arbitrary sink (path prefix is the root "").</summary>
-    public static void Walk(NbtTag a, NbtTag b, IDiffSink sink) => CompareTag("", a, b, sink);
+    public static void Walk(NbtTag a, NbtTag b, IDiffSink sink) => CompareTag("", a, b, sink, 0);
 
-    private static void CompareTag(string path, NbtTag a, NbtTag b, IDiffSink sink)
+    private static void CompareTag(string path, NbtTag a, NbtTag b, IDiffSink sink, int depth)
     {
+        if (depth > NbtCanonical.MaxDepth)
+            throw new InvalidDataException($"NBT nesting exceeds {NbtCanonical.MaxDepth} levels");
         if (a.TagType != b.TagType)
         {
             sink.TypeChanged(path, a, b);
@@ -35,10 +37,10 @@ public static class NbtComparer
         switch (a.TagType)
         {
             case NbtTagType.Compound:
-                CompareCompound(path, (NbtCompound)a, (NbtCompound)b, sink);
+                CompareCompound(path, (NbtCompound)a, (NbtCompound)b, sink, depth);
                 break;
             case NbtTagType.List:
-                CompareList(path, (NbtList)a, (NbtList)b, sink);
+                CompareList(path, (NbtList)a, (NbtList)b, sink, depth);
                 break;
             case NbtTagType.ByteArray:
             case NbtTagType.IntArray:
@@ -53,7 +55,7 @@ public static class NbtComparer
         }
     }
 
-    private static void CompareCompound(string path, NbtCompound a, NbtCompound b, IDiffSink sink)
+    private static void CompareCompound(string path, NbtCompound a, NbtCompound b, IDiffSink sink, int depth)
     {
         var bByName = new Dictionary<string, NbtTag>(b.Count);
         foreach (NbtTag tb in b)
@@ -63,7 +65,7 @@ public static class NbtComparer
         {
             string child = Child(path, ta.Name!);
             if (bByName.Remove(ta.Name!, out NbtTag? tb))
-                CompareTag(child, ta, tb, sink);
+                CompareTag(child, ta, tb, sink, depth + 1);
             else
                 sink.Removed(child, ta);
         }
@@ -72,27 +74,27 @@ public static class NbtComparer
             sink.Added(Child(path, tb.Name!), tb);
     }
 
-    private static void CompareList(string path, NbtList a, NbtList b, IDiffSink sink)
+    private static void CompareList(string path, NbtList a, NbtList b, IDiffSink sink, int depth)
     {
         string[]? keysA = ListMatcher.TryGetKeys(a);
         string[]? keysB = keysA is null ? null : ListMatcher.TryGetKeys(b);
 
         if (keysA is not null && keysB is not null)
         {
-            CompareKeyedList(path, a, keysA, b, keysB, sink);
+            CompareKeyedList(path, a, keysA, b, keysB, sink, depth);
             return;
         }
 
         int common = Math.Min(a.Count, b.Count);
         for (int i = 0; i < common; i++)
-            CompareTag($"{path}[{i}]", a[i], b[i], sink);
+            CompareTag($"{path}[{i}]", a[i], b[i], sink, depth + 1);
         for (int i = common; i < a.Count; i++)
             sink.Removed($"{path}[{i}]", a[i]);
         for (int i = common; i < b.Count; i++)
             sink.Added($"{path}[{i}]", b[i]);
     }
 
-    private static void CompareKeyedList(string path, NbtList a, string[] keysA, NbtList b, string[] keysB, IDiffSink sink)
+    private static void CompareKeyedList(string path, NbtList a, string[] keysA, NbtList b, string[] keysB, IDiffSink sink, int depth)
     {
         var bIndex = new Dictionary<string, int>(keysB.Length);
         for (int i = 0; i < keysB.Length; i++)
@@ -102,7 +104,7 @@ public static class NbtComparer
         {
             string label = $"{path}[{keysA[i]}]";
             if (bIndex.Remove(keysA[i], out int j))
-                CompareTag(label, a[i], b[j], sink);
+                CompareTag(label, a[i], b[j], sink, depth + 1);
             else
                 sink.Removed(label, a[i]);
         }

@@ -101,22 +101,38 @@ public sealed class ObjectStore
         return ms.ToArray();
     }
 
+    /// <summary>Decompresses zlib bytes, throwing if the output would exceed <paramref name="max"/>.</summary>
+    private static byte[] InflateBounded(byte[] compressed, long max)
+    {
+        using var ms = new MemoryStream(compressed);
+        using var z = new ZLibStream(ms, CompressionMode.Decompress);
+        using var outMs = new MemoryStream();
+        byte[] buf = new byte[81920];
+        long total = 0;
+        int r;
+        while ((r = z.Read(buf, 0, buf.Length)) > 0)
+        {
+            total += r;
+            if (total > max) throw new InvalidDataException($"object exceeds {max} bytes (decompression bomb?)");
+            outMs.Write(buf, 0, r);
+        }
+        return outMs.ToArray();
+    }
+
     /// <summary>
     /// Stores compressed object bytes received from elsewhere, after verifying they
     /// decompress to content whose SHA-256 equals <paramref name="hash"/> (so a
     /// corrupt or hostile peer can't poison the store). No-op if already present.
     /// </summary>
+    /// <summary>Largest object we'll inflate from an untrusted peer (decompression-bomb guard).</summary>
+    private const long MaxObjectBytes = 512L * 1024 * 1024;
+
     public void ImportRaw(string hash, byte[] compressed)
     {
         if (Exists(hash)) return;
-        byte[] content;
-        using (var ms = new MemoryStream(compressed))
-        using (var z = new ZLibStream(ms, CompressionMode.Decompress))
-        using (var outMs = new MemoryStream())
-        {
-            z.CopyTo(outMs);
-            content = outMs.ToArray();
-        }
+        // Inflate with a running byte cap — a few KB of zlib zeros expand ~1000x, so we must
+        // bound the output BEFORE materializing it (and before the hash check).
+        byte[] content = InflateBounded(compressed, MaxObjectBytes);
         string actual = Convert.ToHexStringLower(SHA256.HashData(content));
         if (actual != hash)
             throw new InvalidDataException($"object hash mismatch: expected {hash}, got {actual}");
@@ -131,6 +147,7 @@ public sealed class ObjectStore
     /// <summary>Deletes an object. Returns its on-disk (compressed) size, or 0 if absent.</summary>
     public long Delete(string hash)
     {
+        if (!IsValidHash(hash)) return 0;
         string p = PathFor(hash);
         if (!File.Exists(p)) return 0;
         long size = new FileInfo(p).Length;
@@ -138,7 +155,17 @@ public sealed class ObjectStore
         return size;
     }
 
-    public bool Exists(string hash) => File.Exists(PathFor(hash)) || Packs.Any(p => p.Contains(hash));
+    public bool Exists(string hash) => IsValidHash(hash) && (File.Exists(PathFor(hash)) || Packs.Any(p => p.Contains(hash)));
+
+    /// <summary>A full object id: 64 lowercase hex chars. Validated before any hash reaches
+    /// <see cref="PathFor"/>, so a hostile peer can't pass "..config" and traverse out of objects/.</summary>
+    public static bool IsValidHash(string hash)
+    {
+        if (hash.Length != 64) return false;
+        foreach (char c in hash)
+            if (c is not ((>= '0' and <= '9') or (>= 'a' and <= 'f'))) return false;
+        return true;
+    }
 
     /// <summary>True if the object is present and its decompressed content still
     /// hashes to its name (i.e. it isn't truncated or corrupted on disk).</summary>
@@ -152,6 +179,8 @@ public sealed class ObjectStore
     public string? ResolvePrefix(string prefix)
     {
         if (prefix.Length < 4 || prefix.Length > 64) return null;
+        foreach (char c in prefix) // hex-only, so a prefix can never address ".." or a separator
+            if (c is not ((>= '0' and <= '9') or (>= 'a' and <= 'f'))) return null;
         string? match = null;
         string dir = Path.Combine(_objectsDir, prefix[..2]);
         if (Directory.Exists(dir))
@@ -224,5 +253,9 @@ public sealed class ObjectStore
     /// <summary>Total number of stored objects, loose and packed (used to demonstrate dedup in tests).</summary>
     public int Count() => AllHashes().Count();
 
-    private string PathFor(string hash) => Path.Combine(_objectsDir, hash[..2], hash[2..]);
+    private string PathFor(string hash)
+    {
+        if (!IsValidHash(hash)) throw new InvalidDataException($"invalid object id: '{hash}'");
+        return Path.Combine(_objectsDir, hash[..2], hash[2..]);
+    }
 }

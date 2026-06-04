@@ -208,6 +208,8 @@ public sealed class Packfile : IDisposable
             throw new InvalidDataException($"not a pack index: {idxPath}");
         int p = 5;
         int count = ReadInt32(b, ref p);
+        if (count < 0 || 9L + (long)count * 40 > b.Length) // 40 bytes/entry (32 hash + 8 offset)
+            throw new InvalidDataException($"corrupt pack index: bad entry count {count}");
         var map = new Dictionary<string, long>(count);
         for (int i = 0; i < count; i++)
         {

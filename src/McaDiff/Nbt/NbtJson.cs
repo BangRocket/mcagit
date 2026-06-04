@@ -65,8 +65,12 @@ public static class NbtJson
     }
 
     /// <summary>Reconstructs an NBT tag from its JSON encoding, optionally named.</summary>
-    public static NbtTag FromJson(JsonNode node, string? name = null)
+    public static NbtTag FromJson(JsonNode node, string? name = null) => FromJson(node, name, 0);
+
+    private static NbtTag FromJson(JsonNode node, string? name, int depth)
     {
+        if (depth > NbtCanonical.MaxDepth)
+            throw new InvalidDataException($"NBT nesting exceeds {NbtCanonical.MaxDepth} levels");
         JsonObject obj = node.AsObject();
         var (key, val) = First(obj);
         switch (key)
@@ -93,13 +97,13 @@ public static class NbtJson
                 long[] data = val!.AsArray().Select(x => long.Parse(x!.GetValue<string>(), CultureInfo.InvariantCulture)).ToArray();
                 return name is null ? new NbtLongArray(data) : new NbtLongArray(name, data);
             }
-            case "list": return BuildList(val!.AsObject(), name);
-            case "compound": return BuildCompound(val!.AsObject(), name);
+            case "list": return BuildList(val!.AsObject(), name, depth);
+            case "compound": return BuildCompound(val!.AsObject(), name, depth);
             default: throw new NotSupportedException($"Unknown NBT json tag '{key}'.");
         }
     }
 
-    private static NbtTag BuildList(JsonObject spec, string? name)
+    private static NbtTag BuildList(JsonObject spec, string? name, int depth)
     {
         NbtTagType type = Enum.TryParse(spec["type"]?.GetValue<string>(), out NbtTagType t) ? t : NbtTagType.Unknown;
         var list = name is null
@@ -107,15 +111,15 @@ public static class NbtJson
             : (type == NbtTagType.Unknown ? new NbtList(name) : new NbtList(name, type));
         if (spec["items"] is JsonArray items)
             foreach (JsonNode? item in items)
-                list.Add(FromJson(item!.AsObject()));
+                list.Add(FromJson(item!.AsObject(), null, depth + 1));
         return list;
     }
 
-    private static NbtTag BuildCompound(JsonObject members, string? name)
+    private static NbtTag BuildCompound(JsonObject members, string? name, int depth)
     {
         var c = name is null ? new NbtCompound() : new NbtCompound(name);
         foreach (var kv in members)
-            c.Add(FromJson(kv.Value!.AsObject(), kv.Key));
+            c.Add(FromJson(kv.Value!.AsObject(), kv.Key, depth + 1));
         return c;
     }
 

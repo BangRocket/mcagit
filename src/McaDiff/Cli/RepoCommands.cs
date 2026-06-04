@@ -599,6 +599,7 @@ public static class RepoCommands
 
         string mode = allowPush ? (token is not null ? "push: token required" : "push: OPEN (no token)") : "read-only";
         Console.Error.WriteLine($"Serving {dir} at http://{host}:{port}/  ({mode}). Ctrl-C to stop.");
+        Console.Error.WriteLine("  Note: reads are unauthenticated — any peer can list refs and read every object (full history).");
         Console.CancelKeyPress += (_, e) => { e.Cancel = true; server.Stop(); };
         server.Run();
         return 0;
