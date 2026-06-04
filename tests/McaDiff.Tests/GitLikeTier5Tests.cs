@@ -81,7 +81,7 @@ public class GitLikeTier5Tests
         string fA = Commit(repo, 1, 9, [c0]);   // feature: b 1→9
         repo.WriteBranch("feature", fA);
 
-        Rebase.Result r = Rebase.Run(repo, "main", null, "t");
+        Rebase.Result r = Rebase.Start(repo, "main", null, "t");
         Assert.False(r.UpToDate);
         Assert.Equal(1, r.Replayed);
         Assert.Equal(c1, repo.ReadCommit(r.NewTip!).Parents.Single()); // replayed onto main tip
@@ -102,7 +102,7 @@ public class GitLikeTier5Tests
         string fA = Commit(repo, 1, 9, [c0]);
         repo.WriteBranch("feature", fA);
 
-        Rebase.Result r = Rebase.Run(repo, "main", ontoRef: c0, "t"); // replay onto c0 instead of main tip
+        Rebase.Result r = Rebase.Start(repo, "main", ontoRef: c0, "t"); // replay onto c0 instead of main tip
         Assert.Equal(c0, repo.ReadCommit(r.NewTip!).Parents.Single());
         Assert.Equal((1, 9), ChunkAB(repo, r.NewTip!));               // just feature's change over c0
     }

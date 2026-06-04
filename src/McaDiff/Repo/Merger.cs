@@ -39,11 +39,11 @@ public static class Merger
         string theirs = repo.ResolveRef(theirRef);
         string? ours = repo.ReadBranch(branch);
 
-        if (ours is null) { repo.WriteBranch(branch, theirs); return new MergeResult { CommitHash = theirs, FastForward = true }; }
+        if (ours is null) { FastForwardTo(repo, branch, null, theirs, theirRef); return new MergeResult { CommitHash = theirs, FastForward = true }; }
         if (ours == theirs) return new MergeResult { CommitHash = ours, AlreadyUpToDate = true };
 
         List<string> bases = MergeBase.FindAll(repo, ours, theirs);
-        if (bases.Contains(ours)) { repo.WriteBranch(branch, theirs); return new MergeResult { CommitHash = theirs, FastForward = true }; }
+        if (bases.Contains(ours)) { FastForwardTo(repo, branch, ours, theirs, theirRef); return new MergeResult { CommitHash = theirs, FastForward = true }; }
         if (bases.Contains(theirs)) return new MergeResult { CommitHash = ours, AlreadyUpToDate = true };
 
         Manifest baseM = BaseManifest(repo, bases, out string? baseCommit);
@@ -65,6 +65,13 @@ public static class Merger
         repo.BeginMergeState(ours, theirs, baseCommit, msg, conflicts);
         if (repo.Worktree is { } w) Checkout.Materialize(repo, merged, w, prune: true);
         return new MergeResult { Conflicts = conflicts, Stopped = true };
+    }
+
+    private static void FastForwardTo(Repository repo, string branch, string? from, string to, string theirRef)
+    {
+        repo.WriteBranch(branch, to);
+        repo.RecordHead(from, to, $"merge {theirRef}: Fast-forward");
+        if (repo.Worktree is { } w) Checkout.Materialize(repo, repo.ReadManifest(repo.ReadCommit(to).Tree), w, prune: true);
     }
 
     /// <summary>Completes a stopped merge by snapshotting the (resolved) worktree.</summary>

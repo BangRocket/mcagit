@@ -231,6 +231,42 @@ public sealed class Repository
             if (File.Exists(p)) File.Delete(p);
     }
 
+    public void WriteOrigHead(string commit) => File.WriteAllText(OrigHeadPath, commit + "\n");
+
+    // ---- in-progress single-parent sequencer (cherry-pick / revert) ----
+
+    private string CherryPickHeadPath => Path.Combine(Dir, "CHERRY_PICK_HEAD");
+    private string RevertHeadPath => Path.Combine(Dir, "REVERT_HEAD");
+    private string SeqMsgPath => Path.Combine(Dir, "SEQ_MSG");
+
+    public bool InCherryPick => File.Exists(CherryPickHeadPath);
+    public bool InRevert => File.Exists(RevertHeadPath);
+    public bool InSequencer => InCherryPick || InRevert;
+
+    public void BeginCherryPick(string source, string message, string origHead) => BeginSeq(CherryPickHeadPath, source, message, origHead);
+    public void BeginRevert(string source, string message, string origHead) => BeginSeq(RevertHeadPath, source, message, origHead);
+    public string? ReadCherryPickHead() => ReadLine(CherryPickHeadPath);
+    public string? ReadRevertHead() => ReadLine(RevertHeadPath);
+    public string? SeqMessage() => File.Exists(SeqMsgPath) ? File.ReadAllText(SeqMsgPath) : null;
+    public void ClearSequencer() { foreach (string p in new[] { CherryPickHeadPath, RevertHeadPath, SeqMsgPath }) if (File.Exists(p)) File.Delete(p); }
+
+    private void BeginSeq(string headPath, string source, string message, string origHead)
+    {
+        File.WriteAllText(headPath, source + "\n");
+        File.WriteAllText(SeqMsgPath, message);
+        WriteOrigHead(origHead);
+    }
+
+    // ---- in-progress rebase state (opaque JSON owned by Rebase) ----
+
+    private string RebaseStatePath => Path.Combine(Dir, "REBASE_STATE");
+    public bool InRebase => File.Exists(RebaseStatePath);
+    public void WriteRebaseState(string json) => File.WriteAllText(RebaseStatePath, json);
+    public string? ReadRebaseState() => File.Exists(RebaseStatePath) ? File.ReadAllText(RebaseStatePath) : null;
+    public void ClearRebaseState() { if (File.Exists(RebaseStatePath)) File.Delete(RebaseStatePath); }
+
+    private static string? ReadLine(string path) => File.Exists(path) ? File.ReadAllText(path).Trim() : null;
+
     // ---- in-progress bisect state ----
 
     private string BisectStartPath => Path.Combine(Dir, "BISECT_START");
@@ -303,6 +339,14 @@ public sealed class Repository
         string p = BranchPath(branch);
         Directory.CreateDirectory(Path.GetDirectoryName(p)!);
         File.WriteAllText(p, commitHash + "\n");
+    }
+
+    public bool DeleteBranch(string branch)
+    {
+        string p = BranchPath(branch);
+        if (!File.Exists(p)) return false;
+        File.Delete(p);
+        return true;
     }
 
     public IEnumerable<string> Branches()

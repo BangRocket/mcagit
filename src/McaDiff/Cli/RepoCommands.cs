@@ -16,7 +16,16 @@ public static class RepoCommands
     {
         var (pos, opts) = Parse(a, ["--worktree"], []);
         string dir = dashC ?? (pos.Count > 0 ? pos[0] : Directory.GetCurrentDirectory());
-        if (Repository.IsRepository(dir)) return Err($"already a repository: {dir}");
+
+        // git init is idempotent — re-running it on an existing repo reinitializes (exit 0).
+        if (Repository.IsRepository(dir))
+        {
+            Repository existing = Repository.Open(dir);
+            if (opts.GetValueOrDefault("--worktree") is { } wt0) existing.Worktree = wt0;
+            Console.Error.WriteLine($"Reinitialized existing mcadiff repository in {dir}"
+                + (existing.Worktree is { } w0 ? $" (worktree {w0})" : ""));
+            return 0;
+        }
 
         Repository repo = Repository.Init(dir);
         if (opts.GetValueOrDefault("--worktree") is { } wt) repo.Worktree = wt;
@@ -168,7 +177,8 @@ public static class RepoCommands
         IEnumerable<string> set = sym
             ? ancA.Except(ancB).Concat(ancB.Except(ancA))
             : ancB.Except(ancA);
-        return set.OrderByDescending(h => repo.ReadCommit(h).Time, StringComparer.Ordinal)
+        // Sort by parsed timestamp, not the raw ISO string (which mis-orders across timezone offsets).
+        return set.OrderByDescending(h => DateTimeOffset.TryParse(repo.ReadCommit(h).Time, out DateTimeOffset dt) ? dt : DateTimeOffset.MinValue)
                   .ThenBy(h => h, StringComparer.Ordinal).ToList();
     }
 
@@ -230,14 +240,20 @@ public static class RepoCommands
 
     public static int Reset(string? dashC, string[] a)
     {
-        var (pos, opts) = Parse(a, [], ["--hard", "--soft"]);
+        var (pos, opts) = Parse(a, [], ["--hard", "--soft", "--mixed"]);
         if (Open(dashC) is not { } repo) return NoRepo();
-        if (pos.Count < 1) return Err("usage: reset <ref> [--hard]");
-        if (repo.CurrentBranch() is not { } branch) return Err("reset requires being on a branch");
+        string spec = pos.Count > 0 ? pos[0] : "HEAD"; // git defaults to HEAD
         string target;
-        try { target = repo.ResolveRef(pos[0]); } catch (Exception ex) { return Err(ex.Message); }
+        try { target = repo.ResolveRef(spec); } catch (Exception ex) { return Err(ex.Message); }
+        string? from = repo.HeadCommit();
 
-        repo.WriteBranch(branch, target);
+        // Move HEAD via the branch, or HEAD itself when detached (git moves HEAD either way).
+        if (repo.CurrentBranch() is { } branch) repo.WriteBranch(branch, target);
+        else repo.SetHeadDetached(target);
+        repo.RecordHead(from, target, "reset");
+
+        // --soft moves HEAD only; --mixed (default) also resets the staging index; --hard also the worktree.
+        if (!opts.ContainsKey("--soft") && StagingIndex.Exists(repo)) StagingIndex.Clear(repo);
         if (opts.ContainsKey("--hard"))
         {
             if (repo.Worktree is not { } world) return Err("--hard requires a bound worktree");
@@ -250,9 +266,13 @@ public static class RepoCommands
 
     public static int Revert(string? dashC, string[] a)
     {
-        var (pos, opts) = Parse(a, ["--author"], []);
+        var (pos, opts) = Parse(a, ["--author"], ["--continue", "--abort"]);
         if (Open(dashC) is not { } repo) return NoRepo();
-        if (pos.Count < 1) return Err("usage: revert <commit>");
+        if (opts.ContainsKey("--abort")) return SequencerAbort(repo, "revert", repo.InRevert);
+        if (opts.ContainsKey("--continue")) return SequencerContinue(repo, "revert", repo.InRevert, Author(repo, opts.GetValueOrDefault("--author")));
+
+        if (repo.InSequencer) return Err("a cherry-pick/revert is already in progress (use --continue or --abort)");
+        if (pos.Count < 1) return Err("usage: revert <commit> | --continue | --abort");
         if (repo.CurrentBranch() is not { } branch) return Err("revert requires being on a branch");
         if (repo.HeadCommit() is not { } head) return Err("nothing to revert (no commits)");
         string target;
@@ -267,13 +287,22 @@ public static class RepoCommands
         var conflicts = new List<MergeConflict>();
         Manifest merged = Merger.MergeManifests(repo, baseM, oursM, theirsM, false, conflicts);
         string tree = repo.WriteManifest(merged);
-        if (tree == repo.ReadCommit(head).Tree) { Console.Error.WriteLine("nothing to revert — already absent"); return 0; }
+        if (tree == repo.ReadCommit(head).Tree && conflicts.Count == 0) { Console.Error.WriteLine("nothing to revert — already absent"); return 0; }
+        string message = $"Revert \"{tc.Message}\"";
 
-        string commit = repo.CreateCommit(tree, [head], $"Revert \"{tc.Message}\"", Author(repo, opts.GetValueOrDefault("--author")));
-        Console.Error.WriteLine($"[{branch} {commit[..10]}] revert {target[..10]} — {conflicts.Count} conflicts");
-        foreach (MergeConflict cf in conflicts.Take(20))
-            Console.Error.WriteLine($"  conflict: {cf.File}{(cf.Chunk is null ? "" : $" chunk {cf.Chunk}")}{(cf.Path.Length == 0 ? "" : $" {cf.Path}")} — {cf.Reason}");
-        return conflicts.Count > 0 ? 1 : 0;
+        if (conflicts.Count > 0) // STOP — don't commit a half-resolved revert
+        {
+            repo.BeginRevert(target, message, head);
+            if (repo.Worktree is { } w) Repo.Checkout.Materialize(repo, merged, w, prune: true);
+            Console.Error.WriteLine($"Revert of {target[..10]} stopped — {conflicts.Count} conflict(s) need resolution.");
+            PrintConflicts(conflicts);
+            Console.Error.WriteLine("Resolve in the worktree, then `revert --continue` (or `--abort`).");
+            return 1;
+        }
+
+        string commit = repo.CreateCommit(tree, [head], message, Author(repo, opts.GetValueOrDefault("--author")));
+        Console.Error.WriteLine($"[{branch} {commit[..10]}] {message}");
+        return 0;
     }
 
     public static int Restore(string? dashC, string[] a)
@@ -309,7 +338,7 @@ public static class RepoCommands
 
     public static int Tag(string? dashC, string[] a)
     {
-        var (pos, opts) = Parse(a, ["-m", "--message"], ["-d", "-a", "-s", "-v", "-n"]);
+        var (pos, opts) = Parse(a, ["-m", "--message"], ["-d", "-a", "-s", "-v", "-n", "-f"]);
         if (Open(dashC) is not { } repo) return NoRepo();
 
         if (opts.ContainsKey("-d"))
@@ -334,6 +363,8 @@ public static class RepoCommands
         string atRef = pos.Count > 1 ? pos[1] : "HEAD";
         string commit;
         try { commit = repo.ResolveRef(atRef); } catch (Exception ex) { return Err(ex.Message); }
+        if (repo.ReadTag(pos[0]) is not null && !opts.ContainsKey("-f"))
+            return Err($"tag already exists: {pos[0]} (use -f to overwrite)");
 
         bool sign = opts.ContainsKey("-s");
         bool annotated = sign || opts.ContainsKey("-a") || opts.ContainsKey("-m") || opts.ContainsKey("--message");
@@ -381,6 +412,12 @@ public static class RepoCommands
             PrintConflicts(repo.ReadMergeConflicts());
             Console.WriteLine();
         }
+        if (repo.InCherryPick)
+            Console.WriteLine($"cherry-pick of {repo.ReadCherryPickHead()?[..10]} in progress — resolve, then `cherry-pick --continue` (or `--abort`).\n");
+        if (repo.InRevert)
+            Console.WriteLine($"revert of {repo.ReadRevertHead()?[..10]} in progress — resolve, then `revert --continue` (or `--abort`).\n");
+        if (repo.InRebase)
+            Console.WriteLine("rebase in progress — resolve, then `rebase --continue` (or `--skip` / `--abort`).\n");
 
         if (StagingIndex.Exists(repo))
         {
@@ -415,14 +452,26 @@ public static class RepoCommands
         try { commit = repo.ResolveRef(refName); }
         catch (Exception ex) { return Err(ex.Message); }
 
-        if (!opts.ContainsKey("--force") && Directory.Exists(outDir) && Directory.EnumerateFileSystemEntries(outDir).Any())
-            return Err($"output directory is not empty: {outDir} (use --force)");
+        bool isWorktree = repo.Worktree is { } wt && Path.GetFullPath(wt) == Path.GetFullPath(outDir);
+        if (!opts.ContainsKey("--force"))
+        {
+            if (isWorktree)
+            {
+                // Don't silently clobber uncommitted changes in the bound worktree.
+                if (StatusCalc.Compute(repo, outDir).Count > 0)
+                    return Err("worktree has uncommitted changes — commit/stash them, or use --force");
+            }
+            else if (Directory.Exists(outDir) && Directory.EnumerateFileSystemEntries(outDir).Any())
+                return Err($"output directory is not empty: {outDir} (use --force)");
+        }
 
+        string? from = repo.HeadCommit();
         Manifest manifest = repo.ReadManifest(repo.ReadCommit(commit).Tree);
         Repo.Checkout.Materialize(repo, manifest, outDir, prune: true);
 
         bool onBranch = repo.ReadBranch(refName) is not null;
         if (onBranch) repo.SetHeadToBranch(refName); else repo.SetHeadDetached(commit);
+        repo.RecordHead(from, commit, $"checkout: moving to {refName}"); // so HEAD@{1} returns the prior position
         Console.Error.WriteLine($"Checked out {refName} ({commit[..10]}) into {outDir} — "
             + (onBranch ? $"on branch {refName}" : "detached HEAD"));
         return 0;
@@ -430,17 +479,49 @@ public static class RepoCommands
 
     public static int Branch(string? dashC, string[] a)
     {
+        var (pos, opts) = Parse(a, [], ["-d", "-D", "-f", "-m"]);
         if (Open(dashC) is not { } repo) return NoRepo();
-        if (a.Length == 0)
+
+        if (opts.ContainsKey("-d") || opts.ContainsKey("-D"))
+        {
+            if (pos.Count < 1) return Err("usage: branch -d <name>");
+            if (repo.ReadBranch(pos[0]) is null) return Err($"branch not found: {pos[0]}");
+            if (repo.CurrentBranch() == pos[0]) return Err($"cannot delete the current branch: {pos[0]}");
+            repo.DeleteBranch(pos[0]);
+            Console.Error.WriteLine($"Deleted branch {pos[0]}.");
+            return 0;
+        }
+        if (opts.ContainsKey("-m")) // rename
+        {
+            if (pos.Count < 2) return Err("usage: branch -m <old> <new>");
+            if (repo.ReadBranch(pos[0]) is not { } tip) return Err($"branch not found: {pos[0]}");
+            if (repo.ReadBranch(pos[1]) is not null && !opts.ContainsKey("-f")) return Err($"branch already exists: {pos[1]}");
+            repo.WriteBranch(pos[1], tip);
+            repo.DeleteBranch(pos[0]);
+            if (repo.CurrentBranch() == pos[0]) repo.SetHeadToBranch(pos[1]);
+            Console.Error.WriteLine($"Renamed branch {pos[0]} -> {pos[1]}.");
+            return 0;
+        }
+        if (pos.Count == 0)
         {
             string? current = repo.CurrentBranch();
             foreach (string br in repo.Branches())
                 Console.WriteLine($"{(br == current ? "* " : "  ")}{br}");
             return 0;
         }
-        if (repo.HeadCommit() is not { } head) return Err("cannot create a branch before the first commit");
-        repo.WriteBranch(a[0], head);
-        Console.Error.WriteLine($"Created branch {a[0]} at {head[..10]}");
+
+        // create: branch <name> [<start-point>]
+        if (repo.ReadBranch(pos[0]) is not null && !opts.ContainsKey("-f"))
+            return Err($"branch already exists: {pos[0]} (use -f to move it)");
+        string at;
+        if (pos.Count > 1)
+        {
+            try { at = repo.ResolveRef(pos[1]); } catch (Exception ex) { return Err(ex.Message); }
+        }
+        else if (repo.HeadCommit() is { } head) at = head;
+        else return Err("cannot create a branch before the first commit");
+        repo.WriteBranch(pos[0], at);
+        Console.Error.WriteLine($"Created branch {pos[0]} at {at[..10]}");
         return 0;
     }
 
@@ -619,42 +700,86 @@ public static class RepoCommands
     public static int Reflog(string? dashC, string[] a)
     {
         if (Open(dashC) is not { } repo) return NoRepo();
-        foreach (string line in repo.Reflog())
+        List<string> lines = repo.Reflog().ToList(); // most recent first
+        for (int i = 0; i < lines.Count; i++)
         {
-            string[] parts = line.Split(' ', 3);
-            string to = parts.Length > 1 ? parts[1] : line;
+            string[] parts = lines[i].Split(' ', 3);
+            string to = parts.Length > 1 ? parts[1] : lines[i];
             string msg = parts.Length > 2 ? parts[2] : "";
-            Console.WriteLine($"{(to.Length >= 10 ? to[..10] : to)} {msg}");
+            Console.WriteLine($"{(to.Length >= 10 ? to[..10] : to)} HEAD@{{{i}}}: {msg}"); // git's index column
         }
         return 0;
     }
 
     public static int CherryPick(string? dashC, string[] a)
     {
+        var (pos, opts) = Parse(a, ["--author"], ["--continue", "--abort"]);
         if (Open(dashC) is not { } repo) return NoRepo();
-        if (a.Length < 1) return Err("usage: cherry-pick <commit>");
+        if (opts.ContainsKey("--abort")) return SequencerAbort(repo, "cherry-pick", repo.InCherryPick);
+        if (opts.ContainsKey("--continue")) return SequencerContinue(repo, "cherry-pick", repo.InCherryPick, Author(repo, opts.GetValueOrDefault("--author")));
+
+        if (repo.InSequencer) return Err("a cherry-pick/revert is already in progress (use --continue or --abort)");
+        if (pos.Count < 1) return Err("usage: cherry-pick <commit> | --continue | --abort");
         if (repo.CurrentBranch() is not { } branch) return Err("cherry-pick requires being on a branch");
         if (repo.HeadCommit() is not { } head) return Err("nothing to cherry-pick onto (no commits)");
         string target;
-        try { target = repo.ResolveRef(a[0]); } catch (Exception ex) { return Err(ex.Message); }
+        try { target = repo.ResolveRef(pos[0]); } catch (Exception ex) { return Err(ex.Message); }
 
         CommitObject tc = repo.ReadCommit(target);
         string? parent = tc.Parents.Count > 0 ? tc.Parents[0] : null;
         Manifest baseM = parent is not null ? repo.ReadManifest(repo.ReadCommit(parent).Tree) : new Manifest();
         Manifest oursM = repo.ReadManifest(repo.ReadCommit(head).Tree);
-        Manifest theirsM = repo.ReadManifest(tc.Tree);
-
         var conflicts = new List<MergeConflict>();
-        Manifest merged = Merger.MergeManifests(repo, baseM, oursM, theirsM, false, conflicts);
+        Manifest merged = Merger.MergeManifests(repo, baseM, oursM, repo.ReadManifest(tc.Tree), false, conflicts);
         string tree = repo.WriteManifest(merged);
-        if (tree == repo.ReadCommit(head).Tree) { Console.Error.WriteLine("nothing to cherry-pick — no changes"); return 0; }
+        if (tree == repo.ReadCommit(head).Tree && conflicts.Count == 0) { Console.Error.WriteLine("nothing to cherry-pick — no changes"); return 0; }
 
-        string commit = repo.CreateCommit(tree, [head], tc.Message,
-            author: tc.Author, committer: Author(repo, null), authorTime: tc.Time);
-        Console.Error.WriteLine($"[{branch} {commit[..10]}] {tc.Message} — {conflicts.Count} conflicts");
-        foreach (MergeConflict cf in conflicts.Take(20))
-            Console.Error.WriteLine($"  conflict: {cf.File}{(cf.Chunk is null ? "" : $" chunk {cf.Chunk}")}{(cf.Path.Length == 0 ? "" : $" {cf.Path}")} — {cf.Reason}");
-        return conflicts.Count > 0 ? 1 : 0;
+        if (conflicts.Count > 0) // STOP — don't bake a half-resolved commit; record state for --continue/--abort
+        {
+            repo.BeginCherryPick(target, tc.Message, head);
+            if (repo.Worktree is { } w) Repo.Checkout.Materialize(repo, merged, w, prune: true);
+            Console.Error.WriteLine($"Cherry-pick of {target[..10]} stopped — {conflicts.Count} conflict(s) need resolution.");
+            PrintConflicts(conflicts);
+            Console.Error.WriteLine("Resolve in the worktree, then `cherry-pick --continue` (or `--abort`).");
+            return 1;
+        }
+
+        string commit = repo.CreateCommit(tree, [head], tc.Message, author: tc.Author, committer: Author(repo, null), authorTime: tc.Time);
+        Console.Error.WriteLine($"[{branch} {commit[..10]}] {tc.Message}");
+        return 0;
+    }
+
+    private static int SequencerContinue(Repository repo, string kind, bool active, string author)
+    {
+        if (!active) return Err($"no {kind} in progress");
+        if (repo.Worktree is not { } world) return Err($"{kind} --continue needs a bound worktree to snapshot the resolution");
+        string head = repo.HeadCommit() ?? throw new InvalidOperationException("no HEAD");
+        Manifest m = Snapshotter.Snapshot(repo, world);
+        string tree = repo.WriteManifest(m);
+        if (tree == repo.ReadCommit(head).Tree) { repo.ClearSequencer(); Console.Error.WriteLine($"nothing to commit — {kind} made no change."); return 0; }
+
+        string msg = repo.SeqMessage() ?? kind;
+        string commit;
+        if (kind == "cherry-pick" && repo.ReadCherryPickHead() is { } src) // preserve original author
+        {
+            CommitObject sc = repo.ReadCommit(src);
+            commit = repo.CreateCommit(tree, [head], msg, author: sc.Author, committer: author, authorTime: sc.Time);
+        }
+        else commit = repo.CreateCommit(tree, [head], msg, author);
+        repo.ClearSequencer();
+        Console.Error.WriteLine($"{kind} complete: {commit[..10]}");
+        return 0;
+    }
+
+    private static int SequencerAbort(Repository repo, string kind, bool active)
+    {
+        if (!active) return Err($"no {kind} in progress");
+        string orig = repo.ReadOrigHead() ?? throw new InvalidOperationException("ORIG_HEAD missing — cannot abort");
+        if (repo.CurrentBranch() is { } branch) repo.WriteBranch(branch, orig);
+        if (repo.Worktree is { } w) Repo.Checkout.Materialize(repo, repo.ReadManifest(repo.ReadCommit(orig).Tree), w, prune: true);
+        repo.ClearSequencer();
+        Console.Error.WriteLine($"{kind} aborted; restored to {orig[..10]}.");
+        return 0;
     }
 
     public static int GcCmd(string? dashC, string[] a)
@@ -697,8 +822,8 @@ public static class RepoCommands
         {
             if (opts.ContainsKey("--abbrev-ref"))
             {
-                string? br = spec == "HEAD" ? repo.CurrentBranch() : (repo.ReadBranch(spec) is not null ? spec : null);
-                if (br is not null) { Console.WriteLine(br); continue; }
+                if (spec == "HEAD") { Console.WriteLine(repo.CurrentBranch() ?? "HEAD"); continue; } // detached → "HEAD", not a hash
+                if (repo.ReadBranch(spec) is not null) { Console.WriteLine(spec); continue; }
             }
             try { string h = repo.ResolveRef(spec); Console.WriteLine(opts.ContainsKey("--short") ? h[..10] : h); }
             catch (Exception ex) { Console.Error.WriteLine($"mcadiff: {ex.Message}"); rc = 1; }
@@ -981,17 +1106,34 @@ public static class RepoCommands
 
     public static int RebaseCmd(string? dashC, string[] a)
     {
-        var (pos, opts) = Parse(a, ["--onto", "--author"], []);
+        var (pos, opts) = Parse(a, ["--onto", "--author"], ["--continue", "--abort", "--skip"]);
         if (Open(dashC) is not { } repo) return NoRepo();
-        if (pos.Count < 1) return Err("usage: rebase [--onto <newbase>] <upstream>");
+        string author = Author(repo, opts.GetValueOrDefault("--author"));
         try
         {
-            Rebase.Result r = Rebase.Run(repo, pos[0], opts.GetValueOrDefault("--onto"), Author(repo, opts.GetValueOrDefault("--author")));
+            if (opts.ContainsKey("--abort")) { Rebase.Abort(repo); Console.Error.WriteLine("Rebase aborted; branch restored."); return 0; }
+
+            Rebase.Result r;
+            if (opts.ContainsKey("--continue")) r = Rebase.Continue(repo, author);
+            else if (opts.ContainsKey("--skip")) r = Rebase.Skip(repo, author);
+            else
+            {
+                if (repo.InRebase) return Err("a rebase is in progress (use --continue / --skip / --abort)");
+                if (pos.Count < 1) return Err("usage: rebase [--onto <newbase>] <upstream> | --continue | --skip | --abort");
+                r = Rebase.Start(repo, pos[0], opts.GetValueOrDefault("--onto"), author);
+            }
+
             if (r.UpToDate) { Console.Error.WriteLine("Already up to date."); return 0; }
             if (r.FastForward) { Console.Error.WriteLine($"Fast-forwarded to {r.NewTip![..10]}."); return 0; }
-            Console.Error.WriteLine($"Rebased {r.Replayed} commit(s) onto {r.NewTip![..10]} — {r.Conflicts.Count} conflict(s).");
-            PrintConflicts(r.Conflicts);
-            return r.Conflicts.Count > 0 ? 1 : 0;
+            if (r.Stopped)
+            {
+                Console.Error.WriteLine($"Rebase stopped at {r.StoppedAt![..10]} — {r.Conflicts.Count} conflict(s) need resolution.");
+                PrintConflicts(r.Conflicts);
+                Console.Error.WriteLine("Resolve in the worktree, then `rebase --continue` (or `--skip` / `--abort`).");
+                return 1;
+            }
+            Console.Error.WriteLine($"Rebased {r.Replayed} commit(s) onto {r.NewTip![..10]}.");
+            return 0;
         }
         catch (Exception ex) { return Err(ex.Message); }
     }
@@ -1038,7 +1180,7 @@ public static class RepoCommands
             RefAdvertisement refs = t.ListRefs();
             foreach (var kv in refs.Branches) Console.WriteLine($"{kv.Value}\trefs/heads/{kv.Key}");
             foreach (var kv in refs.Tags) Console.WriteLine($"{kv.Value}\trefs/tags/{kv.Key}");
-            if (refs.Head is { } hd) Console.WriteLine($"{refs.Branches.GetValueOrDefault(hd) ?? ""}\tHEAD -> {hd}");
+            if (refs.Head is { } hd) Console.WriteLine($"{refs.Branches.GetValueOrDefault(hd) ?? ""}\tHEAD"); // git format: <hash>\tHEAD
             return 0;
         }
         catch (Exception ex) { return Err(ex.Message); }
