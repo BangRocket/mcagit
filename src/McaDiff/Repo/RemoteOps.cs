@@ -199,25 +199,19 @@ public static class RemoteOps
 
         if (deep)
             foreach (string leaf in leaves)
+            {
                 if (Fetch1(t, leaf) is not { } b) missing.Add(leaf);
                 else if (Hash(b) != leaf) corrupt.Add(leaf);
-                else
-                    missing.AddRange(t.Missing(leaves.ToList()));
+            }
+        else
+            missing.AddRange(t.Missing(leaves.ToList())); // one batched presence check (not per-leaf — issue #21)
 
         return new VerifyResult(refs.Branches.Count, commits, seen.Count + leaves.Count, missing, corrupt);
     }
 
     private static byte[]? Fetch1(IRemoteTransport t, string hash)
     {
-        try
-        {
-            byte[] compressed = t.GetObject(hash);
-            using var ms = new MemoryStream(compressed);
-            using var z = new System.IO.Compression.ZLibStream(ms, System.IO.Compression.CompressionMode.Decompress);
-            using var outMs = new MemoryStream();
-            z.CopyTo(outMs);
-            return outMs.ToArray();
-        }
+        try { return SafeInflate.Zlib(t.GetObject(hash)); } // bounded — a hostile remote can't bomb verify --deep (issue #21)
         catch { return null; }
     }
 

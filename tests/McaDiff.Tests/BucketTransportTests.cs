@@ -165,6 +165,24 @@ public class BucketTransportTests
         Assert.Contains(r.Missing, m => m.Contains("(commit)")); // the parent commit is gone
     }
 
+    [Fact]
+    public void MaliciousManifest_PackIdTraversal_Rejected()
+    {
+        // A hostile bucket advertising a pack id like "../../evil" must not become a local file path.
+        Repository origin = Repository.Init(TestAnvil.TempDir("bt23"));
+        CommitWorld(origin, World(1), "c0");
+        var bucket = new InMemoryBucket();
+        Push(origin, bucket, "main");
+
+        (byte[]? manifest, _) = bucket.Get("world/packs/manifest");
+        bucket.Put("world/packs/manifest",
+            manifest!.Concat(System.Text.Encoding.UTF8.GetBytes("\n../../../tmp/evil\n")).ToArray());
+
+        using var t = new BucketTransport(bucket, "world");
+        Assert.Throws<InvalidDataException>(() => RemoteOps.CloneFrom(t, TestAnvil.TempDir("bt23c"), "azure://a/c/world"));
+        Assert.False(File.Exists("/tmp/evil.pack")); // nothing written outside the temp dir
+    }
+
     // ---- helpers ----
 
     private static List<string> ManifestIds(IBucket bucket) =>

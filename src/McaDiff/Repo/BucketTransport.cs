@@ -133,14 +133,27 @@ public sealed class BucketTransport : IRemoteTransport, IBatchTransport
         var map = new Dictionary<string, string>(StringComparer.Ordinal);
         if (_bucket.Get(Key("packs/manifest")).Data is { } manifest)
             foreach (string packId in Lines(manifest))
+            {
+                RequireValidPackId(packId); // manifest is attacker-controlled (issue #23)
                 if (_bucket.Get(Key($"packs/{packId}.idx")).Data is { } idx)
                     foreach (string h in Packfile.IndexHashes(idx))
                         map[h] = packId;
+            }
         _hashToPack = map;
+    }
+
+    // A pack id from the bucket's manifest flows into local file paths; a value like "../../evil"
+    // would let a hostile bucket write outside the temp dir. Pin it to the 40-hex PackId shape, the
+    // same gate ObjectStore.IsValidHash gives loose objects.
+    private static void RequireValidPackId(string packId)
+    {
+        if (packId.Length != 40 || !packId.All(c => c is (>= '0' and <= '9') or (>= 'a' and <= 'f')))
+            throw new InvalidDataException($"remote bucket advertised a malformed pack id: '{packId}'");
     }
 
     private Packfile OpenPack(string packId)
     {
+        RequireValidPackId(packId);
         if (_openPacks.TryGetValue(packId, out Packfile? cached)) return cached;
         byte[] pack = _bucket.Get(Key($"packs/{packId}")).Data ?? throw new InvalidDataException($"pack {packId} not found");
         byte[] idx = _bucket.Get(Key($"packs/{packId}.idx")).Data ?? throw new InvalidDataException($"index for {packId} not found");
@@ -157,14 +170,7 @@ public sealed class BucketTransport : IRemoteTransport, IBatchTransport
     private static List<string> Lines(byte[] data) =>
         Encoding.UTF8.GetString(data).Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
 
-    private static byte[] Inflate(byte[] compressed)
-    {
-        using var ms = new MemoryStream(compressed);
-        using var z = new ZLibStream(ms, CompressionMode.Decompress);
-        using var outMs = new MemoryStream();
-        z.CopyTo(outMs);
-        return outMs.ToArray();
-    }
+    private static byte[] Inflate(byte[] compressed) => SafeInflate.Zlib(compressed); // bounded (issue #21)
 
     public void Dispose()
     {

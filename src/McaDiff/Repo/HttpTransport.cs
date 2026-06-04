@@ -55,12 +55,13 @@ public sealed class HttpTransport : IRemoteTransport, IBatchTransport
         return resp;
     }
 
+    private const long MaxResponseBytes = 512L * 1024 * 1024; // cap an untrusted server's response (issue #21)
+
     private static byte[] Bytes(HttpResponseMessage r)
     {
-        using var ms = new MemoryStream();
-        r.Content.ReadAsStream().CopyTo(ms);
-        r.Dispose();
-        return ms.ToArray();
+        using (r)
+        using (Stream s = r.Content.ReadAsStream())
+            return SafeInflate.ReadBounded(s, MaxResponseBytes);
     }
 
     private static T Json<T>(HttpResponseMessage r)
