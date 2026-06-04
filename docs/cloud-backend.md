@@ -15,7 +15,7 @@ thousands of writes and a clone thousands of GETs.
 Instead a push bundles **only the objects the bucket is missing** into a single
 content-addressed **pack**, and uploads:
 
-```
+```text
 <prefix>/packs/<id>          the pack
 <prefix>/packs/<id>.idx      its index (hash → offset)
 <prefix>/packs/manifest      newline list of pack ids   (CAS-guarded)
