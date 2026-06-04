@@ -55,6 +55,7 @@ Diffing two saves of the same world a minute apart — the loose-NBT view
 ```sh
 mcadiff --only nbt New_World_Older New_World_Newer
 ```
+
 ```text
 diff --nbt level.dat
   ~ Data.DayTime: 383L → 1574L
@@ -129,6 +130,7 @@ mcadiff apply --reverse changes.mcapatch <new-world> -o <restored-world>
 ```
 
 **Non-destructive by design:**
+
 - `apply` copies the target to a fresh `--output` world and only rewrites the
   patched nodes — everything else is preserved byte-for-byte.
 - Every node is **guarded** (3-way): it's only changed if the target's current
@@ -286,7 +288,7 @@ in a couple of seconds.
 
 ## Architecture
 
-```
+```text
 src/McaDiff/
   Anvil/     RegionFile, RegionWriter, RawChunk, ChunkPos, — region container
              ChunkCodec                                      read + write

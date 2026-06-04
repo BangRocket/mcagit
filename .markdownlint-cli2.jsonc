@@ -1,0 +1,18 @@
+{
+  // markdownlint config for mcadiff's human-facing docs (README, CLAUDE.md).
+  // Structural rules stay on; purely stylistic ones that fight normal prose
+  // and our table style are off.
+  "config": {
+    "default": true,
+    "MD013": false, // line-length — prose wraps freely, code blocks have long lines
+    "MD060": false, // table-column-style — we use compact pipe tables
+    "MD033": false, // inline HTML — allowed where needed
+    "MD041": false  // first-line-heading — README opens with content by design
+  },
+  // Agent memory, agent/skill definitions, and other tooling markdown under
+  // .claude/ are machine-managed and not part of the project's published docs.
+  "ignores": [
+    ".claude/**",
+    "**/node_modules/**"
+  ]
+}
