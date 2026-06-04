@@ -73,11 +73,17 @@ public static class Delta
                 if ((cmd & 0x20) != 0) size |= delta[dp++] << 8;
                 if ((cmd & 0x40) != 0) size |= delta[dp++] << 16;
                 if (size == 0) size = 0x10000;
+                // Bounds-check before copying: a malformed/hostile delta (incl. a byte-3 offset
+                // that sign-extends negative) must fail catchably, not throw ArgumentOutOfRange.
+                if (offset < 0 || size < 0 || (long)offset + size > baseBuf.Length || op + size > outBuf.Length)
+                    throw new InvalidDataException("delta copy out of range");
                 Array.Copy(baseBuf, offset, outBuf, op, size);
                 op += size;
             }
             else if (cmd != 0) // insert literal
             {
+                if (dp + cmd > delta.Length || op + cmd > outBuf.Length)
+                    throw new InvalidDataException("delta insert out of range");
                 Array.Copy(delta, dp, outBuf, op, cmd);
                 dp += cmd;
                 op += cmd;

@@ -33,6 +33,11 @@ public static class Gc
     public static RepackResult Repack(Repository repo)
     {
         ObjectStore store = repo.Objects;
+
+        // Sweep stale temp files left by crashed writers (invisible to fsck; they only waste space).
+        foreach (string tmp in Directory.EnumerateFiles(store.ObjectsDir, "*.tmp", SearchOption.AllDirectories))
+            try { File.Delete(tmp); } catch { /* in use / already gone */ }
+
         HashSet<string> reachable = ReachableSet(repo);
         if (reachable.Count == 0) return new RepackResult(0, 0, 0, null);
 

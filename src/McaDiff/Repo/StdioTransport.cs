@@ -16,11 +16,14 @@ internal static class Frame
         s.Flush();
     }
 
+    private const int MaxFrame = 256 * 1024 * 1024; // cap a peer-supplied frame length
+
     public static byte[]? Read(Stream s)
     {
         Span<byte> len = stackalloc byte[4];
         if (!ReadFully(s, len)) return null; // clean EOF
         int n = BinaryPrimitives.ReadInt32BigEndian(len);
+        if (n < 0 || n > MaxFrame) throw new InvalidDataException($"frame length out of range: {n}");
         var buf = new byte[n];
         if (n > 0 && !ReadFully(s, buf)) throw new EndOfStreamException("truncated frame");
         return buf;

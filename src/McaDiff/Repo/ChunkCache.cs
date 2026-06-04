@@ -41,5 +41,11 @@ public sealed class ChunkCache
 
     public void Set(string key, string hash) => _map[key] = hash;
 
-    public void Save() => File.WriteAllText(_path, JsonSerializer.Serialize(_map));
+    public void Save()
+    {
+        // Atomic write: a crash (or a concurrent commit) mid-write must not corrupt the cache.
+        string tmp = _path + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        File.WriteAllText(tmp, JsonSerializer.Serialize(_map));
+        File.Move(tmp, _path, overwrite: true);
+    }
 }

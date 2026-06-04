@@ -219,15 +219,15 @@ partial class Program
             mcadiff log [--oneline|-p|--stat] [-n N] [<ref>]
             mcadiff show [<ref>]                  A commit's metadata + diff
             mcadiff checkout <ref> [<world-out>]  Materialize a snapshot
-            mcadiff reset <ref> [--hard]          Move the branch (─ worktree with --hard)
+            mcadiff reset [<ref>] [--soft|--mixed|--hard]   Move HEAD (default --mixed, ref HEAD)
             mcadiff restore <ref> <path>...       Restore paths from a snapshot
-            mcadiff revert <commit>               New commit undoing a commit
-            mcadiff branch [<name>]               List / create branches
-            mcadiff tag [-a -m <msg> [-s]] [<name> [<ref>]] | -d <name> | -v <name>
+            mcadiff revert <commit> | --continue | --abort   Undo a commit (stops on conflict)
+            mcadiff branch [<name> [<start>]] | -d <name> | -m <old> <new>
+            mcadiff tag [-a -m <msg> [-s]] [-f] [<name> [<ref>]] | -d <name> | -v <name>
             mcadiff merge <ref> [--theirs|--ours]  3-way merge (stops on conflict)
             mcadiff merge --continue | --abort     Finish / undo a conflicted merge
-            mcadiff cherry-pick <commit>          Apply one commit onto HEAD
-            mcadiff rebase [--onto <base>] <up>   Replay branch commits onto a new base
+            mcadiff cherry-pick <commit> | --continue | --abort   (stops on conflict)
+            mcadiff rebase [--onto <base>] <up> | --continue | --skip | --abort
             mcadiff stash [push|list|pop|apply|drop|clear]   Shelve / restore the worktree
             mcadiff clean [-n|-f]                 Remove untracked worktree files
             mcadiff commit -S …                   Sign the commit (SSH key)

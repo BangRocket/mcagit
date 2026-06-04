@@ -39,11 +39,11 @@ public static class Merger
         string theirs = repo.ResolveRef(theirRef);
         string? ours = repo.ReadBranch(branch);
 
-        if (ours is null) { repo.WriteBranch(branch, theirs); return new MergeResult { CommitHash = theirs, FastForward = true }; }
+        if (ours is null) { FastForwardTo(repo, branch, null, theirs, theirRef); return new MergeResult { CommitHash = theirs, FastForward = true }; }
         if (ours == theirs) return new MergeResult { CommitHash = ours, AlreadyUpToDate = true };
 
         List<string> bases = MergeBase.FindAll(repo, ours, theirs);
-        if (bases.Contains(ours)) { repo.WriteBranch(branch, theirs); return new MergeResult { CommitHash = theirs, FastForward = true }; }
+        if (bases.Contains(ours)) { FastForwardTo(repo, branch, ours, theirs, theirRef); return new MergeResult { CommitHash = theirs, FastForward = true }; }
         if (bases.Contains(theirs)) return new MergeResult { CommitHash = ours, AlreadyUpToDate = true };
 
         Manifest baseM = BaseManifest(repo, bases, out string? baseCommit);
@@ -65,6 +65,13 @@ public static class Merger
         repo.BeginMergeState(ours, theirs, baseCommit, msg, conflicts);
         if (repo.Worktree is { } w) Checkout.Materialize(repo, merged, w, prune: true);
         return new MergeResult { Conflicts = conflicts, Stopped = true };
+    }
+
+    private static void FastForwardTo(Repository repo, string branch, string? from, string to, string theirRef)
+    {
+        repo.WriteBranch(branch, to);
+        repo.RecordHead(from, to, $"merge {theirRef}: Fast-forward");
+        if (repo.Worktree is { } w) Checkout.Materialize(repo, repo.ReadManifest(repo.ReadCommit(to).Tree), w, prune: true);
     }
 
     /// <summary>Completes a stopped merge by snapshotting the (resolved) worktree.</summary>
@@ -237,7 +244,9 @@ public static class Merger
         Dictionary<string, PatchOp> theirs = OpsByPath(baseRoot, theirRoot);
 
         var mergedRoot = (NbtCompound)baseRoot.Clone();
-        foreach (string path in Union(ours.Keys, theirs.Keys, null))
+        // Sorted so a parent op ("X") applies before a child op ("X.Y") and the result is
+        // deterministic (HashSet order isn't) — which also surfaces the parent/child conflict below.
+        foreach (string path in Union(ours.Keys, theirs.Keys, null).OrderBy(p => p, StringComparer.Ordinal))
         {
             ours.TryGetValue(path, out PatchOp? oo);
             theirs.TryGetValue(path, out PatchOp? to);
@@ -248,7 +257,7 @@ public static class Merger
                 else { conflicts.Add(new MergeConflict(file, chunk, path, "kept " + (preferTheirs ? "theirs" : "ours"))); chosen = preferTheirs ? to : oo; }
             }
             else chosen = oo ?? to!;
-            ApplyOp(ref mergedRoot, chosen);
+            ApplyOp(ref mergedRoot, chosen, file, chunk, conflicts);
         }
 
         return repo.Objects.Write(NbtCanonical.Serialize(mergedRoot));
@@ -263,7 +272,7 @@ public static class Merger
         return byPath;
     }
 
-    private static void ApplyOp(ref NbtCompound root, PatchOp op)
+    private static void ApplyOp(ref NbtCompound root, PatchOp op, string file, string? chunk, List<MergeConflict> conflicts)
     {
         if (op.IsRoot)
         {
@@ -272,11 +281,22 @@ public static class Merger
         }
         string? name = NbtPath.TerminalName(op.Path);
         NbtTag? tag = op.Value is null ? null : NbtJson.FromJson(op.Value, name);
-        NbtPath.Set(root, op.Path, tag);
+        // Don't discard Set's result: a false means the parent container is missing/wrong-type, so
+        // the change couldn't be applied — that's a conflict (silently dropping it loses merge data).
+        if (!NbtPath.Set(root, op.Path, tag))
+            conflicts.Add(new MergeConflict(file, chunk, op.Path, "parent path missing during merge apply"));
     }
 
+    /// <summary>Whether two NbtJson-encoded values are semantically equal — compared as NBT
+    /// (so two compounds with the same content but different key order are equal), not by
+    /// JSON string (which is key-order-sensitive and would raise spurious conflicts).</summary>
     private static bool SameValue(System.Text.Json.Nodes.JsonNode? a, System.Text.Json.Nodes.JsonNode? b)
-        => (a is null && b is null) || (a is not null && b is not null && a.ToJsonString() == b.ToJsonString());
+    {
+        if (a is null && b is null) return true;
+        if (a is null || b is null) return false;
+        try { return NbtEquality.DeepEquals(NbtJson.FromJson(a, null), NbtJson.FromJson(b, null)); }
+        catch { return a.ToJsonString() == b.ToJsonString(); } // malformed → fall back to literal compare
+    }
 
     private static bool MapsEqual(SortedDictionary<string, string>? a, SortedDictionary<string, string>? b)
     {

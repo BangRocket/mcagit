@@ -13,8 +13,10 @@ public static class Checkout
     public static void Materialize(Repository repo, Manifest manifest, string worldOut, bool prune = false)
     {
         Directory.CreateDirectory(worldOut);
-        if (prune) PruneStray(manifest, worldOut);
+        if (prune) GuardNotRepo(worldOut, repo.Dir); // never let a checkout prune the repo itself
 
+        // Every output path is confined to worldOut: a hostile manifest can carry
+        // entry keys like "../../.ssh/authorized_keys" and Path.Combine would honor them.
         foreach ((string rel, SortedDictionary<string, string> chunks) in manifest.Regions)
         {
             var raws = new List<RawChunk>(chunks.Count);
@@ -25,34 +27,56 @@ public static class Checkout
                 raws.Add(new RawChunk(pos, ChunkCompression.ZLib,
                     ChunkCodec.Encode(root, ChunkCompression.ZLib), external: false, timestamp: 0));
             }
-            RegionWriter.Write(Path.Combine(worldOut, rel), raws); // empty list → valid empty region
+            RegionWriter.Write(PathGuard.Confine(worldOut, rel), raws); // empty list → valid empty region
         }
 
         foreach ((string rel, string hash) in manifest.Nbt)
         {
-            string outFile = Path.Combine(worldOut, rel);
+            string outFile = PathGuard.Confine(worldOut, rel);
             Directory.CreateDirectory(Path.GetDirectoryName(outFile)!);
             ChunkCodec.SaveNbtFile(outFile, NbtCanonical.Deserialize(repo.Objects.Read(hash)));
         }
 
         foreach ((string rel, string hash) in manifest.Blobs)
         {
-            string outFile = Path.Combine(worldOut, rel);
+            string outFile = PathGuard.Confine(worldOut, rel);
             Directory.CreateDirectory(Path.GetDirectoryName(outFile)!);
             File.WriteAllBytes(outFile, repo.Objects.Read(hash));
         }
 
         foreach (string rel in manifest.EmptyDirs)
-            Directory.CreateDirectory(Path.Combine(worldOut, rel));
+            Directory.CreateDirectory(PathGuard.Confine(worldOut, rel));
+
+        // Prune AFTER writing, so the snapshot's own .mcaignore (a blob we just wrote) governs.
+        if (prune) PruneStray(manifest, worldOut, repo.Dir);
+    }
+
+    /// <summary>Refuses to prune when the checkout target is, or contains, the repository —
+    /// otherwise a worktree mistakenly (or maliciously) set to the repo dir would delete
+    /// objects/, refs/, HEAD, config… everything not in the manifest.</summary>
+    private static void GuardNotRepo(string worldOut, string repoDir)
+    {
+        string w = Path.GetFullPath(worldOut);
+        string r = Path.GetFullPath(repoDir);
+        string wPrefix = w.EndsWith(Path.DirectorySeparatorChar) ? w : w + Path.DirectorySeparatorChar;
+        if (w == r || r.StartsWith(wPrefix, StringComparison.Ordinal))
+            throw new InvalidOperationException(
+                $"refusing to prune: the checkout target '{worldOut}' is or contains the repository '{repoDir}'. "
+                + "Bind the worktree to a separate directory.");
     }
 
     /// <summary>Deletes worktree files absent from the snapshot, so a full checkout is an
     /// exact reproduction. Ignored files and session.lock are kept; empty dirs left behind
     /// (and not recorded in the manifest) are removed.</summary>
-    private static void PruneStray(Manifest manifest, string worldOut)
+    private static void PruneStray(Manifest manifest, string worldOut, string repoDir)
     {
         if (!Directory.Exists(worldOut)) return;
         IgnoreRules ignore = IgnoreRules.Load(worldOut);
+
+        // Defense-in-depth beyond GuardNotRepo: never delete anything inside the repo dir.
+        string repoFull = Path.GetFullPath(repoDir);
+        string repoPrefix = repoFull.EndsWith(Path.DirectorySeparatorChar) ? repoFull : repoFull + Path.DirectorySeparatorChar;
+        bool InsideRepo(string p) { string f = Path.GetFullPath(p); return f == repoFull || f.StartsWith(repoPrefix, StringComparison.Ordinal); }
 
         var keep = new HashSet<string>(StringComparer.Ordinal);
         foreach (string rel in manifest.Regions.Keys) keep.Add(rel);
@@ -61,6 +85,7 @@ public static class Checkout
 
         foreach (string file in Directory.EnumerateFiles(worldOut, "*", SearchOption.AllDirectories))
         {
+            if (InsideRepo(file)) continue;
             string rel = Path.GetRelativePath(worldOut, file).Replace('\\', '/');
             if (rel == "session.lock" || keep.Contains(rel) || ignore.IsIgnored(rel)) continue;
             File.Delete(file);
@@ -70,6 +95,7 @@ public static class Checkout
         foreach (string dir in Directory.EnumerateDirectories(worldOut, "*", SearchOption.AllDirectories)
                      .OrderByDescending(d => d.Length)) // deepest first
         {
+            if (InsideRepo(dir)) continue;
             string rel = Path.GetRelativePath(worldOut, dir).Replace('\\', '/');
             if (keepDirs.Contains(rel) || ignore.IsIgnored(rel)) continue;
             if (!Directory.EnumerateFileSystemEntries(dir).Any()) Directory.Delete(dir);

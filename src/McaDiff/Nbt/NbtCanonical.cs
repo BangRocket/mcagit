@@ -12,8 +12,12 @@ namespace McaDiff.Nbt;
 /// </summary>
 public static class NbtCanonical
 {
+    /// <summary>Max NBT nesting we'll process — matches Minecraft's own 512-deep cap. A
+    /// hostile chunk nested thousands deep would otherwise overflow the stack (uncatchable).</summary>
+    internal const int MaxDepth = 512;
+
     public static byte[] Serialize(NbtCompound root)
-        => new NbtFile((NbtCompound)Sorted(root)) { BigEndian = true }.SaveToBuffer(NbtCompression.None);
+        => new NbtFile((NbtCompound)Sorted(root, 0)) { BigEndian = true }.SaveToBuffer(NbtCompression.None);
 
     public static NbtCompound Deserialize(byte[] bytes)
     {
@@ -23,22 +27,43 @@ public static class NbtCanonical
     }
 
     /// <summary>Deep clone with compound children ordered by name (lists keep order).</summary>
-    private static NbtTag Sorted(NbtTag tag)
+    private static NbtTag Sorted(NbtTag tag, int depth)
     {
+        if (depth > MaxDepth) throw new InvalidDataException($"NBT nesting exceeds {MaxDepth} levels");
         switch (tag.TagType)
         {
             case NbtTagType.Compound:
                 var c = tag.Name is null ? new NbtCompound() : new NbtCompound(tag.Name);
                 foreach (NbtTag child in ((NbtCompound)tag).OrderBy(t => t.Name, StringComparer.Ordinal))
-                    c.Add(Sorted(child));
+                    c.Add(Sorted(child, depth + 1));
                 return c;
             case NbtTagType.List:
                 var src = (NbtList)tag;
                 var list = MakeList(tag.Name, src.ListType);
-                foreach (NbtTag e in src) list.Add(Sorted(e));
+                foreach (NbtTag e in src) list.Add(Sorted(e, depth + 1));
                 return list;
+            // Copy array backing stores explicitly: fNbt's Clone() may share the array, which on
+            // the canonical-hash path would make dedup depend on the fNbt version / later mutation.
+            case NbtTagType.ByteArray:
+            {
+                var a = (NbtByteArray)tag;
+                byte[] copy = (byte[])a.Value.Clone();
+                return a.Name is null ? new NbtByteArray(copy) : new NbtByteArray(a.Name, copy);
+            }
+            case NbtTagType.IntArray:
+            {
+                var a = (NbtIntArray)tag;
+                int[] copy = (int[])a.Value.Clone();
+                return a.Name is null ? new NbtIntArray(copy) : new NbtIntArray(a.Name, copy);
+            }
+            case NbtTagType.LongArray:
+            {
+                var a = (NbtLongArray)tag;
+                long[] copy = (long[])a.Value.Clone();
+                return a.Name is null ? new NbtLongArray(copy) : new NbtLongArray(a.Name, copy);
+            }
             default:
-                return (NbtTag)tag.Clone();
+                return (NbtTag)tag.Clone(); // scalars
         }
     }
 

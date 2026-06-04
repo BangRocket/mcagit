@@ -333,13 +333,24 @@ bisect convergence and the staging index; and HEAD@{n}, stash (+gc survival), re
 (+`--onto`), clean, and hooks. One test additionally parses a real region file when
 `MCADIFF_TEST_REGION` points at one (auto-skipped otherwise).
 
+## Minecraft version support
+
+Targets the **Anvil** format. Safe floor is **DataVersion 2724 (1.17)**; below it the
+pre-1.18 `Level`-compound shape and pre-1.16 straddled `block_states` packing make
+paths and comparisons unreliable. All chunk compression types are decoded:
+GZip (1), Zlib (2), uncompressed (3), and **LZ4 frame (4)** — the latter is the
+`region-file-compression=lz4` server setting shipped since 1.20.5, so worlds saved
+with it diff/commit at full per-chunk granularity (was previously demoted to an opaque
+blob). Only type 127 (Custom, a namespaced mod algorithm) is undecodable and falls back
+to a raw blob. Data-pack/mod dimensions under `dimensions/<ns>/<path>/` are included.
+Excluded: Alpha/Beta/MCRegion (`.mcr`, pre-1.2.1) — a different container.
+
 ## Limitations
 
-- **LZ4-compressed chunks** (compression type 4, an opt-in server setting) are
-  detected and reported as unsupported — neither decoded, patched, nor committed
-  semantically (such a region is stored as a raw blob instead).
 - No block-coordinate-level decode of palettes (a changed `block_states` array is
-  reported as an array diff, not as `(x,y,z): stone → air`).
+  reported as an array diff, not as `(x,y,z): stone → air`; this also means re-encoded
+  sections — e.g. a single-block section's optional `data` array appearing/disappearing —
+  can read as a representation change). A semantic block-state decoder is future work.
 - `diff`/`extract`/`status` never modify a world. `apply` writes only to the fresh
   output directory it creates; `checkout` / `reset --hard` / `bisect` / `merge` update
   the bound worktree in place (a full checkout prunes files not in the snapshot).

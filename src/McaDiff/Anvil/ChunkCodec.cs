@@ -1,8 +1,9 @@
 using fNbt;
+using K4os.Compression.LZ4.Streams;
 
 namespace McaDiff.Anvil;
 
-/// <summary>Thrown when a chunk uses a compression scheme we cannot decode (e.g. LZ4).</summary>
+/// <summary>Thrown when a chunk uses a compression scheme we cannot decode (type 127 Custom).</summary>
 public sealed class UnsupportedChunkException(ChunkPos pos, ChunkCompression compression)
     : Exception($"Chunk {pos} uses unsupported compression {compression}.")
 {
@@ -20,17 +21,43 @@ public static class ChunkCodec
     /// </summary>
     public static NbtCompound Decode(RawChunk chunk)
     {
+        // LZ4 (type 4, region-file-compression=lz4 since 1.20.5) is an LZ4 *frame* wrapping
+        // uncompressed NBT — decode the frame, then hand the plain NBT to fNbt.
+        if (chunk.Compression == ChunkCompression.Lz4)
+        {
+            byte[] nbt = Lz4Decode(chunk.Payload);
+            var lz4File = new NbtFile { BigEndian = true };
+            lz4File.LoadFromBuffer(nbt, 0, nbt.Length, NbtCompression.None);
+            return lz4File.RootTag;
+        }
+
         NbtCompression compression = chunk.Compression switch
         {
             ChunkCompression.GZip => NbtCompression.GZip,
             ChunkCompression.ZLib => NbtCompression.ZLib,
             ChunkCompression.None => NbtCompression.None,
-            _ => throw new UnsupportedChunkException(chunk.Pos, chunk.Compression),
+            _ => throw new UnsupportedChunkException(chunk.Pos, chunk.Compression), // type 127 Custom
         };
 
         var file = new NbtFile { BigEndian = true };
         file.LoadFromBuffer(chunk.Payload, 0, chunk.Payload.Length, compression);
         return file.RootTag;
+    }
+
+    private static byte[] Lz4Decode(byte[] frame)
+    {
+        using var input = new MemoryStream(frame);
+        using var lz4 = LZ4Stream.Decode(input);
+        using var output = new MemoryStream();
+        lz4.CopyTo(output);
+        return output.ToArray();
+    }
+
+    private static byte[] Lz4Encode(byte[] plain)
+    {
+        using var output = new MemoryStream();
+        using (var lz4 = LZ4Stream.Encode(output, leaveOpen: true)) lz4.Write(plain, 0, plain.Length);
+        return output.ToArray();
     }
 
     /// <summary>
@@ -39,6 +66,9 @@ public static class ChunkCodec
     /// </summary>
     public static byte[] Encode(NbtCompound root, ChunkCompression compression)
     {
+        if (compression == ChunkCompression.Lz4)
+            return Lz4Encode(new NbtFile(root) { BigEndian = true }.SaveToBuffer(NbtCompression.None));
+
         NbtCompression mapped = compression switch
         {
             ChunkCompression.GZip => NbtCompression.GZip,

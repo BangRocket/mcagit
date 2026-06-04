@@ -43,7 +43,10 @@ public sealed class Packfile : IDisposable
         string dir = Path.Combine(objectsDir, "pack");
         if (!Directory.Exists(dir)) yield break;
         foreach (string p in Directory.EnumerateFiles(dir, "*.pack").OrderBy(x => x, StringComparer.Ordinal))
-            yield return Open(p);
+            // Skip a .pack with no .idx — a crash between the two moves leaves an orphan, and
+            // without this its missing index would make every object read in the repo fail.
+            if (File.Exists(Path.ChangeExtension(p, ".idx")))
+                yield return Open(p);
     }
 
     public byte[]? Read(string hash) => _index.TryGetValue(hash, out long off) ? ReadAt(off) : null;
@@ -64,23 +67,30 @@ public sealed class Packfile : IDisposable
     {
         // Read enough to cover the entry header (type + up to two varints), then the payload.
         byte[] head = ReadBytes(off, 24);
+        if (head.Length == 0) throw new InvalidDataException("pack entry offset past end of file (truncated pack?)");
         int p = 0;
         byte type = head[p++];
         if (type == 0)
         {
             ulong compLen = ReadVarint(head, ref p);
-            byte[] comp = ReadBytes(off + p, (int)compLen);
-            return Inflate(comp);
+            return Inflate(ReadPayload(off + p, (int)compLen));
         }
         else
         {
             ulong rel = ReadVarint(head, ref p);
             ulong compLen = ReadVarint(head, ref p);
-            byte[] comp = ReadBytes(off + p, (int)compLen);
-            byte[] delta = Inflate(comp);
+            byte[] delta = Inflate(ReadPayload(off + p, (int)compLen));
             byte[] baseContent = ReadAt(off - (long)rel);
             return Delta.Apply(baseContent, delta);
         }
+    }
+
+    /// <summary>Reads exactly <paramref name="len"/> payload bytes, or throws (truncated pack).</summary>
+    private byte[] ReadPayload(long off, int len)
+    {
+        byte[] buf = ReadBytes(off, len);
+        if (buf.Length != len) throw new InvalidDataException("truncated pack object");
+        return buf;
     }
 
     private byte[] ReadBytes(long off, int n)
@@ -180,8 +190,10 @@ public sealed class Packfile : IDisposable
 
     private static string PackId(IEnumerable<string> orderedHashes)
     {
+        // Hash the SET (sorted), not the write order — so the same reachable objects always
+        // yield the same pack id and a second gc with a different sort order is a no-op (idempotent).
         var sb = new System.Text.StringBuilder();
-        foreach (string h in orderedHashes) sb.Append(h);
+        foreach (string h in orderedHashes.OrderBy(x => x, StringComparer.Ordinal)) sb.Append(h);
         return Convert.ToHexStringLower(SHA256.HashData(System.Text.Encoding.ASCII.GetBytes(sb.ToString())))[..40];
     }
 
@@ -206,8 +218,12 @@ public sealed class Packfile : IDisposable
         byte[] b = File.ReadAllBytes(idxPath);
         if (b.Length < 9 || b[0] != 'M' || b[1] != 'C' || b[2] != 'A' || b[3] != 'I')
             throw new InvalidDataException($"not a pack index: {idxPath}");
+        if (b[4] != Version)
+            throw new InvalidDataException($"pack index version {b[4]} unsupported (this build writes/reads v{Version})");
         int p = 5;
         int count = ReadInt32(b, ref p);
+        if (count < 0 || 9L + (long)count * 40 > b.Length) // 40 bytes/entry (32 hash + 8 offset)
+            throw new InvalidDataException($"corrupt pack index: bad entry count {count}");
         var map = new Dictionary<string, long>(count);
         for (int i = 0; i < count; i++)
         {
@@ -248,6 +264,7 @@ public sealed class Packfile : IDisposable
         int shift = 0;
         while (true)
         {
+            if (p >= buf.Length) throw new InvalidDataException("truncated varint in pack");
             byte b = buf[p++];
             v |= (ulong)(b & 0x7F) << shift;
             if ((b & 0x80) == 0) return v;
