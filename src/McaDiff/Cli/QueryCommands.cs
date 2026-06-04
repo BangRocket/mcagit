@@ -32,12 +32,42 @@ public static class QueryCommands
         return 0;
     }
 
+    public static int Players(string? dashC, string[] a)
+    {
+        var (pos, opts) = ArgParser.Parse(a, [], ["--json"]);
+        if (ResolveWorld(dashC, pos, 0) is not { } world) return NoWorld();
+        var players = new WorldQuery(world).Players().ToList();
+        if (opts.ContainsKey("--json")) Console.WriteLine(JsonSerializer.Serialize(players, Json));
+        else foreach (PlayerHit p in players)
+            Console.WriteLine($"{p.Source}  ({p.X:0.#},{p.Y:0.#},{p.Z:0.#}) [{p.Dimension}]"
+                + (p.Health >= 0 ? $"  {p.Health:0.#} hp" : "") + $"  gamemode {p.GameMode}");
+        return Report(players.Count, "player(s)");
+    }
+
+    public static int Poi(string? dashC, string[] a)
+    {
+        var (pos, opts) = ArgParser.Parse(a, ["--type", "--near", "--radius", "--dim"], ["--json"]);
+        if (ResolveWorld(dashC, pos, 0) is not { } world) return NoWorld();
+        (int, int, int)? near = ParseNear(opts.GetValueOrDefault("--near"), out string? e);
+        if (e is not null) return Err(e);
+        int radius = int.TryParse(opts.GetValueOrDefault("--radius"), out int rr) ? rr : 64;
+        var hits = new WorldQuery(world, opts.GetValueOrDefault("--dim") ?? "")
+            .Poi(opts.GetValueOrDefault("--type"), near, radius).ToList();
+        if (opts.ContainsKey("--json")) Console.WriteLine(JsonSerializer.Serialize(hits, Json));
+        else foreach (PoiHit h in hits) Console.WriteLine($"{h.Type}  ({h.X},{h.Y},{h.Z})  [{h.Region}]");
+        return Report(hits.Count, "point(s) of interest");
+    }
+
     public static int Find(string? dashC, string[] a)
     {
-        var (pos, opts) = ArgParser.Parse(a, ["--near", "--radius", "--dim"], ["--json"]);
-        if (pos.Count < 2) return Err("usage: find <entity|block-entity> <id> [<world>] [--near x,y,z] [--radius N] [--dim D] [--json]");
-        string kind = pos[0], id = pos[1];
-        if (ResolveWorld(dashC, pos, 2) is not { } world) return NoWorld();
+        var (pos, opts) = ArgParser.Parse(a, ["--near", "--radius", "--dim", "--text"], ["--json"]);
+        if (pos.Count < 1) return Err("usage: find <entity|block-entity|sign> ... [<world>] [--near x,y,z] [--radius N] [--dim D] [--json]");
+        string kind = pos[0];
+        // sign matches by --text; entity/block-entity match by a positional <id>.
+        bool isSign = kind is "sign" or "signs";
+        string id = isSign ? "" : pos.Count > 1 ? pos[1] : "";
+        if (!isSign && pos.Count < 2) return Err("usage: find <entity|block-entity> <id> [<world>] ...");
+        if (ResolveWorld(dashC, pos, isSign ? 1 : 2) is not { } world) return NoWorld();
 
         (int, int, int)? near = ParseNear(opts.GetValueOrDefault("--near"), out string? nearErr);
         if (nearErr is not null) return Err(nearErr);
@@ -63,8 +93,16 @@ public static class QueryCommands
                         Console.WriteLine($"{h.Id}  ({h.X:0.#},{h.Y:0.#},{h.Z:0.#})" + (h.CustomName is null ? "" : $"  \"{h.CustomName}\"") + $"  [{h.Region}]");
                     return Report(hits.Count, $"entities matching '{id}'");
                 }
+            case "sign" or "signs":
+                {
+                    var hits = q.Signs(opts.GetValueOrDefault("--text"), near, radius).ToList();
+                    if (json) Console.WriteLine(JsonSerializer.Serialize(hits, Json));
+                    else foreach (SignHit h in hits)
+                        Console.WriteLine($"({h.X},{h.Y},{h.Z})  \"{string.Join(" / ", h.Lines)}\"  [{h.Region}]");
+                    return Report(hits.Count, opts.GetValueOrDefault("--text") is { } p ? $"signs containing '{p}'" : "signs");
+                }
             default:
-                return Err($"unknown find kind '{kind}' (use: entity | block-entity)");
+                return Err($"unknown find kind '{kind}' (use: entity | block-entity | sign)");
         }
     }
 

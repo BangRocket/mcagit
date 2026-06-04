@@ -69,6 +69,63 @@ public sealed class WorldQuery
             }
     }
 
+    /// <summary>Players' last-saved state: single-player (<c>level.dat</c> → <c>Data.Player</c>) plus
+    /// every <c>playerdata/&lt;uuid&gt;.dat</c>.</summary>
+    public IEnumerable<PlayerHit> Players()
+    {
+        string levelDat = Path.Combine(_worldRoot, "level.dat");
+        if (File.Exists(levelDat) && TryLoad(levelDat) is { } lvl
+            && lvl.Get<NbtCompound>("Data")?.Get<NbtCompound>("Player") is { } sp)
+            yield return ToPlayer("singleplayer", sp);
+
+        string playerDir = Path.Combine(_worldRoot, "playerdata");
+        if (Directory.Exists(playerDir))
+            foreach (string f in Directory.EnumerateFiles(playerDir, "*.dat"))
+                if (TryLoad(f) is { } p)
+                    yield return ToPlayer(Path.GetFileNameWithoutExtension(f), p);
+    }
+
+    /// <summary>Points of interest (beds / workstations / portals) from the <c>poi/</c> region files.</summary>
+    public IEnumerable<PoiHit> Poi(string? typeFilter = null, (int X, int Y, int Z)? near = null, int radius = 64)
+    {
+        foreach ((NbtCompound root, string region) in Chunks("poi"))
+        {
+            if (root.Get<NbtCompound>("Sections") is not { } sections) continue;
+            foreach (NbtTag secTag in sections)
+            {
+                if (secTag is not NbtCompound sec || sec.Get<NbtList>("Records") is not { } records) continue;
+                foreach (NbtTag rt in records)
+                {
+                    if (rt is not NbtCompound rec || rec.Get<NbtIntArray>("pos")?.Value is not { Length: 3 } p) continue;
+                    string type = rec.Get<NbtString>("type")?.Value ?? "?";
+                    if (!Matches(type, typeFilter) || !InRange(p[0], p[1], p[2], near, radius)) continue;
+                    yield return new PoiHit(type, p[0], p[1], p[2], region);
+                }
+            }
+        }
+    }
+
+    /// <summary>Signs whose text contains <paramref name="pattern"/> (case-insensitive), across the
+    /// 1.20+ <c>front_text/back_text.messages</c> and legacy <c>Text1..4</c> formats.</summary>
+    public IEnumerable<SignHit> Signs(string? pattern = null, (int X, int Y, int Z)? near = null, int radius = 64)
+    {
+        foreach ((NbtCompound root, string region) in Chunks("region"))
+        {
+            NbtList? list = root.Get<NbtList>("block_entities") ?? root.Get<NbtCompound>("Level")?.Get<NbtList>("TileEntities");
+            if (list is null) continue;
+            foreach (NbtTag t in list)
+            {
+                if (t is not NbtCompound be || be.Get<NbtString>("id")?.Value is not { } id || !id.Contains("sign", StringComparison.OrdinalIgnoreCase)) continue;
+                int x = be.Get<NbtInt>("x")?.Value ?? 0, y = be.Get<NbtInt>("y")?.Value ?? 0, z = be.Get<NbtInt>("z")?.Value ?? 0;
+                if (!InRange(x, y, z, near, radius)) continue;
+                List<string> lines = SignLines(be);
+                if (lines.Count == 0) continue;
+                if (pattern is not null && !lines.Any(l => l.Contains(pattern, StringComparison.OrdinalIgnoreCase))) continue;
+                yield return new SignHit(x, y, z, lines, region);
+            }
+        }
+    }
+
     /// <summary>The block (and biome) at an absolute coordinate, or null if the chunk/section isn't present.</summary>
     public BlockInspect? BlockAt(int x, int y, int z)
     {
@@ -125,4 +182,62 @@ public sealed class WorldQuery
 
     private static string? CustomName(NbtCompound e) =>
         e.Get<NbtString>("CustomName")?.Value is { Length: > 0 } n ? n : null;
+
+    private static NbtCompound? TryLoad(string path)
+    {
+        try { return ChunkCodec.LoadNbtFile(path); } catch { return null; }
+    }
+
+    private static PlayerHit ToPlayer(string source, NbtCompound p)
+    {
+        double x = 0, y = 0, z = 0;
+        if (p["Pos"] is NbtList { Count: 3 } pos) { x = D(pos[0]); y = D(pos[1]); z = D(pos[2]); }
+        // Dimension was a TAG_Int (0/-1/1) pre-1.16, a TAG_String after — use the non-throwing indexer.
+        string dim = p["Dimension"] switch
+        {
+            NbtString s => s.Value,
+            NbtInt { Value: -1 } => "minecraft:the_nether",
+            NbtInt { Value: 1 } => "minecraft:the_end",
+            _ => "minecraft:overworld",
+        };
+        double health = p["Health"] is NbtFloat h ? h.Value : -1;
+        int gm = p["playerGameType"] is NbtInt g ? g.Value : -1;
+        return new PlayerHit(source, x, y, z, dim, health, gm);
+    }
+
+    private static List<string> SignLines(NbtCompound sign)
+    {
+        var lines = new List<string>();
+        foreach (string side in new[] { "front_text", "back_text" }) // 1.20+ (DV 3709)
+            if (sign.Get<NbtCompound>(side)?.Get<NbtList>("messages") is { } msgs)
+                foreach (NbtTag m in msgs)
+                    if (m is NbtString s && PlainText(s.Value) is { Length: > 0 } txt) lines.Add(txt);
+        for (int i = 1; i <= 4; i++) // legacy Text1..Text4
+            if (sign.Get<NbtString>($"Text{i}")?.Value is { } legacy && PlainText(legacy) is { Length: > 0 } txt) lines.Add(txt);
+        return lines;
+    }
+
+    /// <summary>Sign lines are JSON text components (<c>{"text":"…"}</c>) or plain strings — pull out
+    /// the visible text best-effort, leaving anything unrecognized as-is.</summary>
+    private static string PlainText(string raw)
+    {
+        string t = raw.Trim();
+        if (t.Length == 0 || t == "\"\"" || t == "{}") return "";
+        if (t.StartsWith('{') || t.StartsWith('['))
+            try
+            {
+                using var doc = System.Text.Json.JsonDocument.Parse(t);
+                return ExtractText(doc.RootElement);
+            }
+            catch { /* not valid JSON → use raw */ }
+        return t.Trim('"');
+    }
+
+    private static string ExtractText(System.Text.Json.JsonElement e) => e.ValueKind switch
+    {
+        System.Text.Json.JsonValueKind.String => e.GetString() ?? "",
+        System.Text.Json.JsonValueKind.Object => e.TryGetProperty("text", out var tx) ? tx.GetString() ?? "" : "",
+        System.Text.Json.JsonValueKind.Array => string.Concat(e.EnumerateArray().Select(ExtractText)),
+        _ => "",
+    };
 }

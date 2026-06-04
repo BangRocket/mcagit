@@ -101,6 +101,24 @@ on the chunks nearest the player. Use `--summary` for a per-file overview.
 
 **Exit codes** (git convention): `0` = identical, `1` = differences found, `2` = error.
 
+## Inspect a world
+
+Beyond "what changed", mcadiff can answer "what *is* the world right now" — read-only
+queries over the same parsed NBT (they never modify the world; exit `0` found / `1`
+none / `2` error, so they script cleanly):
+
+```sh
+mcadiff inspect -2 -60 -7 <world>            # block + biome at a coordinate
+mcadiff find block-entity chest <world> --near 0,64,0 --radius 128
+mcadiff find entity zombie <world>           # mobs/frames/stands (entities/ + legacy)
+mcadiff find sign <world> --text spawn       # signs whose text matches (1.20+ and legacy)
+mcadiff players <world>                       # last-saved positions / health / gamemode
+mcadiff poi <world> --type bed                # points of interest (beds/workstations/portals)
+```
+
+All take an optional `<world>` (defaults to the bound worktree), `--dim overworld|nether|end`,
+and `--json`. The block lookup uses the same palette decoder as the coordinate-level diff.
+
 ## What gets compared
 
 For a world folder, across the overworld and the `DIM-1` / `DIM1` dimensions:

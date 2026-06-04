@@ -60,6 +60,55 @@ public class QueryTests
         Assert.Equal(8.5, hit.X);
     }
 
+    [Fact]
+    public void Players_ReadsSinglePlayer_AndPlayerdata()
+    {
+        string world = TestAnvil.TempDir("qp");
+        var player = new NbtCompound("Player")
+        {
+            new NbtList("Pos", NbtTagType.Double) { new NbtDouble(1.5), new NbtDouble(64), new NbtDouble(-2.5) },
+            new NbtString("Dimension", "minecraft:overworld"),
+            new NbtFloat("Health", 18f),
+            new NbtInt("playerGameType", 0),
+        };
+        TestAnvil.WriteLoose(Path.Combine(world, "level.dat"), TestAnvil.Root(new NbtCompound("Data") { player }));
+        TestAnvil.WriteLoose(Path.Combine(world, "playerdata", "abc.dat"), TestAnvil.Root(
+            new NbtList("Pos", NbtTagType.Double) { new NbtDouble(100), new NbtDouble(70), new NbtDouble(100) },
+            new NbtInt("Dimension", -1), new NbtFloat("Health", 20f), new NbtInt("playerGameType", 1)));
+
+        var players = new WorldQuery(world).Players().ToList();
+        Assert.Equal(2, players.Count);
+        PlayerHit sp = Assert.Single(players, p => p.Source == "singleplayer");
+        Assert.Equal(1.5, sp.X);
+        Assert.Equal(18, sp.Health);
+        Assert.Equal("minecraft:the_nether", Assert.Single(players, p => p.Source == "abc").Dimension); // int -1 → nether
+    }
+
+    [Fact]
+    public void Poi_FindsRecords_ByTypeAndRange()
+    {
+        var record = new NbtCompound { new NbtString("type", "minecraft:home"), new NbtIntArray("pos", [10, 64, 20]) };
+        var sections = new NbtCompound("Sections") { new NbtCompound("4") { new NbtList("Records", NbtTagType.Compound) { record } } };
+        string world = WorldWithRegion("poi", new ChunkPos(0, 0), TestAnvil.Root(new NbtInt("DataVersion", 3953), sections));
+
+        PoiHit hit = Assert.Single(new WorldQuery(world).Poi("home"));
+        Assert.Equal((10, 64, 20), (hit.X, hit.Y, hit.Z));
+        Assert.Empty(new WorldQuery(world).Poi("home", near: (-500, 64, -500), radius: 10));
+    }
+
+    [Fact]
+    public void Signs_MatchByText_AcrossFormats()
+    {
+        var sign = TestAnvil.BlockEntity("minecraft:oak_sign", 3, 70, 4,
+            new NbtCompound("front_text") { new NbtList("messages", NbtTagType.String) { new NbtString("{\"text\":\"Welcome home\"}"), new NbtString("\"\"") } });
+        string world = WorldWithRegion("region", new ChunkPos(0, 0),
+            TestAnvil.Root(new NbtInt("DataVersion", 3953), new NbtList("block_entities", NbtTagType.Compound) { sign }));
+
+        SignHit hit = Assert.Single(new WorldQuery(world).Signs("home"));
+        Assert.Contains("Welcome home", hit.Lines);          // JSON text component unwrapped
+        Assert.Empty(new WorldQuery(world).Signs("nonexistent"));
+    }
+
     // ---- builders ----
 
     private static int Cell(int x, int y, int z) => (y * 16 + z) * 16 + x;
