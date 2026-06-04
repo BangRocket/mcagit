@@ -50,7 +50,7 @@ public static class Bisect
         {
             string h = stack.Pop();
             if (!set.Add(h)) continue;
-            foreach (string p in repo.ReadCommit(h).Parents) stack.Push(p);
+            foreach (string p in repo.ParentsOf(h)) stack.Push(p);
         }
         return set;
     }

@@ -468,7 +468,7 @@ public sealed class Repository
 
             if (c == '^')
             {
-                List<string> parents = ReadCommit(commit).Parents;
+                List<string> parents = ParentsOf(commit);
                 if (n < 1 || n > parents.Count) throw new InvalidOperationException($"{full}: no parent {n}");
                 commit = parents[n - 1];
             }
@@ -476,7 +476,7 @@ public sealed class Repository
             {
                 for (int k = 0; k < n; k++)
                 {
-                    List<string> parents = ReadCommit(commit).Parents;
+                    List<string> parents = ParentsOf(commit);
                     if (parents.Count == 0) throw new InvalidOperationException($"{full}: no ancestor");
                     commit = parents[0];
                 }
@@ -488,6 +488,35 @@ public sealed class Repository
     // Ref names can arrive from the network (push/fetch over stdio/http) — confine them so
     // a name like "../../HEAD" or "../config" can't escape refs/heads or refs/tags.
     private string TagPath(string name) => PathGuard.Confine(Path.Combine(Dir, "refs", "tags"), name);
+
+    // ---- shallow history graft (a depth-limited clone has no parents past the boundary) ----
+
+    private string ShallowPath => Path.Combine(Dir, "shallow");
+    private HashSet<string>? _shallow;
+
+    /// <summary>Commits whose parents were intentionally not fetched (the shallow boundary).
+    /// History/reachability walks treat these as parentless roots.</summary>
+    public IReadOnlySet<string> ShallowBoundary =>
+        _shallow ??= File.Exists(ShallowPath)
+            ? File.ReadAllLines(ShallowPath).Select(l => l.Trim()).Where(l => l.Length > 0).ToHashSet(StringComparer.Ordinal)
+            : new HashSet<string>(StringComparer.Ordinal);
+
+    public bool IsShallow => ShallowBoundary.Count > 0;
+
+    /// <summary>Parents of <paramref name="commit"/>, grafted to empty at a shallow boundary —
+    /// the single chokepoint every history/reachability walk goes through so a pruned parent
+    /// terminates the walk instead of faulting on a missing object.</summary>
+    public List<string> ParentsOf(string commit) =>
+        ShallowBoundary.Contains(commit) ? [] : ReadCommit(commit).Parents;
+
+    /// <summary>Records the shallow boundary (replacing any prior one). Empty list clears it.</summary>
+    public void WriteShallow(IEnumerable<string> boundary)
+    {
+        var set = boundary.ToHashSet(StringComparer.Ordinal);
+        if (set.Count == 0) { if (File.Exists(ShallowPath)) File.Delete(ShallowPath); }
+        else File.WriteAllText(ShallowPath, string.Join('\n', set.OrderBy(h => h, StringComparer.Ordinal)) + "\n");
+        _shallow = set;
+    }
 
     // ---- typed object IO ----
 

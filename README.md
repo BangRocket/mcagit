@@ -230,19 +230,28 @@ Pre-commit / post-commit **hooks** run from `<repo>/hooks/`.
 ### Remotes & maintenance
 
 Sync history between repositories — push world backups offsite or pull them down.
-A remote is a **path**, an **`http(s)://`** URL, or **`ssh://`**. Because objects
-are content-addressed, transfer copies only what the other side lacks.
+A remote is a **path**, an **`http(s)://`** URL, **`ssh://`**, or a serverless
+cloud bucket (**`azure://`**, **`s3://`**). Because objects are content-addressed,
+transfer copies only what the other side lacks.
 
 ```sh
-mcadiff clone <src> <dest> [--token T]        # src: path | http(s):// | ssh://
+mcadiff clone <src> <dest> [--depth N] [--token T]   # src: path | http(s):// | ssh:// | azure:// | s3://
 mcadiff remote add origin <url>
 mcadiff push  [<remote> [<branch>]] [--force] [--token T]   # fast-forward-checked
 mcadiff fetch [<remote> [<branch>]] [--token T]            # into refs/remotes/<remote>/*
 mcadiff push  [<remote>] --all                # push every branch
 mcadiff ls-remote [<remote>]                  # list a remote's refs
+mcadiff verify-remote [<remote>] [--deep]     # check offsite integrity (--deep: hash every object)
 mcadiff reflog                                # HEAD movement history
 mcadiff gc                                    # repack reachable objects + prune the rest
 ```
+
+**`--depth N`** makes a *shallow* clone — only the last N commits, with their worlds
+fully intact. History is grafted at the boundary (older commits look like roots), so
+`log`/`checkout`/`gc`/`fsck` all work; operations that need the pruned history (a diff
+of the boundary commit against its absent parent, a merge across it) aren't available —
+the same constraint git's shallow clones have. Good for "just pull the latest snapshot"
+disaster recovery without dragging down the whole backup history.
 
 **Serving over the network** (git's model — anonymous read, authenticated push):
 
@@ -257,6 +266,39 @@ mcadiff push origin main --token s3cret                # authenticated
 mcadiff clone ssh://user@host/path/to/world.mcagit ./world.mcagit
 mcadiff push  ssh://user@host/path/to/world.mcagit main
 ```
+
+**Serverless cloud buckets** (no daemon — push straight to object storage). There's
+nothing to run server-side: the whole protocol is client-side. A push bundles the
+objects the bucket lacks into **one** content-addressed pack and updates the branch
+ref with a compare-and-swap, so it's ≈3 bucket writes regardless of how many chunks
+changed (cheap against per-request billing) and concurrent pushes can't clobber each
+other.
+
+```sh
+# Azure Blob Storage — azure://<account>/<container>/<path>
+export AZURE_STORAGE_CONNECTION_STRING='…'     # or: AZURE_STORAGE_KEY (+ account from the URL)
+mcadiff clone azure://myacct/backups/world ./world.mcagit
+mcadiff push  azure://myacct/backups/world main
+
+# Any S3-compatible store (AWS, Cloudflare R2, Backblaze B2, MinIO) — s3://<bucket>/<path>
+export AWS_ACCESS_KEY_ID=… AWS_SECRET_ACCESS_KEY=… AWS_REGION=us-east-1
+export S3_ENDPOINT_URL='https://…'             # only for non-AWS providers (R2/B2/MinIO)
+mcadiff push s3://my-bucket/world main
+```
+
+Credentials come from the env (Azure: connection string, or account + `AZURE_STORAGE_KEY`;
+S3: the standard AWS credential chain). Anyone with write access to the bucket can push,
+so scope the credentials per backup. The compare-and-swap that guards refs needs the
+provider to honor conditional writes — Azure Blob always does; S3 (If-Match, 2024+) and
+R2 do. `verify-remote` walks the bucket's history and confirms every referenced object is
+present (`--deep` re-hashes each one) — a quick offsite bit-rot / partial-upload check.
+
+> **Encryption:** bucket objects are content-addressed but **not encrypted at rest by
+> mcadiff** — a world's NBT is recoverable by anyone who can read the bucket. For private
+> backups, rely on the provider's server-side encryption (SSE) and tight bucket ACLs.
+> Client-side (zero-knowledge) encryption would need to be record-level — encrypting whole
+> objects breaks cross-snapshot dedup, the very thing that makes incremental pushes cheap —
+> and isn't implemented yet.
 
 - **Whole-world snapshots:** region/entities/poi as deduped per-chunk objects,
   loose NBT as canonical objects, everything else (datapacks, stats, advancements)
@@ -301,6 +343,8 @@ src/McaDiff/
              PatchApplier
   Repo/      ObjectStore, Repository, Manifest, Snapshotter,— content-addressed VCS:
              Checkout, StatusCalc, MergeBase, Merger          commit/log/status/checkout/merge
+             RemoteOps, Transports, IBucket, BucketTransport,— sync: local/http/ssh + serverless
+             CloudBuckets, Packfile, Fsck                      cloud buckets, packs, integrity
   Model/     WorldSource                                    — world layout discovery
   Output/    TextDiffFormatter, JsonDiffFormatter, Ansi     — rendering
   Cli/       Diff/Extract/ApplyOptions, RepoCommands,       — subcommand dispatch
@@ -312,6 +356,10 @@ The Anvil region container (8 KiB sector header + per-chunk compression) is pars
 and written directly; `fNbt` handles the NBT tag tree (GZip/ZLib/uncompressed). A
 single tree walk (`NbtComparer` + `IDiffSink`) feeds both the display diff and the
 patch extractor, so they can never drift.
+
+The serverless cloud backend (bucket layout, the pack-based push protocol, the
+compare-and-swap concurrency model, and the encryption stance) is written up in
+[`docs/cloud-backend.md`](docs/cloud-backend.md).
 
 ## Tests
 

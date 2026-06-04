@@ -25,10 +25,10 @@ public static class RemoteOps
         return FetchInto(repo, t, branch, IsName(remote) ? remote : "origin");
     }
 
-    public static void Clone(string url, string dstDir, string? token)
+    public static void Clone(string url, string dstDir, string? token, int depth = 0)
     {
         using IRemoteTransport t = Transports.Connect(url, token);
-        CloneFrom(t, dstDir, url);
+        CloneFrom(t, dstDir, url, depth);
     }
 
     // ---- transport-agnostic cores (also used by tests with an injected transport) ----
@@ -72,24 +72,28 @@ public static class RemoteOps
         return copied;
     }
 
-    public static void CloneFrom(IRemoteTransport t, string dstDir, string originUrl)
+    public static void CloneFrom(IRemoteTransport t, string dstDir, string originUrl, int depth = 0)
     {
         Repository dst = Repository.Init(dstDir);
         dst.AddRemote("origin", originUrl);
 
         RefAdvertisement refs = t.ListRefs();
+        var boundary = new HashSet<string>(StringComparer.Ordinal);
         foreach ((string b, string tip) in refs.Branches)
         {
-            FetchReachable(dst, t, tip);
+            FetchTip(dst, t, tip, depth, boundary);
             dst.WriteBranch(b, tip);
             dst.WriteRemoteTracking("origin", b, tip);
         }
-        foreach ((string tag, string h) in refs.Tags)
-        {
-            FetchReachable(dst, t, h);
-            dst.WriteTag(tag, h);
-        }
+        // A shallow clone skips tags: they may point into the pruned history.
+        if (depth <= 0)
+            foreach ((string tag, string h) in refs.Tags)
+            {
+                FetchReachable(dst, t, h);
+                dst.WriteTag(tag, h);
+            }
         dst.SetHeadToBranch(refs.Head ?? Repository.DefaultBranch);
+        if (boundary.Count > 0) dst.WriteShallow(boundary);
     }
 
     /// <summary>Pulls every object reachable from <paramref name="tip"/> that the local repo lacks.</summary>
@@ -113,6 +117,34 @@ public static class RemoteOps
         return copied;
     }
 
+    /// <summary>Fetches a tip with optional depth limit. When <paramref name="depth"/> &gt; 0,
+    /// walks at most that many commits deep (BFS, so the first time a commit is seen is at its
+    /// minimum depth) and records commits whose parents were pruned into <paramref name="boundary"/>.</summary>
+    private static void FetchTip(Repository repo, IRemoteTransport t, string tip, int depth, HashSet<string> boundary)
+    {
+        if (depth <= 0) { FetchReachable(repo, t, tip); return; }
+
+        var minDepth = new Dictionary<string, int>(StringComparer.Ordinal);
+        var queue = new Queue<(string Hash, int Depth)>();
+        queue.Enqueue((tip, 1));
+        while (queue.Count > 0)
+        {
+            (string h, int d) = queue.Dequeue();
+            if (!minDepth.TryAdd(h, d)) continue; // first dequeue is the minimum depth (FIFO levels)
+
+            if (!repo.Objects.Exists(h)) repo.Objects.ImportRaw(h, t.GetObject(h));
+            CommitObject c = repo.ReadCommit(h);
+            if (!repo.Objects.Exists(c.Tree)) repo.Objects.ImportRaw(c.Tree, t.GetObject(c.Tree));
+            foreach (string obj in ManifestObjects(repo.ReadManifest(c.Tree)))
+                if (!repo.Objects.Exists(obj)) repo.Objects.ImportRaw(obj, t.GetObject(obj));
+
+            if (d < depth)
+                foreach (string p in c.Parents) queue.Enqueue((p, d + 1));
+            else if (c.Parents.Count > 0)
+                boundary.Add(h); // pruned this commit's parents → it's a shallow boundary
+        }
+    }
+
     private static IEnumerable<string> ManifestObjects(Manifest m)
     {
         foreach (var region in m.Regions.Values)
@@ -122,4 +154,72 @@ public static class RemoteOps
     }
 
     private static bool IsName(string remote) => Regex.IsMatch(remote, "^[A-Za-z0-9._-]+$");
+
+    // ---- remote verify (offsite integrity: walk refs → objects over the transport) ----
+
+    public sealed record VerifyResult(int Branches, int Commits, int Objects, List<string> Missing, List<string> Corrupt)
+    {
+        public bool Ok => Missing.Count == 0 && Corrupt.Count == 0;
+    }
+
+    /// <summary>Walks every branch's history on the remote, confirming each commit/tree
+    /// decodes to its hash and every referenced leaf object is present (with <paramref name="deep"/>,
+    /// also hash-checks each leaf — downloads everything). Catches partial uploads / bit-rot offsite.</summary>
+    public static VerifyResult Verify(IRemoteTransport t, bool deep)
+    {
+        RefAdvertisement refs = t.ListRefs();
+        var seen = new HashSet<string>();
+        var leaves = new HashSet<string>();
+        var missing = new List<string>();
+        var corrupt = new List<string>();
+        int commits = 0;
+
+        var stack = new Stack<string>();
+        foreach (string tip in refs.Branches.Values) stack.Push(tip);
+        while (stack.Count > 0)
+        {
+            string h = stack.Pop();
+            if (!seen.Add(h)) continue;
+            if (Fetch1(t, h) is not { } content) { missing.Add($"{h} (commit)"); continue; }
+            if (Hash(content) != h) { corrupt.Add($"{h} (commit)"); continue; }
+
+            CommitObject c;
+            try { c = CommitObject.FromJson(System.Text.Encoding.UTF8.GetString(content)); }
+            catch { corrupt.Add($"{h} (commit)"); continue; }
+            commits++;
+
+            if (Fetch1(t, c.Tree) is not { } treeBytes) missing.Add($"{c.Tree} (tree of {h[..10]})");
+            else if (Hash(treeBytes) != c.Tree) corrupt.Add($"{c.Tree} (tree)");
+            else
+                try { foreach (string leaf in ManifestObjects(Manifest.FromJson(System.Text.Encoding.UTF8.GetString(treeBytes)))) leaves.Add(leaf); }
+                catch { corrupt.Add($"{c.Tree} (tree)"); }
+
+            foreach (string p in c.Parents) stack.Push(p);
+        }
+
+        if (deep)
+            foreach (string leaf in leaves)
+                if (Fetch1(t, leaf) is not { } b) missing.Add(leaf);
+                else if (Hash(b) != leaf) corrupt.Add(leaf);
+        else
+            missing.AddRange(t.Missing(leaves.ToList()));
+
+        return new VerifyResult(refs.Branches.Count, commits, seen.Count + leaves.Count, missing, corrupt);
+    }
+
+    private static byte[]? Fetch1(IRemoteTransport t, string hash)
+    {
+        try
+        {
+            byte[] compressed = t.GetObject(hash);
+            using var ms = new MemoryStream(compressed);
+            using var z = new System.IO.Compression.ZLibStream(ms, System.IO.Compression.CompressionMode.Decompress);
+            using var outMs = new MemoryStream();
+            z.CopyTo(outMs);
+            return outMs.ToArray();
+        }
+        catch { return null; }
+    }
+
+    private static string Hash(byte[] content) => Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(content));
 }

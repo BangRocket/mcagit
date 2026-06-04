@@ -156,7 +156,7 @@ public static class RepoCommands
         for (string? cur = start; cur is not null;)
         {
             list.Add(cur);
-            List<string> parents = repo.ReadCommit(cur).Parents;
+            List<string> parents = repo.ParentsOf(cur);
             cur = parents.Count > 0 ? parents[0] : null;
         }
         return list;
@@ -191,7 +191,7 @@ public static class RepoCommands
         {
             string h = stack.Pop();
             if (!set.Add(h)) continue;
-            foreach (string p in repo.ReadCommit(h).Parents) stack.Push(p);
+            foreach (string p in repo.ParentsOf(h)) stack.Push(p);
         }
         return set;
     }
@@ -599,12 +599,15 @@ public static class RepoCommands
 
     public static int Clone(string? dashC, string[] a)
     {
-        var (pos, opts) = Parse(a, ["--token"], []);
-        if (pos.Count < 2) return Err("usage: clone <src> <dest> [--token T]  (src: path, http(s)://, or ssh://)");
+        var (pos, opts) = Parse(a, ["--token", "--depth"], []);
+        if (pos.Count < 2) return Err("usage: clone <src> <dest> [--depth N] [--token T]  (src: path, http(s)://, ssh://, azure://, or s3://)");
         if (Repository.IsRepository(pos[1])) return Err($"already a repository: {pos[1]}");
-        try { RemoteOps.Clone(pos[0], pos[1], Token(opts)); }
+        int depth = 0;
+        if (opts.GetValueOrDefault("--depth") is { } ds && (!int.TryParse(ds, out depth) || depth < 1))
+            return Err("--depth must be a positive integer");
+        try { RemoteOps.Clone(pos[0], pos[1], Token(opts), depth); }
         catch (Exception ex) { return Err(ex.Message); }
-        Console.Error.WriteLine($"Cloned {pos[0]} -> {pos[1]}");
+        Console.Error.WriteLine($"Cloned {pos[0]} -> {pos[1]}" + (depth > 0 ? $" (shallow, depth {depth})" : ""));
         return 0;
     }
 
@@ -1182,6 +1185,27 @@ public static class RepoCommands
             foreach (var kv in refs.Tags) Console.WriteLine($"{kv.Value}\trefs/tags/{kv.Key}");
             if (refs.Head is { } hd) Console.WriteLine($"{refs.Branches.GetValueOrDefault(hd) ?? ""}\tHEAD"); // git format: <hash>\tHEAD
             return 0;
+        }
+        catch (Exception ex) { return Err(ex.Message); }
+    }
+
+    public static int VerifyRemote(string? dashC, string[] a)
+    {
+        var (pos, opts) = Parse(a, ["--token"], ["--deep"]);
+        if (Open(dashC) is not { } repo) return NoRepo();
+        string remote = pos.Count > 0 ? pos[0] : "origin";
+        string url = repo.GetRemote(remote) ?? remote;
+        try
+        {
+            using IRemoteTransport t = Transports.Connect(url, Token(opts));
+            RemoteOps.VerifyResult r = RemoteOps.Verify(t, opts.ContainsKey("--deep"));
+            Console.Error.WriteLine($"{remote}: {r.Branches} branch(es), {r.Commits} commit(s), {r.Objects} object(s) checked"
+                + (opts.ContainsKey("--deep") ? " (deep)" : ""));
+            foreach (string m in r.Missing) Console.Error.WriteLine($"  missing: {m}");
+            foreach (string c in r.Corrupt) Console.Error.WriteLine($"  corrupt: {c}");
+            if (r.Ok) { Console.Error.WriteLine($"{remote}: ok"); return 0; }
+            Console.Error.WriteLine($"{remote}: {r.Missing.Count} missing, {r.Corrupt.Count} corrupt");
+            return 1;
         }
         catch (Exception ex) { return Err(ex.Message); }
     }

@@ -66,7 +66,7 @@ public static class Fsck
                 }
             }
 
-            foreach (string p in commit.Parents) Enqueue(p, $"commit {c[..10]}");
+            foreach (string p in repo.ParentsOf(c)) Enqueue(p, $"commit {c[..10]}"); // grafted: a shallow boundary has no parents to require
         }
 
         // 3. Dangling — present but reachable from nothing.

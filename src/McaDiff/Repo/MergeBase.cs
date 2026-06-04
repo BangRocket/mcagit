@@ -16,7 +16,7 @@ public static class MergeBase
         {
             string h = stack.Pop();
             if (!ancestorsOfA.Add(h)) continue;
-            foreach (string p in repo.ReadCommit(h).Parents) stack.Push(p);
+            foreach (string p in repo.ParentsOf(h)) stack.Push(p);
         }
 
         var seen = new HashSet<string>();
@@ -27,7 +27,7 @@ public static class MergeBase
             string h = queue.Dequeue();
             if (!seen.Add(h)) continue;
             if (ancestorsOfA.Contains(h)) return h;
-            foreach (string p in repo.ReadCommit(h).Parents) queue.Enqueue(p);
+            foreach (string p in repo.ParentsOf(h)) queue.Enqueue(p);
         }
         return null;
     }
@@ -61,7 +61,7 @@ public static class MergeBase
         {
             string h = stack.Pop();
             if (!set.Add(h)) continue;
-            foreach (string p in repo.ReadCommit(h).Parents) stack.Push(p);
+            foreach (string p in repo.ParentsOf(h)) stack.Push(p);
         }
         return set;
     }
@@ -78,7 +78,7 @@ public static class MergeBase
             string h = stack.Pop();
             if (h == anc) return true;
             if (!seen.Add(h)) continue;
-            foreach (string p in repo.ReadCommit(h).Parents) stack.Push(p);
+            foreach (string p in repo.ParentsOf(h)) stack.Push(p);
         }
         return false;
     }

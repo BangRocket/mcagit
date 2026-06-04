@@ -25,8 +25,8 @@ public static class Transfer
             foreach (string objHash in ManifestObjects(src.ReadManifest(c.Tree)))
                 copied += Import(dst, src.Objects, objHash);
 
-            foreach (string p in c.Parents)
-                if (!dst.Exists(p)) stack.Push(p);                  // prune shared history
+            foreach (string p in src.ParentsOf(h))
+                if (!dst.Exists(p)) stack.Push(p);                  // prune shared history (+ shallow boundary)
         }
         return copied;
     }
@@ -43,7 +43,7 @@ public static class Transfer
             CommitObject c = repo.ReadCommit(h);
             into.Add(c.Tree);
             foreach (string objHash in ManifestObjects(repo.ReadManifest(c.Tree))) into.Add(objHash);
-            foreach (string p in c.Parents) stack.Push(p);
+            foreach (string p in repo.ParentsOf(h)) stack.Push(p);
         }
     }
 
@@ -58,7 +58,7 @@ public static class Transfer
             string h = stack.Pop();
             if (h == ancestor) return true;
             if (!seen.Add(h)) continue;
-            foreach (string p in repo.ReadCommit(h).Parents) stack.Push(p);
+            foreach (string p in repo.ParentsOf(h)) stack.Push(p);
         }
         return false;
     }

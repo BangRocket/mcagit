@@ -122,7 +122,54 @@ public class BucketTransportTests
         Assert.Equal(c2, ReadRemoteBranch(bucket, "main"));
     }
 
+    [Fact]
+    public void VerifyRemote_CleanRepo_ReportsOk()
+    {
+        Repository origin = Repository.Init(TestAnvil.TempDir("bv"));
+        CommitWorld(origin, World(1), "c0");
+        CommitWorld(origin, World(2), "c1");
+        var bucket = new InMemoryBucket();
+        Push(origin, bucket, "main");
+
+        using var t = new BucketTransport(bucket, "world");
+        RemoteOps.VerifyResult shallow = RemoteOps.Verify(t, deep: false);
+        Assert.True(shallow.Ok);
+        Assert.Equal(1, shallow.Branches);
+        Assert.Equal(2, shallow.Commits);
+        Assert.Empty(shallow.Missing);
+        Assert.Empty(shallow.Corrupt);
+
+        using var t2 = new BucketTransport(bucket, "world");
+        Assert.True(RemoteOps.Verify(t2, deep: true).Ok); // hashes every leaf too
+    }
+
+    [Fact]
+    public void VerifyRemote_MissingPack_DetectedAcrossParentWalk()
+    {
+        // Two pushes → two packs (parent in pack #1, tip in pack #2). Delete the parent's pack;
+        // the tip still verifies, but walking to its parent surfaces the loss.
+        Repository origin = Repository.Init(TestAnvil.TempDir("bvm"));
+        CommitWorld(origin, World(1), "c0");
+        var bucket = new InMemoryBucket();
+        Push(origin, bucket, "main");
+        string parentPack = ManifestIds(bucket).Single();   // pack #1 holds c0
+        CommitWorld(origin, World(2), "c1");
+        Push(origin, bucket, "main");
+
+        bucket.Delete($"world/packs/{parentPack}");
+        bucket.Delete($"world/packs/{parentPack}.idx");
+
+        using var t = new BucketTransport(bucket, "world");
+        RemoteOps.VerifyResult r = RemoteOps.Verify(t, deep: false);
+        Assert.False(r.Ok);
+        Assert.Contains(r.Missing, m => m.Contains("(commit)")); // the parent commit is gone
+    }
+
     // ---- helpers ----
+
+    private static List<string> ManifestIds(IBucket bucket) =>
+        System.Text.Encoding.UTF8.GetString(bucket.Get("world/packs/manifest").Data!)
+            .Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries).ToList();
 
     private static void Push(Repository repo, IBucket bucket, string branch)
     {

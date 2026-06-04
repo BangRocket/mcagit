@@ -48,6 +48,7 @@ return cmd switch
     "fetch" => RepoCommands.Fetch(dashC, tail[1..]),
     "push" => RepoCommands.Push(dashC, tail[1..]),
     "ls-remote" => RepoCommands.LsRemote(dashC, tail[1..]),
+    "verify-remote" => RepoCommands.VerifyRemote(dashC, tail[1..]),
     "serve" => RepoCommands.Serve(dashC, tail[1..]),
     "serve-stdio" => RepoCommands.ServeStdio(dashC, tail[1..]),
     "reflog" => RepoCommands.Reflog(dashC, tail[1..]),
@@ -234,11 +235,12 @@ partial class Program
             mcadiff config [--global] <key> [<v>] | --list | --unset <key>
 
         REMOTES (path, http://, ssh://) & MAINTENANCE
-            mcadiff clone <src> <dest> [--token T]
+            mcadiff clone <src> <dest> [--depth N] [--token T]   --depth N: shallow clone (last N commits)
             mcadiff remote [add <name> <url>]     url: path | http(s)://host:port | ssh://host/path
             mcadiff fetch [<remote> [<branch>]] [--token T]
             mcadiff push  [<remote> [<branch>]] [--force|--all] [--token T]
             mcadiff ls-remote [<remote>] [--token T]   List a remote's refs
+            mcadiff verify-remote [<remote>] [--deep] [--token T]   Check offsite integrity (--deep: hash every object)
             mcadiff serve [<repo>] [--port N] [--host H] [--allow-push] [--token T]
             mcadiff reflog                        HEAD movement history
             mcadiff gc                            Prune unreachable objects
