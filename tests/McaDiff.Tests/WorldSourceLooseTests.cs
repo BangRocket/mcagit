@@ -1,6 +1,5 @@
 using fNbt;
 using McaDiff.Diff;
-using McaDiff.Patch;
 using Xunit;
 
 namespace McaDiff.Tests;
@@ -26,38 +25,34 @@ public class WorldSourceLooseTests
     }
 
     [Fact]
-    public void AdvancementsJson_DiffedAsBlob_NoCrash()
+    public void JsonAndMcc_SingleFileDiff_AreBlobs_NotNbtParsed()
     {
-        string a = World(w => WriteText(Path.Combine(w, "advancements", "p.json"), "{}"));
-        string b = World(w => WriteText(Path.Combine(w, "advancements", "p.json"), "{\"done\":true}"));
+        // World-level enumeration skips non-NBT files (the v1 patch can't carry a blob), but a
+        // single-file diff of JSON / .mcc still works as a byte compare — and must not NBT-parse them.
+        WorldDiff json = WorldDiffer.Diff(File4("p.json", [123, 125]), File4("p.json", [123, 49, 125]), Opt());
+        Assert.Equal("blob", Assert.Single(json.Files).Category);
 
-        WorldDiff diff = WorldDiffer.Diff(a, b, new DiffRunOptions()); // must not throw NBT-parsing JSON
-        FileDiff f = Assert.Single(diff.Files);
-        Assert.Equal("advancements/p.json", f.RelativePath);
-        Assert.Equal("blob", f.Category);
-        Assert.Equal(DiffStatus.Modified, f.Status);
+        WorldDiff mcc = WorldDiffer.Diff(File4("c.0.0.mcc", [1, 2, 3, 4]), File4("c.0.0.mcc", [1, 2, 3, 9]), Opt());
+        Assert.Equal("blob", Assert.Single(mcc.Files).Category);
     }
 
     [Fact]
-    public void MccFile_SingleFileDiff_IsBlobNotNbt()
+    public void AdvancementsJson_NotEnumeratedAtWorldLevel()
     {
-        string dir = TestAnvil.TempDir("mcc");
-        string a = Path.Combine(dir, "c.0.0.mcc"), b = Path.Combine(dir, "c.0.0.b.mcc");
-        File.WriteAllBytes(a, [1, 2, 3, 4]);
-        File.WriteAllBytes(b, [1, 2, 3, 9]);
-
-        WorldDiff diff = WorldDiffer.Diff(a, b, new DiffRunOptions()); // single-file path, must not NBT-parse
-        Assert.Equal("blob", Assert.Single(diff.Files).Category);
-    }
-
-    [Fact]
-    public void Extract_SkipsBlobs()
-    {
+        // The whole-world diff doesn't surface JSON (it would break the patch round-trip).
         string a = World(w => WriteText(Path.Combine(w, "advancements", "p.json"), "{}"));
         string b = World(w => WriteText(Path.Combine(w, "advancements", "p.json"), "{\"done\":true}"));
+        Assert.False(WorldDiffer.Diff(a, b, new DiffRunOptions()).HasDifferences);
+    }
 
-        WorldPatch patch = PatchExtractor.Extract(a, b, new DiffRunOptions()); // must not throw
-        Assert.Empty(patch.Files); // a JSON blob isn't representable as node ops
+    private static DiffRunOptions Opt() => new();
+
+    private static string File4(string name, byte[] bytes)
+    {
+        string dir = TestAnvil.TempDir("wsf");
+        string p = Path.Combine(dir, name);
+        File.WriteAllBytes(p, bytes);
+        return p;
     }
 
     private static void WriteText(string path, string text)

@@ -23,8 +23,11 @@ public static class WorldSource
     // Chunk-bearing categories (each holds r.X.Z.mca files).
     private static readonly string[] RegionCategories = ["region", "entities", "poi"];
 
-    // Loose file globs, relative to the world root. Category "nbt" → parsed + NBT-diffed;
-    // "blob" → byte-compared (non-NBT: advancements/stats JSON). Covers per-dimension data too.
+    // Loose NBT globs, relative to the world root (covers per-dimension data too). Non-NBT files
+    // (advancements/stats JSON) are intentionally NOT enumerated at the world level: the patch format
+    // (v1) can't carry a raw blob, so diffing them would break the extract→apply round-trip. They are
+    // still byte-comparable via a single-file diff (see ResolveFile). The repo commit path captures
+    // them as blobs via its whole-tree walk, so backups are unaffected.
     private static readonly (string Dir, string Pattern, string Category)[] LoosePatterns =
     [
         ("", "level.dat", "nbt"),
@@ -33,8 +36,6 @@ public static class WorldSource
         ("data", "*.nbt", "nbt"),          // custom structures
         ("DIM-1/data", "*.dat", "nbt"),
         ("DIM1/data", "*.dat", "nbt"),
-        ("advancements", "*.json", "blob"),
-        ("stats", "*.json", "blob"),
     ];
 
     public static bool IsDirectory(string path) => Directory.Exists(path);
