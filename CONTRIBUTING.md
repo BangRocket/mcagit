@@ -1,6 +1,6 @@
 # Contributing to mcadiff
 
-Thanks for helping. mcadiff is a single .NET 9 console app (`src/McaDiff`, assembly `mcadiff`) plus an xUnit test project. The only runtime dependencies are `fNbt` and `K4os.Compression.LZ4`.
+Thanks for helping. mcadiff is a single .NET 10 (LTS) console app (`src/McaDiff`, assembly `mcadiff`) plus an xUnit test project. Runtime dependencies: `fNbt`, `K4os.Compression.LZ4`, and `Azure.Storage.Blobs` / `AWSSDK.S3` (cloud remotes).
 
 ## Build and test
 
@@ -12,7 +12,7 @@ dotnet test --filter "DisplayName~merge"               # by name fragment
 dotnet run --project src/McaDiff -- <args>             # run the CLI
 ```
 
-On a machine whose default .NET runtime is newer than 9, set `DOTNET_ROLL_FORWARD=LatestMajor`.
+Targets `net10.0`; install the .NET 10 SDK.
 
 ## Before you push
 

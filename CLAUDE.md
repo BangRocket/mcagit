@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-`mcadiff` — a semantic, git-style diff/patch/version-control tool for Anvil-format Minecraft (Java Edition) worlds. Single .NET 9 console app (`src/McaDiff`, assembly name `mcadiff`) + xUnit test project. Only external dependency: `fNbt` (NBT tag tree parsing).
+`mcadiff` — a semantic, git-style diff/patch/version-control tool for Anvil-format Minecraft (Java Edition) worlds. Single .NET 10 (LTS) console app (`src/McaDiff`, assembly name `mcadiff`) + xUnit test project. External dependencies: `fNbt` (NBT tag tree parsing), `K4os.Compression.LZ4` (LZ4 chunks), plus `Azure.Storage.Blobs` / `AWSSDK.S3` for cloud remotes.
 
 ## Commands
 
@@ -58,7 +58,7 @@ Project agents live in `.claude/agents/` (their descriptions say what they do). 
 
 Before opening a PR, in this order:
 
-1. `dotnet test` — full suite green locally. (Note: local machines without the .NET 9 runtime need `DOTNET_ROLL_FORWARD=LatestMajor`.)
+1. `dotnet test` — full suite green locally. (Targets `net10.0`; needs the .NET 10 SDK.)
 2. Map the branch diff (`git diff main...HEAD --stat`) against the delegation rules above and run **every** agent whose paths are touched — a PR spanning `Diff/` and `Repo/` gets both the invariant review and the gauntlet.
 3. `trust-boundary-exploit-hunter` additionally runs if the diff touches anything reachable from untrusted input (network, patch apply, checkout path handling), even if the rule paths above don't match.
 4. Surface agent findings in the PR description: BLOCKERs must be fixed before opening; WARNs may ship but get listed.

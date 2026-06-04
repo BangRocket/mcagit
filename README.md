@@ -41,14 +41,14 @@ On Windows, download the `win-x64` `.zip` and run `mcadiff.exe`.
 
 ## Build from source
 
-Requires the **.NET 9 SDK**; the only NuGet dependencies (`fNbt`, `K4os.Compression.LZ4`) restore automatically.
+Requires the **.NET 10 SDK** (LTS); the only NuGet dependencies (`fNbt`, `K4os.Compression.LZ4`) restore automatically.
 
 ```sh
 dotnet build -c Release
 dotnet run --project src/McaDiff -- <A> <B>     # or run the built mcadiff binary
 ```
 
-If your machine's default runtime is newer than .NET 9, set `DOTNET_ROLL_FORWARD=LatestMajor`. (.NET 9 is an STS release, out of support 2026-11-10 — prefer .NET 10 LTS for long-term source builds; published binaries are self-contained and unaffected.)
+mcadiff targets **.NET 10 (LTS)**. The published release binaries are self-contained, so end users need no .NET runtime at all.
 
 `<A>` and `<B>` are either **two world folders** or **two single files**
 (`.mca` region files or `.dat` loose NBT files).
