@@ -424,10 +424,12 @@ Excluded: Alpha/Beta/MCRegion (`.mcr`, pre-1.2.1) — a different container.
 
 ## Limitations
 
-- No block-coordinate-level decode of palettes (a changed `block_states` array is
-  reported as an array diff, not as `(x,y,z): stone → air`; this also means re-encoded
-  sections — e.g. a single-block section's optional `data` array appearing/disappearing —
-  can read as a representation change). A semantic block-state decoder is future work.
+- Block and biome changes are decoded to **coordinate level** — a changed section
+  reports `sections[Y].block_states[@x,y,z]: minecraft:stone → minecraft:air` rather than
+  an opaque `long[]` delta (a section changed wholesale, e.g. worldgen or `/fill`,
+  collapses to a one-line summary; `--expand` lists every cell). Heightmaps and other
+  packed arrays are still shown as array diffs. This is a **display** enrichment: the
+  patch path stores the raw array, so `apply` is unaffected.
 - `diff`/`extract`/`status` never modify a world. `apply` writes only to the fresh
   output directory it creates; `checkout` / `reset --hard` / `bisect` / `merge` update
   the bound worktree in place (a full checkout prunes files not in the snapshot).

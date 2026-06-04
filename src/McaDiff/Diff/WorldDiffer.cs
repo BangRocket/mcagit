@@ -124,7 +124,13 @@ public static class WorldDiffer
                     var rootB = ChunkCodec.Decode(cb);
                     ChunkNormalize.DropRedundantPaletteData(rootA);
                     ChunkNormalize.DropRedundantPaletteData(rootB);
+                    // Coordinate-level block/biome diff, then strip the paletted containers so the
+                    // generic walk doesn't also emit their opaque long[] deltas.
+                    List<NbtChange> blockChanges = BlockDiff.Diff(rootA, rootB, options.ExpandArrays);
+                    BlockDiff.StripPalettedContainers(rootA);
+                    BlockDiff.StripPalettedContainers(rootB);
                     List<NbtChange> changes = NbtComparer.Compare(rootA, rootB, options.Nbt);
+                    changes.AddRange(blockChanges);
                     if (changes.Count > 0)
                         chunkDiffs.Add(new ChunkDiff(pos, DiffStatus.Modified, changes));
                 }
