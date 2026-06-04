@@ -65,6 +65,8 @@ int Dispatch() => cmd switch
     "reflog" => RepoCommands.Reflog(dashC, tail[1..]),
     "gc" => RepoCommands.GcCmd(dashC, tail[1..]),
     "fsck" => RepoCommands.FsckCmd(dashC, tail[1..]),
+    "inspect" => QueryCommands.Inspect(dashC, tail[1..]),
+    "find" => QueryCommands.Find(dashC, tail[1..]),
     "rev-parse" => RepoCommands.RevParse(dashC, tail[1..]),
     "cat-file" => RepoCommands.CatFile(dashC, tail[1..]),
     "hash-object" => RepoCommands.HashObject(dashC, tail[1..]),
@@ -97,6 +99,7 @@ static string? NearestCommand(string token)
         "checkout", "reset", "restore", "revert", "branch", "tag", "merge", "cherry-pick", "rebase",
         "stash", "clean", "config", "remote", "clone", "fetch", "push", "ls-remote", "verify-remote",
         "serve", "reflog", "gc", "fsck", "rev-parse", "cat-file", "hash-object", "ls-tree",
+        "inspect", "find",
     ];
     string? best = null;
     int bestD = int.MaxValue;
@@ -307,6 +310,10 @@ partial class Program
             mcadiff reflog                        HEAD movement history
             mcadiff gc                            Prune unreachable objects
             mcadiff fsck                          Verify object integrity + reachability
+
+        WORLD INSPECTION (read-only; 0 found / 1 none / 2 error)
+            mcadiff inspect <x> <y> <z> [<world>] [--dim D] [--json]   Block + biome at a coordinate
+            mcadiff find <entity|block-entity> <id> [<world>] [--near x,y,z] [--radius N] [--dim D] [--json]
 
         PLUMBING
             mcadiff rev-parse [--short|--abbrev-ref] <rev>...
