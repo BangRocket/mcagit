@@ -10,12 +10,14 @@ namespace McaDiff.Repo;
 /// </summary>
 public sealed class Manifest
 {
-    public SortedDictionary<string, SortedDictionary<string, string>> Regions { get; set; } = new(StringComparer.Ordinal);
-    public SortedDictionary<string, string> Nbt { get; set; } = new(StringComparer.Ordinal);
-    public SortedDictionary<string, string> Blobs { get; set; } = new(StringComparer.Ordinal);
+    // Explicit JSON names: these keys are load-bearing in every stored manifest, so a C#
+    // property rename must not silently change the on-disk contract and orphan existing repos.
+    [JsonPropertyName("regions")] public SortedDictionary<string, SortedDictionary<string, string>> Regions { get; set; } = new(StringComparer.Ordinal);
+    [JsonPropertyName("nbt")] public SortedDictionary<string, string> Nbt { get; set; } = new(StringComparer.Ordinal);
+    [JsonPropertyName("blobs")] public SortedDictionary<string, string> Blobs { get; set; } = new(StringComparer.Ordinal);
 
     /// <summary>Directories with no files — recorded so checkout reproduces them (git tracks none).</summary>
-    public List<string> EmptyDirs { get; set; } = [];
+    [JsonPropertyName("emptyDirs")] public List<string> EmptyDirs { get; set; } = [];
 
     public string ToJson() => JsonSerializer.Serialize(this, RepoJson.Options);
     public static Manifest FromJson(string json) =>
@@ -25,18 +27,18 @@ public sealed class Manifest
 /// <summary>A commit: a snapshot (<see cref="Tree"/>) plus history and metadata.</summary>
 public sealed class CommitObject
 {
-    public string Tree { get; set; } = "";
-    public List<string> Parents { get; set; } = [];
-    public string Message { get; set; } = "";
-    public string Author { get; set; } = "";
-    public string Time { get; set; } = ""; // ISO-8601 author date
+    [JsonPropertyName("tree")] public string Tree { get; set; } = "";
+    [JsonPropertyName("parents")] public List<string> Parents { get; set; } = [];
+    [JsonPropertyName("message")] public string Message { get; set; } = "";
+    [JsonPropertyName("author")] public string Author { get; set; } = "";
+    [JsonPropertyName("time")] public string Time { get; set; } = ""; // ISO-8601 author date
     // Committer defaults to the author for a plain commit; cherry-pick/revert/rebase
     // preserve the original Author while recording who replayed it here. Older commit
     // objects predate these fields and deserialize with them null/empty.
-    public string? Committer { get; set; }
-    public string? CommitTime { get; set; } // ISO-8601 commit date
+    [JsonPropertyName("committer")] public string? Committer { get; set; }
+    [JsonPropertyName("commitTime")] public string? CommitTime { get; set; } // ISO-8601 commit date
     /// <summary>SSH-format signature over <see cref="SignablePayload"/>, if signed.</summary>
-    public string? Signature { get; set; }
+    [JsonPropertyName("signature")] public string? Signature { get; set; }
 
     [JsonIgnore] public string CommitterOrAuthor => string.IsNullOrEmpty(Committer) ? Author : Committer;
     [JsonIgnore] public string CommitDate => string.IsNullOrEmpty(CommitTime) ? Time : CommitTime;
@@ -64,13 +66,13 @@ public sealed class CommitObject
 /// </summary>
 public sealed class TagObject
 {
-    public string Object { get; set; } = "";   // target hash (a commit)
-    public string Type { get; set; } = "commit";
-    public string Tag { get; set; } = "";       // the tag name
-    public string Tagger { get; set; } = "";
-    public string Time { get; set; } = "";      // ISO-8601
-    public string Message { get; set; } = "";
-    public string? Signature { get; set; }
+    [JsonPropertyName("object")] public string Object { get; set; } = "";   // target hash (a commit)
+    [JsonPropertyName("type")] public string Type { get; set; } = "commit";
+    [JsonPropertyName("tag")] public string Tag { get; set; } = "";       // the tag name
+    [JsonPropertyName("tagger")] public string Tagger { get; set; } = "";
+    [JsonPropertyName("time")] public string Time { get; set; } = "";      // ISO-8601
+    [JsonPropertyName("message")] public string Message { get; set; } = "";
+    [JsonPropertyName("signature")] public string? Signature { get; set; }
 
     public string SignablePayload()
     {

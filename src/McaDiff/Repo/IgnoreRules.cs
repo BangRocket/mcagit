@@ -71,7 +71,8 @@ public sealed class IgnoreRules
             string[] segs = rel.Split('/');
             string name = segs[^1];
 
-            if (_glob is not null) return _glob.IsMatch(name);
+            // A glob with a '/' (e.g. data/*.dat) matches the whole relative path; otherwise just the name.
+            if (_glob is not null) return _glob.IsMatch(_pattern.Contains('/') ? rel : name);
             if (_anchored) return rel == _pattern || rel.StartsWith(_pattern + "/", StringComparison.Ordinal);
             if (_dir) return segs[..^1].Contains(_pattern); // a directory of that name on the path
             return rel == _pattern || name == _pattern || segs.Contains(_pattern);

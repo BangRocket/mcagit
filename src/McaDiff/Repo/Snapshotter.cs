@@ -104,18 +104,24 @@ public static class Snapshotter
             }
             return map; // may be empty (e.g. 0-byte poi region)
         }
-        catch
+        catch (Exception e) when (IsParseFailure(e))
         {
-            return null; // not a region container / undecodable → store as a raw blob
+            return null; // genuinely not a region container / undecodable → store as a raw blob
         }
     }
+
+    /// <summary>True for "this file isn't a parseable region/NBT" errors (→ blob fallback). A real
+    /// IOException (disk error) or OutOfMemoryException propagates so a commit fails loudly rather
+    /// than silently storing a corrupt blob — but a structurally-short file (EndOfStream) is a blob.</summary>
+    private static bool IsParseFailure(Exception e)
+        => e is EndOfStreamException || e is not (IOException or OutOfMemoryException);
 
     private static string? TryNbt(string fullPath, Ctx ctx)
     {
         // Retry so a rare transient failure can't misclassify valid NBT as a blob
         // (which would make manifests nondeterministic); genuine non-NBT → blob.
         try { return Put(NbtCanonical.Serialize(Retry(() => ChunkCodec.LoadNbtFile(fullPath))), ctx); }
-        catch { return null; }
+        catch (Exception e) when (IsParseFailure(e)) { return null; }
     }
 
     /// <summary>Runs <paramref name="action"/>, retrying twice on failure before letting it throw.</summary>
