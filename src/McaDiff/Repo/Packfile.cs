@@ -14,15 +14,18 @@ namespace McaDiff.Repo;
 public sealed class Packfile : IDisposable
 {
     private const byte Version = 1;
-    private const int MaxDepth = 50;     // longest delta chain we build
+    private const int MaxDepth = 50;     // longest delta chain we build (and accept on read)
     private const int Window = 10;       // delta-base candidates kept in flight
+    private const long MaxObjectBytes = 512L * 1024 * 1024; // per-object inflate cap (untrusted packs)
 
     private readonly SafeFileHandle _pack;
+    private readonly long _packLen;
     private readonly Dictionary<string, long> _index;
 
     private Packfile(SafeFileHandle pack, Dictionary<string, long> index)
     {
         _pack = pack;
+        _packLen = RandomAccess.GetLength(pack);
         _index = index;
     }
 
@@ -49,7 +52,7 @@ public sealed class Packfile : IDisposable
                 yield return Open(p);
     }
 
-    public byte[]? Read(string hash) => _index.TryGetValue(hash, out long off) ? ReadAt(off) : null;
+    public byte[]? Read(string hash) => _index.TryGetValue(hash, out long off) ? ReadAt(off, 0) : null;
 
     public string? ResolvePrefix(string prefix)
     {
@@ -63,8 +66,14 @@ public sealed class Packfile : IDisposable
         return match;
     }
 
-    private byte[] ReadAt(long off)
+    // Hardened against a hostile pack (a /pack push is untrusted): the delta chain is depth-capped
+    // and must strictly walk backward (no cycles / stack overflow), and every inflate is size-bounded
+    // (no decompression bomb) before ObjectStore re-verifies the hash.
+    private byte[] ReadAt(long off, int depth)
     {
+        if (depth > MaxDepth) throw new InvalidDataException("pack delta chain too deep");
+        if (off < 0 || off >= _packLen) throw new InvalidDataException("pack entry offset out of range");
+
         // Read enough to cover the entry header (type + up to two varints), then the payload.
         byte[] head = ReadBytes(off, 24);
         if (head.Length == 0) throw new InvalidDataException("pack entry offset past end of file (truncated pack?)");
@@ -73,23 +82,27 @@ public sealed class Packfile : IDisposable
         if (type == 0)
         {
             ulong compLen = ReadVarint(head, ref p);
-            return Inflate(ReadPayload(off + p, (int)compLen));
+            return Inflate(ReadPayload(off + p, compLen));
         }
         else
         {
             ulong rel = ReadVarint(head, ref p);
             ulong compLen = ReadVarint(head, ref p);
-            byte[] delta = Inflate(ReadPayload(off + p, (int)compLen));
-            byte[] baseContent = ReadAt(off - (long)rel);
+            if (rel == 0 || (long)rel > off) throw new InvalidDataException("pack delta base out of range"); // must point strictly earlier
+            byte[] delta = Inflate(ReadPayload(off + p, compLen));
+            byte[] baseContent = ReadAt(off - (long)rel, depth + 1);
             return Delta.Apply(baseContent, delta);
         }
     }
 
-    /// <summary>Reads exactly <paramref name="len"/> payload bytes, or throws (truncated pack).</summary>
-    private byte[] ReadPayload(long off, int len)
+    /// <summary>Reads exactly <paramref name="len"/> payload bytes, or throws (truncated pack /
+    /// out-of-range length from an untrusted pack).</summary>
+    private byte[] ReadPayload(long off, ulong len)
     {
-        byte[] buf = ReadBytes(off, len);
-        if (buf.Length != len) throw new InvalidDataException("truncated pack object");
+        if (off < 0 || len > MaxObjectBytes || off + (long)len > _packLen)
+            throw new InvalidDataException("pack object length out of range");
+        byte[] buf = ReadBytes(off, (int)len);
+        if (buf.Length != (int)len) throw new InvalidDataException("truncated pack object");
         return buf;
     }
 
@@ -249,12 +262,22 @@ public sealed class Packfile : IDisposable
         return ms.ToArray();
     }
 
+    /// <summary>Inflates with an output cap so a crafted pack object can't decompression-bomb the
+    /// server: the expansion is bounded here, before <see cref="ObjectStore.ImportRaw"/> re-checks.</summary>
     private static byte[] Inflate(byte[] comp)
     {
         using var ms = new MemoryStream(comp);
         using var z = new ZLibStream(ms, CompressionMode.Decompress);
         using var outMs = new MemoryStream();
-        z.CopyTo(outMs);
+        var buf = new byte[81920];
+        long total = 0;
+        int r;
+        while ((r = z.Read(buf, 0, buf.Length)) > 0)
+        {
+            total += r;
+            if (total > MaxObjectBytes) throw new InvalidDataException("pack object inflates past the size cap (decompression bomb?)");
+            outMs.Write(buf, 0, r);
+        }
         return outMs.ToArray();
     }
 

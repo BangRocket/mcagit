@@ -42,6 +42,23 @@ public class PackTransferTests
     }
 
     [Fact]
+    public void ImportInto_RejectsOutOfRangeOffset_NoCrash()
+    {
+        // A hostile pack whose index points an object past EOF must be rejected cleanly
+        // (InvalidDataException), never an unhandled crash / OOB read.
+        byte[] a = "content"u8.ToArray();
+        (byte[] Pack, byte[] Idx)? built = PackTransfer.Build([(Hash(a), a)]);
+        byte[] idx = built!.Value.Idx;
+        // idx = [MCAI(4)][ver(1)][count(4)] then 40-byte entries (32 hash + 8 BE offset).
+        // Corrupt the first entry's offset (bytes 41..49) to point far past the pack.
+        System.Buffers.Binary.BinaryPrimitives.WriteInt64BigEndian(idx.AsSpan(9 + 32, 8), long.MaxValue / 2);
+
+        Repository repo = Repository.Init(TestAnvil.TempDir("pto"));
+        Assert.Throws<InvalidDataException>(() => PackTransfer.ImportInto(repo, built.Value.Pack, idx));
+        Assert.False(repo.Objects.Exists(Hash(a)));
+    }
+
+    [Fact]
     public void FrameBody_RoundTrips()
     {
         byte[] pack = [1, 2, 3, 4, 5];
