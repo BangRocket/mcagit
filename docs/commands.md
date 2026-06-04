@@ -31,6 +31,8 @@ Every `mcadiff` subcommand and its flags. A leading `-C <repo>` selects the repo
 | `init [<repo>]` | `--worktree <world>` | Refuses to scatter into a `level.dat` folder without `--worktree`. |
 | `add <path>…` | `--world <dir>` | Stage to the index. |
 | `commit -m <msg>` | `-S`, `--author A`, `--push [<remote>]`, `--token T`, `--json` | Exits 0 on nothing-to-commit (`--json` `committed` is the signal). |
+| `backup [-m <msg>]` | (same as `commit`) | Friendly alias for `commit`; auto-dates the message if none given. |
+| `undo` | `-y` | Discard changes since the last backup (restore the worktree to HEAD); confirms first. |
 | `status` | — | Worktree vs HEAD (and index). |
 | `log [<ref>\|<range>]` | `--oneline`, `-p`, `--stat`, `-n N`, `--author`, `--grep`, `--since`, `--until`, `--merges`, `--no-merges`, `--no-color` | Ranges `A..B` / `A...B`. |
 | `show <ref>` | `--no-color` | Commit metadata + diff vs parent. |

@@ -14,6 +14,26 @@ public class UxGuardTests
     private static NbtCompound Chunk() => TestAnvil.Root(new NbtInt("DataVersion", 3953), new NbtInt("a", 1));
 
     [Fact]
+    public void Undo_RestoresWorktreeToLastBackup()
+    {
+        Repository repo = Repository.Init(TestAnvil.TempDir("undoR"));
+        string world = TestAnvil.TempDir("undoW");
+        TestAnvil.WriteRegion(Path.Combine(world, "region", "r.0.0.mca"), (new ChunkPos(0, 0), Chunk()));
+        repo.Worktree = world;
+        string c = repo.CreateCommit(repo.WriteManifest(Snapshotter.Snapshot(repo, world)), [], "c0", "t");
+        repo.WriteBranch("main", c);
+        repo.SetHeadToBranch("main");
+
+        // "grief" the worktree, then undo.
+        TestAnvil.WriteRegion(Path.Combine(world, "region", "r.0.0.mca"),
+            (new ChunkPos(0, 0), TestAnvil.Root(new NbtInt("DataVersion", 3953), new NbtInt("a", 999))));
+        Assert.NotEmpty(StatusCalc.Compute(repo, world));
+
+        Assert.Equal(0, RepoCommands.Undo(repo.Dir, [])); // confirm auto-proceeds under redirected test stdin
+        Assert.Empty(StatusCalc.Compute(repo, world));     // back to the last backup
+    }
+
+    [Fact]
     public void Init_InsideWorldFolder_Refused()
     {
         string world = TestAnvil.TempDir("uxi");

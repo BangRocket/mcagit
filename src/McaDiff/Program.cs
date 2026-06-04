@@ -38,7 +38,8 @@ int Dispatch() => cmd switch
     "apply" => RunApply(tail[1..]),
     "init" => RepoCommands.Init(dashC, tail[1..]),
     "add" => RepoCommands.Add(dashC, tail[1..]),
-    "commit" => RepoCommands.Commit(dashC, tail[1..]),
+    "commit" or "backup" => RepoCommands.Commit(dashC, BackupArgs(cmd, tail[1..])),
+    "undo" => RepoCommands.Undo(dashC, tail[1..]),
     "bisect" => RepoCommands.Bisect(dashC, tail[1..]),
     "log" => RepoCommands.Log(dashC, tail[1..]),
     "show" => RepoCommands.Show(dashC, tail[1..]),
@@ -75,11 +76,37 @@ int Dispatch() => cmd switch
     "cat-file" => RepoCommands.CatFile(dashC, tail[1..]),
     "hash-object" => RepoCommands.HashObject(dashC, tail[1..]),
     "ls-tree" => RepoCommands.LsTree(dashC, tail[1..]),
-    null or "-h" or "--help" or "help" or "/?" or "-?" => Help(),
+    "-h" or "--help" or "help" or "/?" or "-?" => Help(),
+    null => ShortHelp(),
     _ => UnknownOrDiff(tail, dashC),
 };
 
 int Help() { Console.WriteLine(TopUsage); return 0; }
+
+// Goal-oriented screen for a bare invocation — the full git-style menu is behind `--help`.
+int ShortHelp()
+{
+    Console.WriteLine("""
+        mcadiff — back up, compare, and restore Minecraft worlds.
+
+          Set it up:        mcadiff init <repo>.mcagit --worktree <world>
+          Save a backup:    mcadiff -C <repo> backup -m "before the raid"
+          See what changed: mcadiff -C <repo> diff
+          Go back:          mcadiff -C <repo> undo            (discard changes since the last backup)
+                            mcadiff -C <repo> checkout <ref>  (restore a specific backup)
+          List backups:     mcadiff -C <repo> log --oneline
+
+        Full command list: mcadiff --help
+        """);
+    return 0;
+}
+
+// `backup` is `commit` with a friendly default message when none is given.
+static string[] BackupArgs(string? verb, string[] a)
+{
+    if (verb != "backup" || a.Contains("-m") || a.Contains("--message")) return a;
+    return [.. a, "-m", $"backup {DateTime.Now:yyyy-MM-dd HH:mm}"];
+}
 
 // `mcadiff <A> <B>` shorthand only when the first token is an existing path; otherwise it's a
 // mistyped/unknown subcommand — reject it (don't silently run a diff) and suggest the closest.
@@ -103,7 +130,7 @@ static string? NearestCommand(string token)
         "checkout", "reset", "restore", "revert", "branch", "tag", "merge", "cherry-pick", "rebase",
         "stash", "clean", "config", "remote", "clone", "fetch", "push", "ls-remote", "verify-remote",
         "serve", "reflog", "gc", "fsck", "rev-parse", "cat-file", "hash-object", "ls-tree",
-        "inspect", "find", "players", "poi", "where-changed",
+        "inspect", "find", "players", "poi", "where-changed", "backup", "undo",
     ];
     string? best = null;
     int bestD = int.MaxValue;
@@ -164,6 +191,11 @@ static WorldDiff RunFileDiff(string pathA, string pathB, DiffRunOptions opt)
     foreach (string p in new[] { pathA, pathB })
         if (!File.Exists(p) && !Directory.Exists(p))
             throw new FileNotFoundException($"path not found: {p}");
+    // A folder that's neither a world nor a region/loose file would diff as "No differences" —
+    // false reassurance. Warn so the user knows they pointed at the wrong thing (off-by-one folder).
+    foreach (string p in new[] { pathA, pathB })
+        if (Directory.Exists(p) && !File.Exists(Path.Combine(p, "level.dat")) && !Directory.Exists(Path.Combine(p, "region")))
+            Console.Error.WriteLine($"mcadiff: warning: '{p}' has no level.dat or region/ — is it a Minecraft world?");
     return WorldDiffer.Diff(pathA, pathB, opt);
 }
 

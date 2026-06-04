@@ -12,9 +12,33 @@ namespace McaDiff.Cli;
 /// </summary>
 public static class RepoCommands
 {
+    /// <summary>Friendly verb: discard uncommitted changes in the worktree, restoring it to the last
+    /// backup (HEAD). Same effect as `checkout HEAD --force`, in plain words and without the scary flag.</summary>
+    public static int Undo(string? dashC, string[] a)
+    {
+        var (_, opts) = Parse(a, [], ["-y", "--yes"]);
+        if (Open(dashC) is not { } repo) return NoRepo();
+        if (repo.Worktree is not { } world) return Err("no world bound — run inside a repo with a bound world");
+        if (repo.HeadCommit() is not { } head) return Err("no backups yet — nothing to undo to");
+        if (WorldLooksOpen(world)) return Err(WorldOpenMsg(world));
+        if (StatusCalc.Compute(repo, world).Count == 0) { Console.Error.WriteLine("Already matches the last backup — nothing to undo."); return 0; }
+        if (!ConfirmDestroy("This discards changes since the last backup and restores the world.",
+                opts.ContainsKey("-y") || opts.ContainsKey("--yes")))
+        { Console.Error.WriteLine("Aborted."); return 1; }
+
+        Repo.Checkout.Materialize(repo, repo.ReadManifest(repo.ReadCommit(head).Tree), world, prune: true);
+        Console.Error.WriteLine("Restored the world to the last backup.");
+        return 0;
+    }
+
     public static int Init(string? dashC, string[] a)
     {
         var (pos, opts) = Parse(a, ["--worktree"], []);
+        // Warn (don't block) when binding a worktree that doesn't look like a Minecraft world — a
+        // common off-by-one-folder mistake (worlds nest under saves/).
+        if (opts.GetValueOrDefault("--worktree") is { } wtCheck && Directory.Exists(wtCheck)
+            && !File.Exists(Path.Combine(Path.GetFullPath(wtCheck), "level.dat")))
+            Console.Error.WriteLine($"mcadiff: warning: '{wtCheck}' has no level.dat — is it a Minecraft world folder?");
         string dir = dashC ?? (pos.Count > 0 ? pos[0] : Directory.GetCurrentDirectory());
 
         // Refuse to scatter repo internals (objects/, refs/, HEAD, mcadiff.lock) into a world folder —
