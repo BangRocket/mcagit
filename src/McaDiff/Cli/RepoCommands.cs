@@ -141,12 +141,13 @@ public static class RepoCommands
     public static int Log(string? dashC, string[] a)
     {
         var (pos, opts) = Parse(a, ["-n", "--author", "--grep", "--since", "--until"],
-            ["--oneline", "-p", "--stat", "--no-color", "--merges", "--no-merges"]);
+            ["--oneline", "-p", "--stat", "--no-color", "--merges", "--no-merges", "--decorate", "--all"]);
         if (Open(dashC) is not { } repo) return NoRepo();
 
         int limit = opts.GetValueOrDefault("-n") is { } ns && int.TryParse(ns, out int lv) ? lv : int.MaxValue;
         bool oneline = opts.ContainsKey("--oneline"), patch = opts.ContainsKey("-p"),
              stat = opts.ContainsKey("--stat"), noColor = opts.ContainsKey("--no-color");
+        Dictionary<string, List<string>>? decorate = opts.ContainsKey("--decorate") ? DecorateRefs(repo) : null;
 
         // Metadata filters (git-style: AND-combined, applied before -n).
         string? author = opts.GetValueOrDefault("--author");
@@ -159,7 +160,18 @@ public static class RepoCommands
         bool Keep(string h) => LogFilter(repo.ReadCommit(h), author, grep, merges, noMerges, since, until);
 
         List<string> commits;
-        if (pos.Count > 0 && (pos[0].Contains("...") || pos[0].Contains("..")))
+        if (opts.ContainsKey("--all"))
+        {
+            // Every commit reachable from any branch or tag, newest first.
+            var tips = new List<string>();
+            foreach (string b in repo.Branches()) if (repo.ReadBranch(b) is { } h) tips.Add(h);
+            foreach (string tg in repo.Tags()) if (repo.ReadTag(tg) is { } h) tips.Add(repo.PeelToCommit(h));
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (string tip in tips) foreach (string h in Ancestors(repo, tip)) seen.Add(h);
+            commits = seen.OrderByDescending(h => DateTimeOffset.TryParse(repo.ReadCommit(h).Time, out var dt) ? dt : DateTimeOffset.MinValue)
+                          .ThenBy(h => h, StringComparer.Ordinal).ToList();
+        }
+        else if (pos.Count > 0 && (pos[0].Contains("...") || pos[0].Contains("..")))
         {
             try { commits = RangeCommits(repo, pos[0]); } catch (Exception ex) { return Err(ex.Message); }
         }
@@ -170,8 +182,22 @@ public static class RepoCommands
             commits = LinearHistory(repo, start);
         }
 
-        foreach (string h in commits.Where(Keep).Take(limit)) PrintLogEntry(repo, h, oneline, stat, patch, noColor);
+        foreach (string h in commits.Where(Keep).Take(limit)) PrintLogEntry(repo, h, oneline, stat, patch, noColor, decorate);
         return 0;
+    }
+
+    /// <summary>Maps a commit to the ref names pointing at it ("HEAD -> main", "tag: v1", "dev").</summary>
+    public static Dictionary<string, List<string>> DecorateRefs(Repository repo)
+    {
+        var map = new Dictionary<string, List<string>>(StringComparer.Ordinal);
+        void Add(string commit, string label) { (map.TryGetValue(commit, out var l) ? l : map[commit] = []).Add(label); }
+        string? head = repo.CurrentBranch();
+        foreach (string b in repo.Branches())
+            if (repo.ReadBranch(b) is { } h) Add(h, b == head ? $"HEAD -> {b}" : b);
+        if (head is null && repo.HeadCommit() is { } detached) Add(detached, "HEAD");
+        foreach (string tg in repo.Tags())
+            if (repo.ReadTag(tg) is { } h) Add(repo.PeelToCommit(h), $"tag: {tg}");
+        return map;
     }
 
     /// <summary>git-style AND-combined log filters; a null/false filter is a pass.</summary>
@@ -244,12 +270,14 @@ public static class RepoCommands
         return set;
     }
 
-    private static void PrintLogEntry(Repository repo, string hash, bool oneline, bool stat, bool patch, bool noColor)
+    private static void PrintLogEntry(Repository repo, string hash, bool oneline, bool stat, bool patch, bool noColor,
+        Dictionary<string, List<string>>? decorate = null)
     {
         CommitObject c = repo.ReadCommit(hash);
-        if (oneline) { Console.WriteLine($"{repo.Objects.Abbreviate(hash)} {c.Message}"); return; }
+        string deco = decorate?.GetValueOrDefault(hash) is { Count: > 0 } refs ? $" ({string.Join(", ", refs)})" : "";
+        if (oneline) { Console.WriteLine($"{repo.Objects.Abbreviate(hash)}{deco} {c.Message}"); return; }
 
-        Console.WriteLine($"commit {hash}{(c.Signature is not null ? " (signed)" : "")}");
+        Console.WriteLine($"commit {hash}{deco}{(c.Signature is not null ? " (signed)" : "")}");
         if (c.Parents.Count > 1) Console.WriteLine($"Merge:  {string.Join(" ", c.Parents.Select(p => p[..10]))}");
         Console.WriteLine($"Author: {c.Author}");
         if (!string.IsNullOrEmpty(c.Committer) && c.Committer != c.Author) Console.WriteLine($"Commit: {c.Committer}");
