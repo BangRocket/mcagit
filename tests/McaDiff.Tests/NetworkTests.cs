@@ -77,6 +77,35 @@ public class NetworkTests
         Assert.Equal(main, Repository.Open(remote.Dir).ReadBranch("main"));
     }
 
+    [Fact]
+    public void ReadOnlyService_AllowsReads_RejectsWrites()
+    {
+        // serve-stdio --read-only (and HTTP without --allow-push) construct RemoteService(allowWrite:false).
+        Repository remote = Repository.Init(TestAnvil.TempDir("roR"));
+        CommitWorld(remote, World("a"), "c1");
+
+        var ro = new RemoteService(remote, allowWrite: false);
+        Assert.NotEmpty(ro.ListRefs().Branches);                                   // reads work
+        Assert.Throws<UnauthorizedAccessException>(() => ro.PutObject(new string('a', 64), [1, 2, 3]));
+        Assert.Throws<UnauthorizedAccessException>(() => ro.UpdateRef("main", null, new string('b', 64), force: false));
+    }
+
+    [Fact]
+    public void Stdio_ReadOnly_RejectsPush()
+    {
+        // A read-only stdio server rejects a fast-forward push that would otherwise succeed.
+        Repository remote = Repository.Init(TestAnvil.TempDir("roSR"));
+        CommitWorld(remote, World("a"), "c1");
+
+        string clientDir = TestAnvil.TempDir("roSC");
+        WithStdioServer(remote, allowWrite: false, t => RemoteOps.CloneFrom(t, clientDir, "ssh://test/repo")); // clone works
+        Repository client = Repository.Open(clientDir);
+        CommitWorld(client, World("b"), "c2"); // a clean fast-forward on top of the clone
+
+        WithStdioServer(remote, allowWrite: false, t =>
+            Assert.ThrowsAny<Exception>(() => RemoteOps.PushTo(client, t, "main", force: false))); // error type may not survive the wire
+    }
+
     // ---- helpers ----
 
     private static void WithStdioServer(Repository repo, bool allowWrite, Action<IRemoteTransport> body)

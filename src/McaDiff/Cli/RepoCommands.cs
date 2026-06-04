@@ -724,9 +724,13 @@ public static class RepoCommands
 
     public static int ServeStdio(string? dashC, string[] a)
     {
-        string? dir = dashC ?? (a.Length > 0 ? a[0] : null);
+        var (pos, opts) = Parse(a, [], ["--read-only"]);
+        string? dir = dashC ?? (pos.Count > 0 ? pos[0] : null);
         if (dir is null || !Repository.IsRepository(dir)) { Console.Error.WriteLine("serve-stdio: not a repository"); return 2; }
-        var svc = new RemoteService(Repository.Open(dir), allowWrite: true); // ssh already authenticated the user
+        // ssh has already authenticated the caller, so write is allowed by default. An operator can
+        // pin a key to fetch/clone only with a forced command: command="mcadiff serve-stdio <path> --read-only".
+        bool allowWrite = !opts.ContainsKey("--read-only");
+        var svc = new RemoteService(Repository.Open(dir), allowWrite);
         using Stream input = Console.OpenStandardInput();
         using Stream output = Console.OpenStandardOutput();
         StdioServer.Serve(svc, input, output);

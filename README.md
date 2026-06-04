@@ -288,6 +288,14 @@ mcadiff clone ssh://user@host/path/to/world.mcagit ./world.mcagit
 mcadiff push  ssh://user@host/path/to/world.mcagit main
 ```
 
+By default an SSH caller that can reach `serve-stdio` may push (shell access ≈ push
+access). To pin a key to **fetch/clone only**, give it a forced command in the remote's
+`~/.ssh/authorized_keys`:
+
+```text
+command="mcadiff serve-stdio /path/to/world.mcagit --read-only",no-pty ssh-ed25519 AAAA… reader@key
+```
+
 **Serverless cloud buckets** (no daemon — push straight to object storage). There's
 nothing to run server-side: the whole protocol is client-side. A push bundles the
 objects the bucket lacks into **one** content-addressed pack and updates the branch
