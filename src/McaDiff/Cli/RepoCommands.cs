@@ -131,12 +131,23 @@ public static class RepoCommands
 
     public static int Log(string? dashC, string[] a)
     {
-        var (pos, opts) = Parse(a, ["-n"], ["--oneline", "-p", "--stat", "--no-color"]);
+        var (pos, opts) = Parse(a, ["-n", "--author", "--grep", "--since", "--until"],
+            ["--oneline", "-p", "--stat", "--no-color", "--merges", "--no-merges"]);
         if (Open(dashC) is not { } repo) return NoRepo();
 
         int limit = opts.GetValueOrDefault("-n") is { } ns && int.TryParse(ns, out int lv) ? lv : int.MaxValue;
         bool oneline = opts.ContainsKey("--oneline"), patch = opts.ContainsKey("-p"),
              stat = opts.ContainsKey("--stat"), noColor = opts.ContainsKey("--no-color");
+
+        // Metadata filters (git-style: AND-combined, applied before -n).
+        string? author = opts.GetValueOrDefault("--author");
+        string? grep = opts.GetValueOrDefault("--grep");
+        bool merges = opts.ContainsKey("--merges"), noMerges = opts.ContainsKey("--no-merges");
+        DateTimeOffset? since = null, until = null;
+        if (opts.GetValueOrDefault("--since") is { } sx && !TryDate(sx, out since)) return Err($"--since: unrecognized date '{sx}'");
+        if (opts.GetValueOrDefault("--until") is { } ux && !TryDate(ux, out until)) return Err($"--until: unrecognized date '{ux}'");
+
+        bool Keep(string h) => LogFilter(repo.ReadCommit(h), author, grep, merges, noMerges, since, until);
 
         List<string> commits;
         if (pos.Count > 0 && (pos[0].Contains("...") || pos[0].Contains("..")))
@@ -150,8 +161,32 @@ public static class RepoCommands
             commits = LinearHistory(repo, start);
         }
 
-        foreach (string h in commits.Take(limit)) PrintLogEntry(repo, h, oneline, stat, patch, noColor);
+        foreach (string h in commits.Where(Keep).Take(limit)) PrintLogEntry(repo, h, oneline, stat, patch, noColor);
         return 0;
+    }
+
+    /// <summary>git-style AND-combined log filters; a null/false filter is a pass.</summary>
+    public static bool LogFilter(CommitObject c, string? author, string? grep,
+        bool merges, bool noMerges, DateTimeOffset? since, DateTimeOffset? until)
+    {
+        if (author is not null && !c.Author.Contains(author, StringComparison.OrdinalIgnoreCase)) return false;
+        if (grep is not null && !c.Message.Contains(grep, StringComparison.OrdinalIgnoreCase)) return false;
+        if (merges && c.Parents.Count <= 1) return false;
+        if (noMerges && c.Parents.Count > 1) return false;
+        if ((since is not null || until is not null) && DateTimeOffset.TryParse(c.Time, out DateTimeOffset t))
+        {
+            if (since is not null && t < since) return false;
+            if (until is not null && t > until) return false;
+        }
+        return true;
+    }
+
+    private static bool TryDate(string s, out DateTimeOffset? date)
+    {
+        if (DateTimeOffset.TryParse(s, System.Globalization.CultureInfo.InvariantCulture,
+            System.Globalization.DateTimeStyles.AssumeUniversal, out DateTimeOffset d)) { date = d; return true; }
+        date = null;
+        return false;
     }
 
     private static List<string> LinearHistory(Repository repo, string start)

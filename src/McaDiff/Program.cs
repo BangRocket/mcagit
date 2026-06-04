@@ -218,6 +218,7 @@ partial class Program
             mcadiff diff --staged                 Staged changes (index vs HEAD)
             mcadiff bisect (start|bad|good|skip|reset|log)   Binary-search for a bad commit
             mcadiff log [--oneline|-p|--stat] [-n N] [<ref>]
+                        [--author S] [--grep S] [--since D] [--until D] [--merges|--no-merges]
             mcadiff show [<ref>]                  A commit's metadata + diff
             mcadiff checkout <ref> [<world-out>]  Materialize a snapshot
             mcadiff reset [<ref>] [--soft|--mixed|--hard]   Move HEAD (default --mixed, ref HEAD)
