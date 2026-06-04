@@ -19,7 +19,18 @@ if (args.Length >= 1 && args[0] == "-C")
 string[] tail = args[idx..];
 string? cmd = tail.Length > 0 ? tail[0] : null;
 
-return cmd switch
+try
+{
+    return Dispatch();
+}
+catch (Exception ex)
+{
+    // Never show a raw stack trace — every failure is a clean one-liner + exit 2 (issue #26).
+    Console.Error.WriteLine($"mcadiff: error: {ex.Message}");
+    return 2;
+}
+
+int Dispatch() => cmd switch
 {
     "diff" => RunDiff(tail[1..], dashC),
     "extract" => RunExtract(tail[1..]),
@@ -58,11 +69,61 @@ return cmd switch
     "cat-file" => RepoCommands.CatFile(dashC, tail[1..]),
     "hash-object" => RepoCommands.HashObject(dashC, tail[1..]),
     "ls-tree" => RepoCommands.LsTree(dashC, tail[1..]),
-    null or "-h" or "--help" => Help(),
-    _ => RunDiff(tail, dashC), // shorthand: `mcadiff <A> <B>`
+    null or "-h" or "--help" or "help" or "/?" or "-?" => Help(),
+    _ => UnknownOrDiff(tail, dashC),
 };
 
 int Help() { Console.WriteLine(TopUsage); return 0; }
+
+// `mcadiff <A> <B>` shorthand only when the first token is an existing path; otherwise it's a
+// mistyped/unknown subcommand — reject it (don't silently run a diff) and suggest the closest.
+int UnknownOrDiff(string[] t, string? repoDir)
+{
+    if (t.Length >= 1 && (File.Exists(t[0]) || Directory.Exists(t[0])))
+        return RunDiff(t, repoDir);
+    string token = t.Length > 0 ? t[0] : "";
+    string? guess = NearestCommand(token);
+    Console.Error.WriteLine($"mcadiff: '{token}' is not a command"
+        + (guess is not null ? $" — did you mean '{guess}'?" : "."));
+    Console.Error.WriteLine("Run 'mcadiff --help' for usage.");
+    return 2;
+}
+
+static string? NearestCommand(string token)
+{
+    string[] commands =
+    [
+        "diff", "extract", "apply", "init", "add", "commit", "bisect", "log", "show", "status",
+        "checkout", "reset", "restore", "revert", "branch", "tag", "merge", "cherry-pick", "rebase",
+        "stash", "clean", "config", "remote", "clone", "fetch", "push", "ls-remote", "verify-remote",
+        "serve", "reflog", "gc", "fsck", "rev-parse", "cat-file", "hash-object", "ls-tree",
+    ];
+    string? best = null;
+    int bestD = int.MaxValue;
+    foreach (string c in commands)
+    {
+        int d = Levenshtein(token, c);
+        if (d < bestD) { bestD = d; best = c; }
+    }
+    return bestD <= 2 ? best : null; // only suggest a close match
+}
+
+static int Levenshtein(string a, string b)
+{
+    int[] prev = new int[b.Length + 1], cur = new int[b.Length + 1];
+    for (int j = 0; j <= b.Length; j++) prev[j] = j;
+    for (int i = 1; i <= a.Length; i++)
+    {
+        cur[0] = i;
+        for (int j = 1; j <= b.Length; j++)
+        {
+            int cost = a[i - 1] == b[j - 1] ? 0 : 1;
+            cur[j] = Math.Min(Math.Min(prev[j] + 1, cur[j - 1] + 1), prev[j - 1] + cost);
+        }
+        (prev, cur) = (cur, prev);
+    }
+    return prev[b.Length];
+}
 
 int RunDiff(string[] a, string? repoDir)
 {

@@ -19,19 +19,23 @@ public static class Snapshotter
     private static readonly string[] SkipNames = ["session.lock"];
 
     public static Manifest Snapshot(Repository repo, string worldDir)
-        => Build(worldDir, new Ctx(repo.Objects, repo.Cache, WriteCache: true));
+        => Build(worldDir, new Ctx(repo.Objects, repo.Cache, WriteCache: true), repo.Dir);
 
     public static Manifest HashOnly(Repository repo, string worldDir)
-        => Build(worldDir, new Ctx(Store: null, repo.Cache, WriteCache: false));
+        => Build(worldDir, new Ctx(Store: null, repo.Cache, WriteCache: false), repo.Dir);
 
     private readonly record struct Ctx(ObjectStore? Store, ChunkCache? Cache, bool WriteCache);
 
-    private static Manifest Build(string worldDir, Ctx ctx)
+    private static Manifest Build(string worldDir, Ctx ctx, string? repoDir = null)
     {
         string root = Path.GetFullPath(worldDir);
         IgnoreRules ignore = IgnoreRules.Load(root);
+        // If the repo lives inside the world (e.g. `init` run in the world folder), never capture its
+        // own metadata — the live mcadiff.lock can't even be read while we hold it (issue #26).
+        string? repoPrefix = repoDir is null ? null : Path.GetFullPath(repoDir) + Path.DirectorySeparatorChar;
         string[] files = Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)
             .Where(f => !SkipNames.Contains(Path.GetFileName(f))
+                        && (repoPrefix is null || !Path.GetFullPath(f).StartsWith(repoPrefix, StringComparison.Ordinal))
                         && !ignore.IsIgnored(Path.GetRelativePath(root, f).Replace('\\', '/')))
             .ToArray();
 
@@ -56,6 +60,7 @@ public static class Snapshotter
         // Record empty directories so checkout reproduces the layout faithfully.
         foreach (string dir in Directory.EnumerateDirectories(root, "*", SearchOption.AllDirectories))
         {
+            if (repoPrefix is not null && (Path.GetFullPath(dir) + Path.DirectorySeparatorChar).StartsWith(repoPrefix, StringComparison.Ordinal)) continue;
             string rel = Path.GetRelativePath(root, dir).Replace('\\', '/');
             if (!ignore.IsIgnored(rel) && !Directory.EnumerateFileSystemEntries(dir).Any())
                 manifest.EmptyDirs.Add(rel);

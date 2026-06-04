@@ -17,6 +17,15 @@ public static class RepoCommands
         var (pos, opts) = Parse(a, ["--worktree"], []);
         string dir = dashC ?? (pos.Count > 0 ? pos[0] : Directory.GetCurrentDirectory());
 
+        // Refuse to scatter repo internals (objects/, refs/, HEAD, mcadiff.lock) into a world folder —
+        // the snapshot would then try to read its own metadata and crash (issue #26). Bind the world
+        // and put the repo beside it instead.
+        if (opts.GetValueOrDefault("--worktree") is null
+            && !Repository.IsRepository(dir)
+            && File.Exists(Path.Combine(Path.GetFullPath(dir), "level.dat")))
+            return Err($"'{dir}' looks like a Minecraft world (has level.dat). Create the repo beside it and bind the world:\n"
+                + $"  mcadiff init {dir}.mcagit --worktree {dir}");
+
         // git init is idempotent — re-running it on an existing repo reinitializes (exit 0).
         if (Repository.IsRepository(dir))
         {
@@ -296,6 +305,7 @@ public static class RepoCommands
         if (opts.ContainsKey("--hard"))
         {
             if (repo.Worktree is not { } world) return Err("--hard requires a bound worktree");
+            if (WorldLooksOpen(world)) return Err(WorldOpenMsg(world));
             Repo.Checkout.Materialize(repo, repo.ReadManifest(repo.ReadCommit(target).Tree), world, prune: true);
             Console.Error.WriteLine($"HEAD is now at {target[..10]} (worktree updated)");
         }
@@ -512,6 +522,8 @@ public static class RepoCommands
             else if (Directory.Exists(outDir) && Directory.EnumerateFileSystemEntries(outDir).Any())
                 return Err($"output directory is not empty: {outDir} (use --force)");
         }
+
+        if (WorldLooksOpen(outDir)) return Err(WorldOpenMsg(outDir));
 
         string? from = repo.HeadCommit();
         Manifest manifest = repo.ReadManifest(repo.ReadCommit(commit).Tree);
@@ -1345,6 +1357,20 @@ public static class RepoCommands
     // ---- helpers ----
 
     private static Repository? Open(string? dashC) => Repository.Discover(dashC);
+
+    /// <summary>True if the world's <c>session.lock</c> is currently held — Minecraft has it open.
+    /// Writing region files under it would crash mid-write and leave a half-restored world (issue #26).</summary>
+    private static bool WorldLooksOpen(string worldDir)
+    {
+        string lockFile = Path.Combine(worldDir, "session.lock");
+        if (!File.Exists(lockFile)) return false;
+        try { using var _ = new FileStream(lockFile, FileMode.Open, FileAccess.ReadWrite, FileShare.None); return false; }
+        catch (IOException) { return true; }   // held by a running server
+        catch { return false; }                // can't tell → don't block
+    }
+
+    private static string WorldOpenMsg(string worldDir)
+        => $"'{worldDir}' looks like it's open in Minecraft (session.lock is held). Stop the server, then try again.";
 
     private static void PrintStatusSection(string title, IReadOnlyList<StatusEntry> entries)
     {
