@@ -122,6 +122,8 @@ public static class WorldDiffer
                 {
                     var rootA = ChunkCodec.Decode(ca);
                     var rootB = ChunkCodec.Decode(cb);
+                    ChunkNormalize.DropRedundantPaletteData(rootA);
+                    ChunkNormalize.DropRedundantPaletteData(rootB);
                     List<NbtChange> changes = NbtComparer.Compare(rootA, rootB, options.Nbt);
                     if (changes.Count > 0)
                         chunkDiffs.Add(new ChunkDiff(pos, DiffStatus.Modified, changes));

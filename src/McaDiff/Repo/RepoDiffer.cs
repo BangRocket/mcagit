@@ -49,7 +49,10 @@ public static class RepoDiffer
                 {
                     try
                     {
-                        List<NbtChange> ch = NbtComparer.Compare(srcA.Chunk(rel, posKey), srcB.Chunk(rel, posKey), opt.Nbt);
+                        NbtCompound chunkA = srcA.Chunk(rel, posKey), chunkB = srcB.Chunk(rel, posKey);
+                        ChunkNormalize.DropRedundantPaletteData(chunkA);
+                        ChunkNormalize.DropRedundantPaletteData(chunkB);
+                        List<NbtChange> ch = NbtComparer.Compare(chunkA, chunkB, opt.Nbt);
                         if (ch.Count > 0) chunks.Add(new ChunkDiff(pos, DiffStatus.Modified, ch));
                     }
                     catch (Exception ex) { chunks.Add(new ChunkDiff(pos, DiffStatus.Modified, [], ex.Message)); }
