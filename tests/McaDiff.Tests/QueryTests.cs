@@ -1,5 +1,6 @@
 using fNbt;
 using McaDiff.Anvil;
+using McaDiff.Diff;
 using McaDiff.Query;
 using Xunit;
 
@@ -107,6 +108,27 @@ public class QueryTests
         SignHit hit = Assert.Single(new WorldQuery(world).Signs("home"));
         Assert.Contains("Welcome home", hit.Lines);          // JSON text component unwrapped
         Assert.Empty(new WorldQuery(world).Signs("nonexistent"));
+    }
+
+    [Fact]
+    public void WhereChanged_ClassifiesDestructionAndConstruction()
+    {
+        // A: stone at (1,2,3). B: stone moved to (7,8,9) → (1,2,3) is destroyed, (7,8,9) is built.
+        string a = WorldWithRegion("region", new ChunkPos(0, 0), ChunkWithStone(Cell(1, 2, 3)));
+        string b = WorldWithRegion("region", new ChunkPos(0, 0), ChunkWithStone(Cell(7, 8, 9)));
+
+        GriefSummary g = GriefReport.Analyze(WorldDiffer.Diff(a, b, new DiffRunOptions(ExpandArrays: true)));
+        Assert.Equal(1, g.Destroyed);
+        Assert.Equal(1, g.Built);
+        Assert.Equal(0, g.Replaced);
+        Assert.Contains(g.Events, e => e.Kind == "destroyed" && (e.X, e.Y, e.Z) == (1, 2, 3) && e.Old == "minecraft:stone");
+        Assert.Equal((1, 2, 3), g.Center); // single destruction → bbox center is it
+    }
+
+    private static NbtCompound ChunkWithStone(int cell)
+    {
+        var section = new NbtCompound { new NbtByte("Y", 0), BlockStates(["minecraft:air", "minecraft:stone"], Fill(4096, cell, 1)) };
+        return TestAnvil.Root(new NbtInt("DataVersion", 3953), new NbtList("sections", NbtTagType.Compound) { section });
     }
 
     // ---- builders ----

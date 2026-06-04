@@ -114,7 +114,12 @@ mcadiff find entity zombie <world>           # mobs/frames/stands (entities/ + l
 mcadiff find sign <world> --text spawn       # signs whose text matches (1.20+ and legacy)
 mcadiff players <world>                       # last-saved positions / health / gamemode
 mcadiff poi <world> --type bed                # points of interest (beds/workstations/portals)
+mcadiff where-changed <old> <new>             # "where did the griefing happen?" — classify + locate
 ```
+
+`where-changed` decodes the block-level diff of two world folders and reports how many blocks
+were destroyed / placed / replaced, the bounding box and centre of the destruction, and the
+most-destroyed block types (`--verbose` lists every changed coordinate; `--json` for tooling).
 
 All take an optional `<world>` (defaults to the bound worktree), `--dim overworld|nether|end`,
 and `--json`. The block lookup uses the same palette decoder as the coordinate-level diff.

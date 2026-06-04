@@ -69,6 +69,7 @@ int Dispatch() => cmd switch
     "find" => QueryCommands.Find(dashC, tail[1..]),
     "players" => QueryCommands.Players(dashC, tail[1..]),
     "poi" => QueryCommands.Poi(dashC, tail[1..]),
+    "where-changed" => QueryCommands.WhereChanged(dashC, tail[1..]),
     "rev-parse" => RepoCommands.RevParse(dashC, tail[1..]),
     "cat-file" => RepoCommands.CatFile(dashC, tail[1..]),
     "hash-object" => RepoCommands.HashObject(dashC, tail[1..]),
@@ -101,7 +102,7 @@ static string? NearestCommand(string token)
         "checkout", "reset", "restore", "revert", "branch", "tag", "merge", "cherry-pick", "rebase",
         "stash", "clean", "config", "remote", "clone", "fetch", "push", "ls-remote", "verify-remote",
         "serve", "reflog", "gc", "fsck", "rev-parse", "cat-file", "hash-object", "ls-tree",
-        "inspect", "find", "players", "poi",
+        "inspect", "find", "players", "poi", "where-changed",
     ];
     string? best = null;
     int bestD = int.MaxValue;
@@ -318,6 +319,7 @@ partial class Program
             mcadiff find <entity|block-entity|sign> <id|--text P> [<world>] [--near x,y,z] [--radius N] [--dim D] [--json]
             mcadiff players [<world>] [--json]            Last-saved player positions / health
             mcadiff poi [<world>] [--type T] [--near x,y,z] [--radius N] [--dim D]   Points of interest
+            mcadiff where-changed <old-world> <new-world> [--verbose] [--json]   What/where blocks changed (grief detector)
 
         PLUMBING
             mcadiff rev-parse [--short|--abbrev-ref] <rev>...

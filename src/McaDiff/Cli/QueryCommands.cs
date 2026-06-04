@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using McaDiff.Diff;
 using McaDiff.Query;
 using McaDiff.Repo;
 
@@ -58,6 +59,32 @@ public static class QueryCommands
         return Report(hits.Count, "point(s) of interest");
     }
 
+    public static int WhereChanged(string? dashC, string[] a)
+    {
+        var (pos, opts) = ArgParser.Parse(a, ["--dim"], ["--json", "--verbose"]);
+        if (pos.Count < 2) return Err("usage: where-changed <old-world> <new-world> [--dim D] [--json] [--verbose]");
+        if (!IsWorld(pos[0]) || !IsWorld(pos[1]))
+            return Err("where-changed compares two world folders (ref support is planned); both paths must exist");
+
+        WorldDiff diff = WorldDiffer.Diff(pos[0], pos[1], new DiffRunOptions(ExpandArrays: true)); // per-cell, not summarized
+        GriefSummary g = GriefReport.Analyze(diff);
+
+        if (opts.ContainsKey("--json")) { Console.WriteLine(JsonSerializer.Serialize(g, Json)); return g.Destroyed + g.Built + g.Replaced > 0 ? 0 : 1; }
+
+        if (g.Destroyed == 0 && g.Built == 0 && g.Replaced == 0) { Console.Error.WriteLine("No block changes."); return 1; }
+        Console.WriteLine($"{g.Destroyed} destroyed, {g.Built} placed, {g.Replaced} replaced.");
+        if (g.Min is { } mn && g.Max is { } mx && g.Center is { } ce)
+        {
+            Console.WriteLine($"Destruction spans ({mn.X},{mn.Y},{mn.Z})–({mx.X},{mx.Y},{mx.Z}), centered ~({ce.X},{ce.Y},{ce.Z}).");
+            if (g.TopDestroyed.Count > 0)
+                Console.WriteLine("Most destroyed: " + string.Join(", ", g.TopDestroyed.Select(t => $"{t.Block} ×{t.Count}")));
+        }
+        if (opts.ContainsKey("--verbose"))
+            foreach (BlockChange e in g.Events)
+                Console.WriteLine($"  ({e.X},{e.Y},{e.Z}) {e.Kind}: {e.Old} → {e.New}");
+        return 0;
+    }
+
     public static int Find(string? dashC, string[] a)
     {
         var (pos, opts) = ArgParser.Parse(a, ["--near", "--radius", "--dim", "--text"], ["--json"]);
@@ -113,6 +140,8 @@ public static class QueryCommands
         if (pos.Count > worldIndex) return pos[worldIndex];
         return Repository.Discover(dashC)?.Worktree;
     }
+
+    private static bool IsWorld(string p) => Directory.Exists(p);
 
     private static (int, int, int)? ParseNear(string? s, out string? error)
     {
