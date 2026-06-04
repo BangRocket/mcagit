@@ -119,6 +119,23 @@ public class CoverageGapTests
         Assert.Equal(6, diff.Files.Count); // every region's change detected, none dropped/duplicated
     }
 
+    [Fact]
+    public void Extract_RecordsDataVersions_ForCrossVersionWarning()
+    {
+        string a = WorldV(3953), b = WorldV(4189);
+        WorldPatch p = PatchExtractor.Extract(a, b, new DiffRunOptions());
+        Assert.Equal(3953, p.BaseDataVersion);   // from base level.dat → Data.DataVersion
+        Assert.Equal(4189, p.TargetDataVersion);
+    }
+
+    private static string WorldV(int dv)
+    {
+        string dir = TestAnvil.TempDir("dvw");
+        TestAnvil.WriteRegion(Path.Combine(dir, "region", "r.0.0.mca"), (new ChunkPos(0, 0), AB(dv)));
+        TestAnvil.WriteLoose(Path.Combine(dir, "level.dat"), TestAnvil.Root(new NbtCompound("Data") { new NbtInt("DataVersion", dv) }));
+        return dir;
+    }
+
     // ---- helpers ----
 
     private static Manifest M(params NbtTag[] _) => new();

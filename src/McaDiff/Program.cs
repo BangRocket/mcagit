@@ -1,5 +1,6 @@
 using McaDiff.Cli;
 using McaDiff.Diff;
+using McaDiff.Model;
 using McaDiff.Output;
 using McaDiff.Patch;
 using McaDiff.Repo;
@@ -238,6 +239,15 @@ int RunApply(string[] a)
     try
     {
         WorldPatch patch = WorldPatch.FromJson(File.ReadAllText(o.PatchPath!));
+
+        // Warn (don't block) on a DataVersion mismatch — paths can silently shift across MC versions,
+        // surfacing as guarded conflicts. Forward apply expects the base version; reverse the target's.
+        int? expected = o.Reverse ? patch.TargetDataVersion : patch.BaseDataVersion;
+        int? actual = WorldSource.DataVersion(o.TargetPath!);
+        if (expected is { } e && actual is { } act && e != act)
+            Console.Error.WriteLine($"mcadiff: warning: patch was made for DataVersion {e} but the target is {act} — "
+                + "paths may not match (see README \"Patches are version-specific\").");
+
         var settings = new ApplySettings(o.Reverse, o.Force, o.DryRun, o.Only);
         ApplyReport report = PatchApplier.Apply(patch, o.TargetPath!, o.OutputPath ?? o.TargetPath!, settings);
         string mode = o.DryRun ? "[dry-run] " : "";

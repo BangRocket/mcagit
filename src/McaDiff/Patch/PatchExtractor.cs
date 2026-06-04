@@ -17,7 +17,13 @@ public static class PatchExtractor
     public static WorldPatch Extract(string basePath, string targetPath, DiffRunOptions options,
                                 bool wholeChunk = false, bool wholeFile = false)
     {
-        var patch = new WorldPatch { Base = basePath, Target = targetPath };
+        var patch = new WorldPatch
+        {
+            Base = basePath,
+            Target = targetPath,
+            BaseDataVersion = WorldSource.DataVersion(basePath),
+            TargetDataVersion = WorldSource.DataVersion(targetPath),
+        };
 
         bool dirA = WorldSource.IsDirectory(basePath);
         bool dirB = WorldSource.IsDirectory(targetPath);

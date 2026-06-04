@@ -51,6 +51,10 @@ public sealed class WorldPatch
     public int Version { get; set; } = 1;
     public string? Base { get; set; }
     public string? Target { get; set; }
+    // The base/target worlds' Minecraft DataVersion (level.dat → Data.DataVersion), if known. Lets
+    // `apply` warn when the target's version doesn't match — paths can silently shift across versions.
+    public int? BaseDataVersion { get; set; }
+    public int? TargetDataVersion { get; set; }
     public string? Note { get; set; }
     public List<PatchFileEntry> Files { get; set; } = [];
 

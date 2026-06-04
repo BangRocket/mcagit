@@ -40,6 +40,16 @@ public static class WorldSource
 
     public static bool IsDirectory(string path) => Directory.Exists(path);
 
+    /// <summary>The world's Minecraft DataVersion from <c>level.dat</c> → <c>Data.DataVersion</c>, or
+    /// null if not a world dir / unreadable.</summary>
+    public static int? DataVersion(string worldDir)
+    {
+        string levelDat = Path.Combine(worldDir, "level.dat");
+        if (!File.Exists(levelDat)) return null;
+        try { return McaDiff.Anvil.ChunkCodec.LoadNbtFile(levelDat).Get<fNbt.NbtCompound>("Data")?.Get<fNbt.NbtInt>("DataVersion")?.Value; }
+        catch { return null; }
+    }
+
     /// <summary>Resolves a single file argument into one <see cref="WorldUnit"/>.</summary>
     public static WorldUnit ResolveFile(string path)
     {
