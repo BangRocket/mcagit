@@ -204,6 +204,24 @@ public sealed class ObjectStore
         return match;
     }
 
+    /// <summary>Shortest prefix of <paramref name="hash"/> (≥ <paramref name="minLen"/>) that is
+    /// still unambiguous among all stored objects — git's abbreviated-hash behavior. Defaults to
+    /// 7 chars and grows only on a real collision.</summary>
+    public string Abbreviate(string hash, int minLen = 7)
+    {
+        if (hash.Length <= minLen) return hash;
+        int need = minLen;
+        foreach (string other in AllHashes())
+        {
+            if (other == hash) continue;
+            int common = 0, max = Math.Min(hash.Length, other.Length);
+            while (common < max && hash[common] == other[common]) common++;
+            if (common + 1 > need) need = common + 1;       // need one char past the shared prefix
+            if (need >= hash.Length) return hash;
+        }
+        return hash[..Math.Min(need, hash.Length)];
+    }
+
     /// <summary>Enumerates every stored object hash, loose and packed (used by gc/transfer).</summary>
     public IEnumerable<string> AllHashes()
     {

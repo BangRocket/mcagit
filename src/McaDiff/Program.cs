@@ -230,13 +230,13 @@ partial class Program
             mcadiff cherry-pick <commit> | --continue | --abort   (stops on conflict)
             mcadiff rebase [--onto <base>] <up> | --continue | --skip | --abort
             mcadiff stash [push|list|pop|apply|drop|clear]   Shelve / restore the worktree
-            mcadiff clean [-n|-f]                 Remove untracked worktree files
+            mcadiff clean [-n|-f] [-d]            Remove untracked worktree files (-d: also dirs)
             mcadiff commit -S …                   Sign the commit (SSH key)
             mcadiff config [--global] <key> [<v>] | --list | --unset <key>
 
-        REMOTES (path, http://, ssh://) & MAINTENANCE
+        REMOTES (path, http://, ssh://, azure://, s3://) & MAINTENANCE
             mcadiff clone <src> <dest> [--depth N] [--token T]   --depth N: shallow clone (last N commits)
-            mcadiff remote [add <name> <url>]     url: path | http(s)://host:port | ssh://host/path
+            mcadiff remote [add|remove|rename|set-url|get-url ...]   url: path | http(s):// | ssh:// | azure:// | s3://
             mcadiff fetch [<remote> [<branch>]] [--token T]
             mcadiff push  [<remote> [<branch>]] [--force|--all] [--token T]
             mcadiff ls-remote [<remote>] [--token T]   List a remote's refs

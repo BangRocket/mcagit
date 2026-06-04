@@ -203,7 +203,7 @@ public static class RepoCommands
     private static void PrintLogEntry(Repository repo, string hash, bool oneline, bool stat, bool patch, bool noColor)
     {
         CommitObject c = repo.ReadCommit(hash);
-        if (oneline) { Console.WriteLine($"{hash[..10]} {c.Message}"); return; }
+        if (oneline) { Console.WriteLine($"{repo.Objects.Abbreviate(hash)} {c.Message}"); return; }
 
         Console.WriteLine($"commit {hash}{(c.Signature is not null ? " (signed)" : "")}");
         if (c.Parents.Count > 1) Console.WriteLine($"Merge:  {string.Join(" ", c.Parents.Select(p => p[..10]))}");
@@ -595,14 +595,36 @@ public static class RepoCommands
             foreach (var kv in repo.Remotes) Console.WriteLine($"{kv.Key}\t{kv.Value}");
             return 0;
         }
-        if (a[0] == "add")
+        switch (a[0])
         {
-            if (a.Length < 3) return Err("usage: remote add <name> <path>");
-            repo.AddRemote(a[1], a[2]);
-            Console.Error.WriteLine($"Added remote {a[1]} -> {repo.GetRemote(a[1])}");
-            return 0;
+            case "add":
+                if (a.Length < 3) return Err("usage: remote add <name> <url>");
+                if (repo.GetRemote(a[1]) is not null) return Err($"remote {a[1]} already exists");
+                repo.AddRemote(a[1], a[2]);
+                Console.Error.WriteLine($"Added remote {a[1]} -> {repo.GetRemote(a[1])}");
+                return 0;
+            case "remove" or "rm":
+                if (a.Length < 2) return Err("usage: remote remove <name>");
+                return repo.RemoveRemote(a[1]) ? 0 : Err($"no such remote: {a[1]}");
+            case "rename":
+                if (a.Length < 3) return Err("usage: remote rename <old> <new>");
+                if (repo.GetRemote(a[1]) is null) return Err($"no such remote: {a[1]}");
+                if (repo.GetRemote(a[2]) is not null) return Err($"remote {a[2]} already exists");
+                return repo.RenameRemote(a[1], a[2]) ? 0 : Err($"could not rename {a[1]}");
+            case "set-url":
+                if (a.Length < 3) return Err("usage: remote set-url <name> <url>");
+                if (repo.GetRemote(a[1]) is null) return Err($"no such remote: {a[1]}");
+                repo.AddRemote(a[1], a[2]); // upsert
+                Console.Error.WriteLine($"{a[1]} -> {repo.GetRemote(a[1])}");
+                return 0;
+            case "get-url":
+                if (a.Length < 2) return Err("usage: remote get-url <name>");
+                if (repo.GetRemote(a[1]) is not { } url) return Err($"no such remote: {a[1]}");
+                Console.WriteLine(url);
+                return 0;
+            default:
+                return Err("usage: remote | remote (add|remove|rename|set-url|get-url) ...");
         }
-        return Err("usage: remote | remote add <name> <path>");
     }
 
     public static int Clone(string? dashC, string[] a)
@@ -646,7 +668,7 @@ public static class RepoCommands
 
         if (opts.ContainsKey("--all"))
         {
-            int total = 0;
+            int total = 0, failed = 0;
             foreach (string b in repo.Branches())
             {
                 try
@@ -655,10 +677,11 @@ public static class RepoCommands
                     total += pr.ObjectsCopied;
                     Console.Error.WriteLine($"  {b} -> {remote} ({pr.ObjectsCopied} objects{(pr.FastForward ? "" : ", forced")})");
                 }
-                catch (Exception ex) { Console.Error.WriteLine($"  {b}: {ex.Message}"); }
+                catch (Exception ex) { failed++; Console.Error.WriteLine($"  {b}: {ex.Message}"); }
             }
-            Console.Error.WriteLine($"Pushed all branches to {remote} ({total} objects).");
-            return 0;
+            Console.Error.WriteLine($"Pushed {repo.Branches().Count() - failed} branch(es) to {remote} ({total} objects)"
+                + (failed > 0 ? $"; {failed} failed" : "") + ".");
+            return failed > 0 ? 1 : 0; // git: non-zero if any branch was rejected
         }
 
         string? branch = pos.Count > 1 ? pos[1] : repo.CurrentBranch();
@@ -838,7 +861,7 @@ public static class RepoCommands
                 if (spec == "HEAD") { Console.WriteLine(repo.CurrentBranch() ?? "HEAD"); continue; } // detached → "HEAD", not a hash
                 if (repo.ReadBranch(spec) is not null) { Console.WriteLine(spec); continue; }
             }
-            try { string h = repo.ResolveRef(spec); Console.WriteLine(opts.ContainsKey("--short") ? h[..10] : h); }
+            try { string h = repo.ResolveRef(spec); Console.WriteLine(opts.ContainsKey("--short") ? repo.Objects.Abbreviate(h) : h); }
             catch (Exception ex) { Console.Error.WriteLine($"mcadiff: {ex.Message}"); rc = 1; }
         }
         return rc;
@@ -912,11 +935,33 @@ public static class RepoCommands
 
     public static int Config(string? dashC, string[] a)
     {
-        if (Open(dashC) is not { } repo) return NoRepo();
         var (pos, opts) = Parse(a, [], ["--global", "--list", "-l", "--unset"]);
         bool global = opts.ContainsKey("--global");
+        bool list = opts.ContainsKey("--list") || opts.ContainsKey("-l");
 
-        if (opts.ContainsKey("--list") || opts.ContainsKey("-l"))
+        // --global operates on ~/.mcaconfig and needs no repository (git-like: usable before `init`).
+        if (global)
+        {
+            if (list) { foreach (var (k, v) in Repository.ListGlobalConfig()) Console.WriteLine($"{k}={v}"); return 0; }
+            if (opts.ContainsKey("--unset"))
+                return pos.Count >= 1
+                    ? (Repository.UnsetGlobalConfig(pos[0]) ? 0 : Err($"key not set: {pos[0]}"))
+                    : Err("usage: config --unset --global <key>");
+            if (pos.Count == 0) return Err("usage: config --global <key> [<value>] | --list | --unset <key>");
+            if (pos.Count == 1)
+            {
+                string? gv = Repository.GetGlobalConfig(pos[0]);
+                if (gv is null) return 1; // git: reading an unset key exits 1
+                Console.WriteLine(gv);
+                return 0;
+            }
+            Repository.SetGlobalConfig(pos[0], pos[1]);
+            return 0;
+        }
+
+        if (Open(dashC) is not { } repo) return NoRepo();
+
+        if (list)
         {
             foreach (var (k, v, _) in repo.ListConfig()) Console.WriteLine($"{k}={v}");
             return 0;
@@ -1153,12 +1198,13 @@ public static class RepoCommands
 
     public static int Clean(string? dashC, string[] a)
     {
-        var (_, opts) = Parse(a, ["--world"], ["-n", "--dry-run", "-f", "--force"]);
+        var (_, opts) = Parse(a, ["--world"], ["-n", "--dry-run", "-f", "--force", "-d"]);
         if (Open(dashC) is not { } repo) return NoRepo();
         string? world = opts.GetValueOrDefault("--world") ?? repo.Worktree;
         if (world is null) return Err("no worktree bound; use --world <dir>");
         bool dry = opts.ContainsKey("-n") || opts.ContainsKey("--dry-run");
         bool force = opts.ContainsKey("-f") || opts.ContainsKey("--force");
+        bool dirs = opts.ContainsKey("-d");
         if (!dry && !force) return Err("clean would remove untracked files; pass -f to remove or -n to preview");
 
         Manifest head = repo.HeadCommit() is { } h ? repo.ReadManifest(repo.ReadCommit(h).Tree) : new Manifest();
@@ -1167,16 +1213,48 @@ public static class RepoCommands
         foreach (string k in head.Nbt.Keys) keep.Add(k);
         foreach (string k in head.Blobs.Keys) keep.Add(k);
         IgnoreRules ignore = IgnoreRules.Load(world);
+        string Rel(string p) => Path.GetRelativePath(world, p).Replace('\\', '/');
+        bool Protected(string rel) => rel == "session.lock" || keep.Contains(rel) || ignore.IsIgnored(rel);
 
         int n = 0;
         foreach (string file in Directory.EnumerateFiles(world, "*", SearchOption.AllDirectories))
         {
-            string rel = Path.GetRelativePath(world, file).Replace('\\', '/');
-            if (rel == "session.lock" || keep.Contains(rel) || ignore.IsIgnored(rel)) continue;
+            string rel = Rel(file);
+            if (Protected(rel)) continue;
             if (dry) Console.WriteLine($"Would remove {rel}");
             else { File.Delete(file); Console.WriteLine($"Removing {rel}"); }
             n++;
         }
+
+        if (dirs)
+        {
+            // A directory is removable only if its whole subtree is untracked (no kept/ignored file
+            // beneath it). Remove just the top-most such dirs so each subtree is reported once.
+            var removable = new List<string>();
+            foreach (string dir in Directory.EnumerateDirectories(world, "*", SearchOption.AllDirectories))
+            {
+                string relDir = Rel(dir);
+                if (ignore.IsIgnored(relDir + "/")) continue;
+                if (Directory.EnumerateFiles(dir, "*", SearchOption.AllDirectories).Any(f => Protected(Rel(f)))) continue;
+                removable.Add(relDir);
+            }
+            var removableSet = removable.ToHashSet(StringComparer.Ordinal);
+            bool HasRemovableAncestor(string rel)
+            {
+                for (int i = rel.LastIndexOf('/'); i > 0; i = rel.LastIndexOf('/', i - 1))
+                    if (removableSet.Contains(rel[..i])) return true;
+                return false;
+            }
+            foreach (string relDir in removable.OrderBy(d => d, StringComparer.Ordinal))
+            {
+                if (HasRemovableAncestor(relDir)) continue; // a parent will take this subtree with it
+                if (dry) Console.WriteLine($"Would remove {relDir}/");
+                else if (Directory.Exists(Path.Combine(world, relDir)))
+                { Directory.Delete(Path.Combine(world, relDir), recursive: true); Console.WriteLine($"Removing {relDir}/"); }
+                n++;
+            }
+        }
+
         if (n == 0) Console.Error.WriteLine("Nothing to clean.");
         return 0;
     }

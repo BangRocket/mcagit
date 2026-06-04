@@ -141,6 +141,25 @@ public sealed class Repository
         return name ?? (email is not null ? $"<{email}>" : null);
     }
 
+    // Global (~/.mcaconfig) accessors usable without a repository — `config --global` must work
+    // on a fresh machine, before `init`.
+    public static string? GetGlobalConfig(string key) => ReadGlobalConfig().GetValueOrDefault(key);
+    public static void SetGlobalConfig(string key, string value)
+    {
+        Dictionary<string, string> g = ReadGlobalConfig();
+        g[key] = value;
+        WriteGlobalConfig(g);
+    }
+    public static bool UnsetGlobalConfig(string key)
+    {
+        Dictionary<string, string> g = ReadGlobalConfig();
+        if (!g.Remove(key)) return false;
+        WriteGlobalConfig(g);
+        return true;
+    }
+    public static IEnumerable<(string Key, string Value)> ListGlobalConfig() =>
+        ReadGlobalConfig().Select(kv => (kv.Key, kv.Value));
+
     private static Dictionary<string, string> ReadGlobalConfig() => File.Exists(GlobalConfigPath)
         ? System.Text.Json.JsonSerializer.Deserialize<Dictionary<string, string>>(File.ReadAllText(GlobalConfigPath)) ?? new()
         : new();
@@ -154,9 +173,32 @@ public sealed class Repository
     public void AddRemote(string name, string urlOrPath)
     {
         RepoConfig c = ReadConfig();
-        // Leave URLs (http://, https://, ssh://) intact; only resolve filesystem paths.
+        // Leave URLs (http://, https://, ssh://, azure://, s3://) intact; only resolve filesystem paths.
         c.Remotes[name] = urlOrPath.Contains("://") ? urlOrPath : Path.GetFullPath(urlOrPath);
         WriteConfig(c);
+    }
+
+    public bool RemoveRemote(string name)
+    {
+        RepoConfig c = ReadConfig();
+        if (!c.Remotes.Remove(name)) return false;
+        WriteConfig(c);
+        string tracking = Path.Combine(Dir, "refs", "remotes", name);
+        if (Directory.Exists(tracking)) Directory.Delete(tracking, recursive: true); // drop its tracking refs too
+        return true;
+    }
+
+    public bool RenameRemote(string from, string to)
+    {
+        RepoConfig c = ReadConfig();
+        if (!c.Remotes.TryGetValue(from, out string? url) || c.Remotes.ContainsKey(to)) return false;
+        c.Remotes.Remove(from);
+        c.Remotes[to] = url;
+        WriteConfig(c);
+        string oldTrack = Path.Combine(Dir, "refs", "remotes", from);
+        string newTrack = Path.Combine(Dir, "refs", "remotes", to);
+        if (Directory.Exists(oldTrack) && !Directory.Exists(newTrack)) Directory.Move(oldTrack, newTrack);
+        return true;
     }
 
     public string? ReadRemoteRef(string remoteSlashBranch)
