@@ -1,0 +1,40 @@
+# Dependabot — keeps GitHub Actions and the NuGet dependency current.
+# Patch + minor NuGet bumps are grouped into one weekly PR to avoid review
+# fatigue; major bumps come as individual PRs because they need real review.
+
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 3
+    commit-message:
+      prefix: "chore(deps)"
+      include: scope
+    labels:
+      - dependencies
+    # SHA-pinned `uses:` references: dependabot bumps the SHA and refreshes
+    # the trailing `# vX` comment. Grouped — action bumps are low-review.
+    groups:
+      actions-all:
+        patterns:
+          - "*"
+
+  - package-ecosystem: nuget
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(deps)"
+      include: scope
+    labels:
+      - dependencies
+    groups:
+      nuget-patch-and-minor:
+        update-types:
+          - patch
+          - minor

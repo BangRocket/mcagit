@@ -11,3 +11,7 @@ obj/
 
 # OS
 .DS_Store
+
+# Local gauntlet/test scratch and machine-local MCP config
+_gauntlet_tmp/
+.mcp.json

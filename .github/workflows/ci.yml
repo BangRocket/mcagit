@@ -1,0 +1,149 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+# Nothing in CI needs to write to the repo.
+permissions:
+  contents: read
+
+jobs:
+  # Style gate. Known-failing on the current codebase; intentionally NOT a
+  # required check — fix at your leisure with `dotnet format McaGit.sln`.
+  lint:
+    name: lint (dotnet format)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: 9.0.x
+      - run: dotnet format McaGit.sln --verify-no-changes
+
+  # Lints the workflows themselves (expression/context misuse, shellcheck on
+  # run: blocks). Unlike `lint` above, this one IS expected to stay green.
+  actionlint:
+    name: actionlint (workflows)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - name: run actionlint
+        run: |
+          set -euo pipefail
+          bash <(curl -sSfL https://raw.githubusercontent.com/rhysd/actionlint/v1.7.12/scripts/download-actionlint.bash) 1.7.12
+          ./actionlint -color
+
+  test:
+    name: build + test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    env:
+      # Enables the otherwise-skipped real-region parse test in RegionFileTests.
+      MCADIFF_TEST_REGION: ${{ github.workspace }}/compare-worlds/New_World_Older/region/r.0.0.mca
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: 9.0.x
+      - name: Build (Release, warnings visible)
+        run: dotnet build McaGit.sln -c Release
+      - name: Test with coverage
+        run: >-
+          dotnet test McaGit.sln -c Release --no-build
+          --collect:"XPlat Code Coverage"
+          --logger "trx;LogFileName=results.trx"
+          --results-directory TestResults
+      - name: Upload coverage to Codecov
+        if: matrix.os == 'ubuntu-latest'
+        uses: codecov/codecov-action@75cd11691c0faa626561e295848008c8a7dddffe # v5
+        with:
+          files: TestResults/**/coverage.cobertura.xml
+          token: ${{ secrets.CODECOV_TOKEN }}
+          fail_ci_if_error: false
+      - name: Upload test results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: test-results-${{ matrix.os }}
+          path: TestResults/**/*.trx
+          retention-days: 14
+
+  # End-to-end round-trip gauntlet against the real sample worlds — the
+  # correctness claims unit tests can't cover (see CLAUDE.md / README).
+  roundtrip:
+    name: e2e round-trip (real worlds)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: 9.0.x
+      - name: Build
+        # Publish once and invoke the binary directly — the gauntlet calls the
+        # CLI ~20 times, and `dotnet run` would pay MSBuild evaluation on each.
+        run: dotnet publish src/McaDiff -c Release -o gauntlet-bin
+      - name: Round-trip gauntlet
+        shell: bash
+        run: |
+          set -eu
+          MCADIFF="./gauntlet-bin/mcadiff"
+          OLD=compare-worlds/New_World_Older
+          NEW=compare-worlds/New_World_Newer
+          TMP=$(mktemp -d)
+
+          echo "## Round-trip gauntlet" >> "$GITHUB_STEP_SUMMARY"
+
+          # expect <code> <desc> <cmd...>  — run a step, assert its exit code.
+          expect() {
+            local want=$1 desc=$2; shift 2
+            local t0=$SECONDS
+            set +e; "$@" > "$TMP/out.log" 2>&1; local got=$?; set -e
+            if [ "$got" -ne "$want" ]; then
+              echo "- ❌ $desc (exit $got, wanted $want)" >> "$GITHUB_STEP_SUMMARY"
+              echo "::error::FAIL: $desc (exit $got, wanted $want)"
+              tail -n 50 "$TMP/out.log"
+              exit 1
+            fi
+            echo "- ✅ $desc ($((SECONDS - t0))s)" >> "$GITHUB_STEP_SUMMARY"
+            echo "PASS: $desc"
+          }
+
+          expect 0 "self-diff is clean"            $MCADIFF "$OLD" "$OLD"
+          expect 1 "cross-diff finds changes"      $MCADIFF "$OLD" "$NEW"
+
+          expect 0 "extract old->new"              $MCADIFF extract "$OLD" "$NEW" -o "$TMP/changes.mcapatch"
+          expect 0 "apply forward, no conflicts"   $MCADIFF apply "$TMP/changes.mcapatch" "$OLD" -o "$TMP/old-updated"
+          expect 0 "forward result matches NEW"    $MCADIFF "$TMP/old-updated" "$NEW"
+          expect 0 "apply reverse, no conflicts"   $MCADIFF apply --reverse "$TMP/changes.mcapatch" "$NEW" -o "$TMP/new-restored"
+          expect 0 "reverse result matches OLD"    $MCADIFF "$TMP/new-restored" "$OLD"
+
+          cp -r "$OLD" "$TMP/world"
+          expect 0 "init repo"                     $MCADIFF init "$TMP/repo" --worktree "$TMP/world"
+          expect 0 "set user.name"                 $MCADIFF -C "$TMP/repo" config user.name ci
+          expect 0 "set user.email"                $MCADIFF -C "$TMP/repo" config user.email ci@example.com
+          expect 0 "commit older"                  $MCADIFF -C "$TMP/repo" commit -m older
+          rm -rf "$TMP/world" && cp -r "$NEW" "$TMP/world"
+          expect 0 "commit newer"                  $MCADIFF -C "$TMP/repo" commit -m newer
+          # Use the stable branch ref (main / main~1), not HEAD/HEAD~1: `checkout main~1`
+          # detaches HEAD to the older commit, so any later HEAD-relative ref would drift.
+          expect 0 "checkout main (newer)"         $MCADIFF -C "$TMP/repo" checkout main "$TMP/co-newer"
+          expect 0 "main reproduces NEW"           $MCADIFF "$TMP/co-newer" "$NEW"
+          expect 0 "checkout main~1 (older)"       $MCADIFF -C "$TMP/repo" checkout main~1 "$TMP/co-older"
+          expect 0 "main~1 reproduces OLD"         $MCADIFF "$TMP/co-older" "$OLD"
+
+          expect 0 "gc repacks"                    $MCADIFF -C "$TMP/repo" gc
+          expect 0 "fsck after gc"                 $MCADIFF -C "$TMP/repo" fsck
+          expect 0 "checkout main~1 after gc"      $MCADIFF -C "$TMP/repo" checkout main~1 "$TMP/co-older-2"
+          expect 0 "post-gc checkout matches OLD"  $MCADIFF "$TMP/co-older-2" "$OLD"
+
+          echo "round-trip gauntlet PASSED"
