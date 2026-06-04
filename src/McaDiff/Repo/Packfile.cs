@@ -213,11 +213,13 @@ public sealed class Packfile : IDisposable
         }
     }
 
-    private static Dictionary<string, long> ReadIndex(string idxPath)
+    private static Dictionary<string, long> ReadIndex(string idxPath) => ParseIndex(File.ReadAllBytes(idxPath));
+
+    /// <summary>The hash → offset map encoded in <paramref name="b"/> (a <c>.idx</c> file's bytes).</summary>
+    internal static Dictionary<string, long> ParseIndex(byte[] b)
     {
-        byte[] b = File.ReadAllBytes(idxPath);
         if (b.Length < 9 || b[0] != 'M' || b[1] != 'C' || b[2] != 'A' || b[3] != 'I')
-            throw new InvalidDataException($"not a pack index: {idxPath}");
+            throw new InvalidDataException("not a pack index");
         if (b[4] != Version)
             throw new InvalidDataException($"pack index version {b[4]} unsupported (this build writes/reads v{Version})");
         int p = 5;
@@ -233,6 +235,10 @@ public sealed class Packfile : IDisposable
         }
         return map;
     }
+
+    /// <summary>The object hashes listed in a <c>.idx</c>'s bytes — lets a bucket build its object
+    /// index from the small index blobs without downloading the pack data.</summary>
+    public static IReadOnlyCollection<string> IndexHashes(byte[] idxBytes) => ParseIndex(idxBytes).Keys;
 
     // ---- primitives ----
 

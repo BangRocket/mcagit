@@ -46,7 +46,13 @@ public static class RemoteOps
         var candidates = new HashSet<string>();
         Transfer.CollectReachable(repo, local, candidates);
         IReadOnlyList<string> missing = t.Missing(candidates.ToList());
-        foreach (string h in missing) t.PutObject(h, repo.Objects.ReadRaw(h));
+
+        // A bucket batches the missing objects into one pack (≈1 write); other transports
+        // stay one-object-per-call.
+        if (t is IBatchTransport batch)
+            batch.PutObjects(missing.Select(h => (h, repo.Objects.Read(h))).ToList());
+        else
+            foreach (string h in missing) t.PutObject(h, repo.Objects.ReadRaw(h));
 
         t.UpdateRef(branch, remoteTip, local, force);
         return new PushResult(missing.Count, ff);

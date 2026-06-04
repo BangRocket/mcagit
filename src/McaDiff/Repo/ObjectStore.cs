@@ -94,7 +94,8 @@ public sealed class ObjectStore
         return File.Exists(p) ? File.ReadAllBytes(p) : Compress(Read(hash));
     }
 
-    private static byte[] Compress(ReadOnlySpan<byte> content)
+    /// <summary>zlib-compresses content to the loose-object/transport form (shared with BucketTransport).</summary>
+    internal static byte[] Compress(ReadOnlySpan<byte> content)
     {
         using var ms = new MemoryStream();
         using (var z = new ZLibStream(ms, CompressionLevel.Optimal, leaveOpen: true)) z.Write(content);
