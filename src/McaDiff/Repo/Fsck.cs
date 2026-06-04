@@ -55,11 +55,16 @@ public static class Fsck
 
             if (!repo.Objects.Exists(commit.Tree)) missing.Add($"{commit.Tree} (tree of {c[..10]})");
             else if (reachable.Add(commit.Tree))
-                foreach (string h in ManifestObjects(repo.ReadManifest(commit.Tree)))
+            {
+                Manifest tree;
+                try { tree = repo.ReadManifest(commit.Tree); }
+                catch { continue; } // tree object unreadable (corrupt/truncated) — already flagged by the integrity pass
+                foreach (string h in ManifestObjects(tree))
                 {
                     if (!repo.Objects.Exists(h)) missing.Add($"{h} (in tree {commit.Tree[..10]})");
                     else reachable.Add(h);
                 }
+            }
 
             foreach (string p in commit.Parents) Enqueue(p, $"commit {c[..10]}");
         }
@@ -71,7 +76,9 @@ public static class Fsck
             if (!reachable.Contains(h))
             {
                 unreachable++;
-                if (repo.Classify(h) == Repository.ObjectKind.Commit) danglingCommits.Add(h);
+                // Classify reads the object; a corrupt one (already in `corrupt`) can't be classified.
+                try { if (repo.Classify(h) == Repository.ObjectKind.Commit) danglingCommits.Add(h); }
+                catch { /* unreadable — already reported corrupt */ }
             }
 
         return new Report(all.Count, corrupt, missing, danglingCommits, unreachable);

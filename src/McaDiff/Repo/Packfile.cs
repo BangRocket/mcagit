@@ -67,23 +67,30 @@ public sealed class Packfile : IDisposable
     {
         // Read enough to cover the entry header (type + up to two varints), then the payload.
         byte[] head = ReadBytes(off, 24);
+        if (head.Length == 0) throw new InvalidDataException("pack entry offset past end of file (truncated pack?)");
         int p = 0;
         byte type = head[p++];
         if (type == 0)
         {
             ulong compLen = ReadVarint(head, ref p);
-            byte[] comp = ReadBytes(off + p, (int)compLen);
-            return Inflate(comp);
+            return Inflate(ReadPayload(off + p, (int)compLen));
         }
         else
         {
             ulong rel = ReadVarint(head, ref p);
             ulong compLen = ReadVarint(head, ref p);
-            byte[] comp = ReadBytes(off + p, (int)compLen);
-            byte[] delta = Inflate(comp);
+            byte[] delta = Inflate(ReadPayload(off + p, (int)compLen));
             byte[] baseContent = ReadAt(off - (long)rel);
             return Delta.Apply(baseContent, delta);
         }
+    }
+
+    /// <summary>Reads exactly <paramref name="len"/> payload bytes, or throws (truncated pack).</summary>
+    private byte[] ReadPayload(long off, int len)
+    {
+        byte[] buf = ReadBytes(off, len);
+        if (buf.Length != len) throw new InvalidDataException("truncated pack object");
+        return buf;
     }
 
     private byte[] ReadBytes(long off, int n)
@@ -257,6 +264,7 @@ public sealed class Packfile : IDisposable
         int shift = 0;
         while (true)
         {
+            if (p >= buf.Length) throw new InvalidDataException("truncated varint in pack");
             byte b = buf[p++];
             v |= (ulong)(b & 0x7F) << shift;
             if ((b & 0x80) == 0) return v;
