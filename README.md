@@ -210,6 +210,21 @@ The reverse direction restores instead: keep the same patch and run
 rebuild the older state from the newer world. Both directions are verified
 end-to-end against these worlds in the test suite.
 
+### Patches are version-specific
+
+A `.mcapatch` records changes by `NbtPath`. Minecraft occasionally renames or restructures NBT across
+versions, so a path captured on one version can silently not match on another (apply reports it as a
+guarded conflict rather than misapplying). Apply a patch onto a base whose **DataVersion** matches the
+one it was extracted from. Known on-disk boundaries:
+
+| Version | DataVersion | What changed on disk |
+|---|---|---|
+| 1.21.2 | 4080 | `Lock` → `lock`; boat id restructure |
+| 1.21.4 | 4189 | furnace field renames (`CookTime` → `cooking_time_spent`, …) |
+| 1.21.5 | 4325 | nothing on disk (informational) |
+
+The full `.mcapatch` schema is in [`docs/mcapatch-format.md`](docs/mcapatch-format.md).
+
 ## Version control
 
 A semantic VCS for worlds — like git, but it understands chunks. The repository is
@@ -263,6 +278,21 @@ be SSH-signed (`commit -S`, `tag -s`, `user.signingkey`) and verified (`tag -v`)
 `merge` stops without committing, records MERGE_HEAD + a conflict list, and lays the
 partial result into the worktree; resolve it and `merge --continue`, or `merge --abort`.
 Pre-commit / post-commit **hooks** run from `<repo>/hooks/`.
+
+### Where it diverges from git (on purpose)
+
+mcadiff is git-shaped but a world isn't a source tree — a few behaviors differ deliberately:
+
+- **`commit` exits `0` on "nothing to commit"** (git exits `1`). A scheduled backup of an unchanged
+  world isn't an error; `commit --json`'s `committed` flag distinguishes the cases.
+- **`clean -f` removes untracked files but leaves directories** — pass `-d` to remove untracked dirs
+  too (git's behavior).
+- **`stash` doesn't shelve untracked files** (no `-u`/`--include-untracked` yet).
+- **No byte-identical restore** — `checkout` re-encodes chunks canonically (sorted keys, re-zlib) and
+  resets region chunk timestamps; reproduction is semantically faithful (loads in Minecraft), not
+  bit-for-bit.
+- **`git log` / `git fsck` can't read an mcadiff repo** and vice-versa — the object model (manifests
+  as trees, canonical-NBT blobs, a custom packfile format) is its own; there's no git interop goal.
 
 **Automating backups.** `commit --push <remote>` snapshots and pushes in one shot (and
 still pushes when nothing changed, to keep the offsite current); `commit --json` prints a
@@ -480,6 +510,9 @@ Excluded: Alpha/Beta/MCRegion (`.mcr`, pre-1.2.1) — a different container.
 
 ## More documentation
 
+- [`docs/commands.md`](docs/commands.md) — every command and flag (the single source of truth).
+- [`docs/architecture/`](docs/architecture/) — the design decision records (ADRs).
+- [`CHANGELOG.md`](CHANGELOG.md) — notable changes.
 - [`docs/repo-format.md`](docs/repo-format.md) — the on-disk repository format (objects, manifest, commit/tag, packfiles).
 - [`docs/mcapatch-format.md`](docs/mcapatch-format.md) — the `.mcapatch` JSON schema, type-tagged NBT encoding, and `NbtPath` grammar.
 - [`docs/cloud-backend.md`](docs/cloud-backend.md) — the serverless `azure://` / `s3://` bucket backend.
