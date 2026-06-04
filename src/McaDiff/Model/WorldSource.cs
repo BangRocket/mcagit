@@ -23,14 +23,18 @@ public static class WorldSource
     // Chunk-bearing categories (each holds r.X.Z.mca files).
     private static readonly string[] RegionCategories = ["region", "entities", "poi"];
 
-    // Loose NBT globs, relative to the world root (covers per-dimension data too).
-    private static readonly (string Dir, string Pattern)[] LoosePatterns =
+    // Loose file globs, relative to the world root. Category "nbt" → parsed + NBT-diffed;
+    // "blob" → byte-compared (non-NBT: advancements/stats JSON). Covers per-dimension data too.
+    private static readonly (string Dir, string Pattern, string Category)[] LoosePatterns =
     [
-        ("", "level.dat"),
-        ("playerdata", "*.dat"),
-        ("data", "*.dat"),
-        ("DIM-1/data", "*.dat"),
-        ("DIM1/data", "*.dat"),
+        ("", "level.dat", "nbt"),
+        ("playerdata", "*.dat", "nbt"),
+        ("data", "*.dat", "nbt"),
+        ("data", "*.nbt", "nbt"),          // custom structures
+        ("DIM-1/data", "*.dat", "nbt"),
+        ("DIM1/data", "*.dat", "nbt"),
+        ("advancements", "*.json", "blob"),
+        ("stats", "*.json", "blob"),
     ];
 
     public static bool IsDirectory(string path) => Directory.Exists(path);
@@ -41,11 +45,14 @@ public static class WorldSource
         string full = Path.GetFullPath(path);
         string name = Path.GetFileName(full);
         bool isRegion = name.EndsWith(".mca", StringComparison.OrdinalIgnoreCase);
+        // .mcc (external oversized-chunk payload) and .json are not standalone NBT — byte-compare them.
+        bool isBlob = name.EndsWith(".mcc", StringComparison.OrdinalIgnoreCase)
+            || name.EndsWith(".json", StringComparison.OrdinalIgnoreCase);
         return new WorldUnit(
             RelativePath: name,
             AbsolutePath: full,
             Kind: isRegion ? UnitKind.Region : UnitKind.Loose,
-            Category: isRegion ? "region" : "nbt");
+            Category: isRegion ? "region" : isBlob ? "blob" : "nbt");
     }
 
     /// <summary>
@@ -70,15 +77,15 @@ public static class WorldSource
             }
         }
 
-        // Loose NBT files.
+        // Loose files (NBT + non-NBT blobs).
         if (options.IncludesCategory("nbt"))
         {
-            foreach ((string dir, string pattern) in LoosePatterns)
+            foreach ((string dir, string pattern, string category) in LoosePatterns)
             {
                 string searchDir = Path.Combine(full, dir);
                 if (!Directory.Exists(searchDir)) continue;
                 foreach (string file in Directory.EnumerateFiles(searchDir, pattern))
-                    Add(units, full, file, UnitKind.Loose, "nbt");
+                    Add(units, full, file, UnitKind.Loose, category);
             }
         }
 

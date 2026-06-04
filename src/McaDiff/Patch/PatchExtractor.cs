@@ -54,9 +54,11 @@ public static class PatchExtractor
     }
 
     private static PatchFileEntry? ExtractModified(WorldUnit a, WorldUnit b, bool wholeChunk, bool wholeFile)
-        => a.Kind == UnitKind.Region
-            ? ExtractRegion(a, b, wholeChunk)
-            : ExtractLoose(a, b, wholeFile);
+        => a.Category == "blob"      // non-NBT (JSON, .mcc): not representable as node ops
+            ? null
+            : a.Kind == UnitKind.Region
+                ? ExtractRegion(a, b, wholeChunk)
+                : ExtractLoose(a, b, wholeFile);
 
     private static PatchFileEntry? ExtractRegion(WorldUnit a, WorldUnit b, bool wholeChunk)
     {
@@ -136,6 +138,7 @@ public static class PatchExtractor
 
     private static PatchFileEntry? ExtractWholeFile(WorldUnit unit, DiffStatus status)
     {
+        if (unit.Category == "blob") return null; // non-NBT blobs aren't carried in a patch
         // status==Added means present only in target; ==Removed means only in base.
         bool added = status == DiffStatus.Added;
         if (unit.Kind == UnitKind.Loose)

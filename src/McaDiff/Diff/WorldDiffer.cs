@@ -155,6 +155,11 @@ public static class WorldDiffer
         if (bytesA.AsSpan().SequenceEqual(bytesB))
             return null;
 
+        // Non-NBT loose files (advancements/stats JSON, .mcc) are byte-compared, not parsed.
+        if (a.Category == "blob")
+            return new FileDiff(b.RelativePath, b.Category, UnitKind.Loose, DiffStatus.Modified, NoChunks,
+                [new NbtChange("(binary content)", ChangeKind.Modified, $"{bytesA.Length} bytes", $"{bytesB.Length} bytes")]);
+
         var rootA = ChunkCodec.LoadNbtFile(a.AbsolutePath);
         var rootB = ChunkCodec.LoadNbtFile(b.AbsolutePath);
         List<NbtChange> changes = NbtComparer.Compare(rootA, rootB, options.Nbt);

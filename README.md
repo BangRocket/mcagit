@@ -107,8 +107,10 @@ For a world folder, across the overworld and the `DIM-1` / `DIM1` dimensions:
 
 - **Chunk data** — `region/`, `entities/`, `poi/` (`r.X.Z.mca`), diffed
   chunk-by-chunk and then NBT element-by-element.
-- **Loose NBT** — `level.dat`, `playerdata/*.dat`, `data/*.dat` (and per-dimension
-  `data/*.dat`).
+- **Loose NBT** — `level.dat`, `playerdata/*.dat`, `data/*.dat`, `data/*.nbt`
+  (custom structures), and per-dimension `data/`.
+- **Non-NBT files** — `advancements/*.json`, `stats/*.json`, and `.mcc` external
+  chunk payloads are byte-compared (reported as modified, not parsed).
 
 ### How the NBT diff reads
 
