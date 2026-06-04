@@ -134,14 +134,16 @@ jobs:
           expect 0 "commit older"                  $MCADIFF -C "$TMP/repo" commit -m older
           rm -rf "$TMP/world" && cp -r "$NEW" "$TMP/world"
           expect 0 "commit newer"                  $MCADIFF -C "$TMP/repo" commit -m newer
-          expect 0 "checkout HEAD~1"               $MCADIFF -C "$TMP/repo" checkout HEAD~1 "$TMP/co-older"
-          expect 0 "HEAD~1 reproduces OLD"         $MCADIFF "$TMP/co-older" "$OLD"
-          expect 0 "checkout HEAD"                 $MCADIFF -C "$TMP/repo" checkout HEAD "$TMP/co-newer"
-          expect 0 "HEAD reproduces NEW"           $MCADIFF "$TMP/co-newer" "$NEW"
+          # Use the stable branch ref (main / main~1), not HEAD/HEAD~1: `checkout main~1`
+          # detaches HEAD to the older commit, so any later HEAD-relative ref would drift.
+          expect 0 "checkout main (newer)"         $MCADIFF -C "$TMP/repo" checkout main "$TMP/co-newer"
+          expect 0 "main reproduces NEW"           $MCADIFF "$TMP/co-newer" "$NEW"
+          expect 0 "checkout main~1 (older)"       $MCADIFF -C "$TMP/repo" checkout main~1 "$TMP/co-older"
+          expect 0 "main~1 reproduces OLD"         $MCADIFF "$TMP/co-older" "$OLD"
 
           expect 0 "gc repacks"                    $MCADIFF -C "$TMP/repo" gc
           expect 0 "fsck after gc"                 $MCADIFF -C "$TMP/repo" fsck
-          expect 0 "checkout HEAD~1 after gc"      $MCADIFF -C "$TMP/repo" checkout HEAD~1 "$TMP/co-older-2"
+          expect 0 "checkout main~1 after gc"      $MCADIFF -C "$TMP/repo" checkout main~1 "$TMP/co-older-2"
           expect 0 "post-gc checkout matches OLD"  $MCADIFF "$TMP/co-older-2" "$OLD"
 
           echo "round-trip gauntlet PASSED"
