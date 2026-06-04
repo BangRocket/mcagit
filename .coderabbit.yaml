@@ -1,0 +1,56 @@
+# CodeRabbit configuration — path-scoped review guidance keyed to mcadiff's invariants.
+# https://docs.coderabbit.ai/guides/configure-coderabbit
+language: en-US
+
+reviews:
+  profile: chill
+  request_changes_workflow: false
+  high_level_summary: true
+  poem: false
+  auto_review:
+    enabled: true
+    drafts: false
+
+  path_instructions:
+    - path: "src/McaDiff/Nbt/**"
+      instructions: >
+        Canonical determinism is load-bearing. NbtCanonical must produce identical bytes
+        regardless of on-disk compression or fNbt iteration order, and must never depend on a
+        diff-path normalization. Type-tagged NbtJson must round-trip losslessly — longs beyond
+        2^53 and float/double NaN/Inf are string-encoded, never JSON numbers. Thread `depth`
+        through any new recursive NBT walk and respect NbtCanonical.MaxDepth.
+    - path: "src/McaDiff/Diff/**"
+      instructions: >
+        There is ONE comparison walk: NbtComparer + IDiffSink feed both the display diff and the
+        patch extractor, so they can't drift. Lists that behave as sets are matched by identity
+        (block coords, entity UUID, Slot, string id), not position. Diff-only normalizations (e.g.
+        single-entry-palette data, ChunkNormalize) belong here, never on the canonical/storage path.
+    - path: "src/McaDiff/Patch/**"
+      instructions: >
+        Patches record both base and value (invertible) and apply is 3-way guarded — a node changes
+        only if the target matches the recorded base, else it's a reported conflict. Apply NEVER
+        mutates the target; it writes a fresh output world.
+    - path: "src/McaDiff/Repo/**"
+      instructions: >
+        Exit codes follow git (0 clean / 1 differences-or-conflicts / 2 error); commit deliberately
+        exits 0 on "nothing to commit". commit→checkout must reproduce a playable world. Untrusted
+        input (manifest keys, ref names, received packs) goes through PathGuard.Confine /
+        ObjectStore.IsValidHash; every inflate of untrusted bytes must be size-bounded (SafeInflate)
+        and NBT depth-checked (NbtDepthGuard) before fNbt parses.
+    - path: "src/McaDiff/Cli/**"
+      instructions: >
+        Validate args and return clean git-style exit codes; never throw a raw stack trace (the
+        top-level catch-all maps failures to "mcadiff: error: <msg>" + exit 2). Destructive worktree
+        ops confirm unless -y or non-interactive stdin.
+    - path: "tests/**"
+      instructions: >
+        Tests are synthetic via TestAnvil — no binary fixtures. Prefer deterministic concurrency
+        primitives over sleeps. See TESTING.md for the test-type taxonomy.
+
+  tools:
+    markdownlint:
+      enabled: true
+
+knowledge_base:
+  learnings:
+    scope: local
