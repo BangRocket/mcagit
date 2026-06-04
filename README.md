@@ -428,3 +428,7 @@ Excluded: Alpha/Beta/MCRegion (`.mcr`, pre-1.2.1) — a different container.
   over the network isn't wired up yet.
 - A compound key containing a literal `.` or `[` isn't addressable by patch/merge
   paths (real Minecraft keys don't use them).
+
+## License
+
+GPL-3.0-or-later. See [LICENSE](LICENSE). mcadiff is free software: you may redistribute and/or modify it under the terms of the GNU General Public License, version 3 or (at your option) any later version. It is distributed WITHOUT ANY WARRANTY. As copyleft, distributed derivatives must also be GPL-licensed with source available.
