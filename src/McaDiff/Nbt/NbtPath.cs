@@ -121,7 +121,9 @@ public static class NbtPath
             {
                 int j = path.IndexOf(']', i + 1);
                 if (j < 0) throw new FormatException($"Unterminated '[' in path: {path}");
-                segs.Add(new Seg(true, path.Substring(i + 1, j - (i + 1))));
+                string inner = path.Substring(i + 1, j - (i + 1));
+                if (inner.Length == 0) throw new FormatException($"Empty '[]' in path: {path}");
+                segs.Add(new Seg(true, inner));
                 i = j + 1;
             }
             else

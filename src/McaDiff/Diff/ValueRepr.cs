@@ -21,7 +21,7 @@ public static class ValueRepr
     /// <summary>Repr for scalar leaf tags, with Minecraft/SNBT type suffixes.</summary>
     public static string Scalar(NbtTag tag) => tag.TagType switch
     {
-        NbtTagType.Byte => $"{tag.ByteValue}b",
+        NbtTagType.Byte => $"{(sbyte)tag.ByteValue}b", // signed, like every Minecraft/SNBT tool (0xC8 → -56b)
         NbtTagType.Short => $"{tag.ShortValue}s",
         NbtTagType.Int => tag.IntValue.ToString(CultureInfo.InvariantCulture),
         NbtTagType.Long => $"{tag.LongValue.ToString(CultureInfo.InvariantCulture)}L",

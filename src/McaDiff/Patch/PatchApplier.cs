@@ -42,6 +42,8 @@ public static class PatchApplier
 {
     public static ApplyReport Apply(WorldPatch patch, string targetDir, string outputDir, ApplySettings settings)
     {
+        if (patch.Version != 1)
+            throw new NotSupportedException($"unsupported .mcapatch version {patch.Version} (this build reads version 1)");
         if (!WorldSource.IsDirectory(targetDir))
             throw new ArgumentException("apply requires a world directory as the target.");
 

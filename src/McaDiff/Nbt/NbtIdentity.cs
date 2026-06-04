@@ -9,6 +9,15 @@ namespace McaDiff.Nbt;
 /// and the patch path resolver (<c>Nbt.NbtPath</c>). Returns <c>null</c> when no
 /// reliable identity exists.
 /// </summary>
+/// <remarks>
+/// VERSION-1 CONTRACT: the key formats and priority order below are part of the
+/// <c>.mcapatch</c> v1 path syntax. Changing any rule here (a format, the priority,
+/// or which fields are consulted) is a BREAKING change — patches written under the
+/// old rule would resolve to a different (or absent) list element. Any such change
+/// must bump <see cref="Patch.WorldPatch.Version"/> and gate it in <c>PatchApplier</c>.
+/// Known limitation: an identity value containing a literal <c>]</c> (e.g. a modded
+/// id) is mis-parsed by <c>NbtPath</c>, which truncates at the first <c>]</c>.
+/// </remarks>
 public static class NbtIdentity
 {
     public static string? KeyOf(NbtCompound c)

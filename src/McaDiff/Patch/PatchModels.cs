@@ -44,6 +44,10 @@ public sealed class PatchFileEntry
 /// <summary>A portable, bidirectional world patch (the <c>*.mcapatch</c> document).</summary>
 public sealed class WorldPatch
 {
+    // Version 1 contract = (1) this JSON schema, (2) the NbtJson type-tag encoding
+    // (note: long/float/double are STRING-encoded for precision + NaN/±Inf), (3) the
+    // NbtPath syntax incl. the NbtIdentity key formats. Any change to these is a breaking
+    // Version 2 — PatchApplier rejects a patch whose Version != 1.
     public int Version { get; set; } = 1;
     public string? Base { get; set; }
     public string? Target { get; set; }

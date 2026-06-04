@@ -70,7 +70,9 @@ public static class NbtComparer
                 sink.Removed(child, ta);
         }
 
-        foreach (NbtTag tb in bByName.Values)
+        // Emit added keys in name order so an extracted patch is byte-reproducible (the patch
+        // sink doesn't re-sort, and fNbt iteration order isn't a contract).
+        foreach (NbtTag tb in bByName.Values.OrderBy(t => t.Name, StringComparer.Ordinal))
             sink.Added(Child(path, tb.Name!), tb);
     }
 
