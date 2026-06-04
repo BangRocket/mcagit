@@ -46,6 +46,27 @@ public class NetworkTests
         finally { server.Stop(); }
     }
 
+    [Fact]
+    public async Task Http_ReadOnlyServer_AllowsReads_Rejects403_404sMissing()
+    {
+        Repository remote = Repository.Init(TestAnvil.TempDir("roH"));
+        CommitWorld(remote, World("a"), "c1");
+        int port = FreePort();
+        var server = new RepoServer(Repository.Open(remote.Dir), allowPush: false, token: null);
+        server.Start("localhost", port);
+        var thread = new Thread(server.Run) { IsBackground = true };
+        thread.Start();
+        try
+        {
+            using var http = new System.Net.Http.HttpClient { BaseAddress = new Uri($"http://localhost:{port}/") };
+            Assert.Equal(System.Net.HttpStatusCode.OK, (await http.GetAsync("info/refs")).StatusCode);              // anonymous read
+            Assert.Equal(System.Net.HttpStatusCode.NotFound, (await http.GetAsync("objects/" + new string('a', 64))).StatusCode); // missing object
+            var write = await http.PostAsync("pack", new System.Net.Http.ByteArrayContent([1, 2, 3]));
+            Assert.Equal(System.Net.HttpStatusCode.Forbidden, write.StatusCode);                                  // read-only → 403
+        }
+        finally { server.Stop(); }
+    }
+
     // ---- ssh stdio protocol (over in-memory pipes; no real ssh needed) ----
 
     [Fact]

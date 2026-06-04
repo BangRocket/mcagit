@@ -1,5 +1,6 @@
 using fNbt;
 using McaDiff.Anvil;
+using McaDiff.Diff;
 using McaDiff.Nbt;
 using McaDiff.Repo;
 using Xunit;
@@ -89,6 +90,11 @@ public class GitLikeTier3Tests
         Assert.False(repo.InMerge);
         Assert.Equal(cMain, repo.ReadBranch("main"));
         Assert.Equal(2, WorldChunkA(world));            // worktree restored to ours (a=2)
+
+        // Strengthened (issue #19): the worktree EXACTLY reproduces the pre-merge HEAD, not just one field.
+        string expected = TestAnvil.TempDir("mab-exp");
+        Repo.Checkout.Materialize(repo, repo.ReadManifest(repo.ReadCommit(cMain).Tree), expected);
+        Assert.False(WorldDiffer.Diff(world, expected, new DiffRunOptions()).HasDifferences);
     }
 
     [Fact]
