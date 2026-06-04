@@ -86,6 +86,12 @@ public static class StdioServer
                         svc.PutObject(cmd.Hash!, blob);
                         Respond(output, new StdioResp { Ok = true });
                         break;
+                    case "put-pack":
+                        byte[] idx = Frame.Read(input) ?? throw new EndOfStreamException("missing pack index");
+                        byte[] pack = Frame.Read(input) ?? throw new EndOfStreamException("missing pack payload");
+                        svc.PutPack(pack, idx);
+                        Respond(output, new StdioResp { Ok = true });
+                        break;
                     case "ref":
                         svc.UpdateRef(cmd.Branch!, cmd.Old, cmd.New!, cmd.Force);
                         Respond(output, new StdioResp { Ok = true });
@@ -102,7 +108,7 @@ public static class StdioServer
 }
 
 /// <summary>Client transport over a pair of byte streams (used by ssh).</summary>
-public sealed class StdioTransport(Stream send, Stream recv) : IRemoteTransport
+public sealed class StdioTransport(Stream send, Stream recv) : IRemoteTransport, IBatchTransport
 {
     public RefAdvertisement ListRefs() => Do(new StdioCmd { Op = "list" }).Refs!;
 
@@ -119,6 +125,15 @@ public sealed class StdioTransport(Stream send, Stream recv) : IRemoteTransport
     {
         Frame.Write(send, JsonSerializer.SerializeToUtf8Bytes(new StdioCmd { Op = "put", Hash = hash }, HttpProtocol.Json));
         Frame.Write(send, compressed);
+        Check();
+    }
+
+    public void PutObjects(IReadOnlyList<(string Hash, byte[] Content)> objects)
+    {
+        if (PackTransfer.Build(objects) is not { } p) return;
+        Frame.Write(send, JsonSerializer.SerializeToUtf8Bytes(new StdioCmd { Op = "put-pack" }, HttpProtocol.Json));
+        Frame.Write(send, p.Idx);   // server reads idx then pack — keep this order
+        Frame.Write(send, p.Pack);
         Check();
     }
 

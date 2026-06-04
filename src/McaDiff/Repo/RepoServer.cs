@@ -63,6 +63,12 @@ public sealed class RepoServer
                 if (!Authorize(ctx)) return;
                 _svc.PutObject(path["/objects/".Length..], ReadBytes(req));
             }
+            else if (method == "POST" && path == "/pack")
+            {
+                if (!Authorize(ctx)) return;
+                (byte[] pack, byte[] idx) = PackTransfer.UnframeBody(ReadBytes(req));
+                _svc.PutPack(pack, idx);
+            }
             else if (method == "POST" && path.StartsWith("/refs/heads/"))
             {
                 if (!Authorize(ctx)) return;

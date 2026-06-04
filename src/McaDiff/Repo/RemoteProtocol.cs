@@ -51,6 +51,13 @@ public sealed class RemoteService(Repository repo, bool allowWrite)
         repo.Objects.ImportRaw(hash, compressed); // verifies hash
     }
 
+    /// <summary>Ingests a batched pack (one push of many objects). Each object is hash-verified.</summary>
+    public int PutPack(byte[] pack, byte[] idx)
+    {
+        RequireWrite();
+        return PackTransfer.ImportInto(repo, pack, idx);
+    }
+
     public void UpdateRef(string branch, string? expectedOld, string newHash, bool force)
     {
         RequireWrite();

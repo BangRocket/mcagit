@@ -29,7 +29,7 @@ public static class Transports
 }
 
 /// <summary>Transport to a repository on the local filesystem.</summary>
-public sealed class LocalTransport : IRemoteTransport
+public sealed class LocalTransport : IRemoteTransport, IBatchTransport
 {
     private readonly RemoteService _svc;
 
@@ -44,6 +44,10 @@ public sealed class LocalTransport : IRemoteTransport
     public IReadOnlyList<string> Missing(IReadOnlyList<string> hashes) => _svc.Missing(hashes);
     public byte[] GetObject(string hash) => _svc.GetObject(hash);
     public void PutObject(string hash, byte[] compressed) => _svc.PutObject(hash, compressed);
+    public void PutObjects(IReadOnlyList<(string Hash, byte[] Content)> objects)
+    {
+        if (PackTransfer.Build(objects) is { } p) _svc.PutPack(p.Pack, p.Idx);
+    }
     public void UpdateRef(string branch, string? expectedOld, string newHash, bool force)
         => _svc.UpdateRef(branch, expectedOld, newHash, force);
     public void Dispose() { }

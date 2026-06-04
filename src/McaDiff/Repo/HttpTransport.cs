@@ -6,7 +6,7 @@ using System.Text.Json;
 namespace McaDiff.Repo;
 
 /// <summary>Client transport over HTTP to a <c>mcadiff serve</c> endpoint.</summary>
-public sealed class HttpTransport : IRemoteTransport
+public sealed class HttpTransport : IRemoteTransport, IBatchTransport
 {
     private readonly HttpClient _http = new();
     private readonly Uri _base;
@@ -27,6 +27,12 @@ public sealed class HttpTransport : IRemoteTransport
 
     public void PutObject(string hash, byte[] compressed)
         => Send(HttpMethod.Post, "objects/" + hash, new ByteArrayContent(compressed)).Dispose();
+
+    public void PutObjects(IReadOnlyList<(string Hash, byte[] Content)> objects)
+    {
+        if (PackTransfer.Build(objects) is not { } p) return;
+        Send(HttpMethod.Post, "pack", new ByteArrayContent(PackTransfer.FrameBody(p.Pack, p.Idx))).Dispose();
+    }
 
     public void UpdateRef(string branch, string? expectedOld, string newHash, bool force)
         => Send(HttpMethod.Post, "refs/heads/" + branch,
