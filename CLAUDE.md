@@ -63,7 +63,7 @@ Before opening a PR, in this order:
 3. `trust-boundary-exploit-hunter` additionally runs if the diff touches anything reachable from untrusted input (network, patch apply, checkout path handling), even if the rule paths above don't match.
 4. Surface agent findings in the PR description: BLOCKERs must be fixed before opening; WARNs may ship but get listed.
 
-CI (`.github/workflows/ci.yml`) re-runs build + tests (ubuntu/windows), coverage, and the e2e round-trip gauntlet on the real sample worlds. The `lint` job (`dotnet format --verify-no-changes`) is known-failing and intentionally not a required check.
+CI (`.github/workflows/ci.yml`) re-runs build + tests (ubuntu/windows), coverage, and the e2e round-trip gauntlet on the real sample worlds. The `lint` job (`dotnet format --verify-no-changes`) is now green — run `dotnet format McaGit.sln` before pushing to keep it that way (note: it expands compact multi-member object initializers to one member per line and indents `case: {}` block bodies a level deeper).
 
 ## Invariants worth preserving
 

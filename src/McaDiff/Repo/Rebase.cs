@@ -123,9 +123,13 @@ public static class Rebase
     {
         string commit = repo.WriteCommit(new CommitObject
         {
-            Tree = tree, Parents = [parent], Message = original.Message,
-            Author = original.Author, Time = original.Time,
-            Committer = author, CommitTime = DateTimeOffset.Now.ToString("o"),
+            Tree = tree,
+            Parents = [parent],
+            Message = original.Message,
+            Author = original.Author,
+            Time = original.Time,
+            Committer = author,
+            CommitTime = DateTimeOffset.Now.ToString("o"),
         });
         repo.RecordHead(parent, commit, $"rebase: {Oneline(original.Message)}");
         return commit;

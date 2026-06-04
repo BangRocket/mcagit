@@ -46,7 +46,7 @@ public sealed class ObjectStore
             // its temp; the object is already there.
             if (File.Exists(path)) File.Delete(tmp);
             else try { File.Move(tmp, path); }
-            catch (IOException) { if (File.Exists(path)) File.Delete(tmp); else throw; }
+                catch (IOException) { if (File.Exists(path)) File.Delete(tmp); else throw; }
         }
         return hash;
     }

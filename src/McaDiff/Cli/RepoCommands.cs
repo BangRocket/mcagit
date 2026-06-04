@@ -383,8 +383,12 @@ public static class RepoCommands
         if (msg is null) return Err("annotated tag requires -m <message>");
         var tag = new TagObject
         {
-            Object = commit, Type = "commit", Tag = pos[0],
-            Tagger = Author(repo, null), Time = DateTimeOffset.Now.ToString("o"), Message = msg,
+            Object = commit,
+            Type = "commit",
+            Tag = pos[0],
+            Tagger = Author(repo, null),
+            Time = DateTimeOffset.Now.ToString("o"),
+            Message = msg,
         };
         if (sign)
         {
@@ -1058,40 +1062,40 @@ public static class RepoCommands
             switch (sub)
             {
                 case "push" or "save":
-                {
-                    string msg = opts.GetValueOrDefault("-m") ?? opts.GetValueOrDefault("--message") ?? "WIP";
-                    Stash.PushResult r = Stash.Push(repo, msg, Author(repo, opts.GetValueOrDefault("--author")));
-                    if (!r.Created) { Console.Error.WriteLine("No local changes to stash."); return 0; }
-                    Console.Error.WriteLine($"Saved working state in stash@{{0}} ({r.Commit![..10]}); worktree reset to HEAD.");
-                    return 0;
-                }
-                case "list":
-                {
-                    List<string> stack = Stash.Stack(repo);
-                    for (int i = 0; i < stack.Count; i++)
-                        Console.WriteLine($"stash@{{{i}}}: {stack[i][..10]} {repo.ReadCommit(stack[i]).Message}");
-                    return 0;
-                }
-                case "pop" or "apply":
-                {
-                    int n = ParseStashIndex(pos);
-                    List<MergeConflict> conflicts = Stash.Apply(repo, n, pop: sub == "pop");
-                    if (conflicts.Count > 0)
                     {
-                        Console.Error.WriteLine($"Applied stash@{{{n}}} with {conflicts.Count} conflict(s) (kept ours; stash retained):");
-                        PrintConflicts(conflicts);
-                        return 1;
+                        string msg = opts.GetValueOrDefault("-m") ?? opts.GetValueOrDefault("--message") ?? "WIP";
+                        Stash.PushResult r = Stash.Push(repo, msg, Author(repo, opts.GetValueOrDefault("--author")));
+                        if (!r.Created) { Console.Error.WriteLine("No local changes to stash."); return 0; }
+                        Console.Error.WriteLine($"Saved working state in stash@{{0}} ({r.Commit![..10]}); worktree reset to HEAD.");
+                        return 0;
                     }
-                    Console.Error.WriteLine($"{(sub == "pop" ? "Popped" : "Applied")} stash@{{{n}}}.");
-                    return 0;
-                }
+                case "list":
+                    {
+                        List<string> stack = Stash.Stack(repo);
+                        for (int i = 0; i < stack.Count; i++)
+                            Console.WriteLine($"stash@{{{i}}}: {stack[i][..10]} {repo.ReadCommit(stack[i]).Message}");
+                        return 0;
+                    }
+                case "pop" or "apply":
+                    {
+                        int n = ParseStashIndex(pos);
+                        List<MergeConflict> conflicts = Stash.Apply(repo, n, pop: sub == "pop");
+                        if (conflicts.Count > 0)
+                        {
+                            Console.Error.WriteLine($"Applied stash@{{{n}}} with {conflicts.Count} conflict(s) (kept ours; stash retained):");
+                            PrintConflicts(conflicts);
+                            return 1;
+                        }
+                        Console.Error.WriteLine($"{(sub == "pop" ? "Popped" : "Applied")} stash@{{{n}}}.");
+                        return 0;
+                    }
                 case "drop":
-                {
-                    int n = ParseStashIndex(pos);
-                    if (!Stash.Drop(repo, n)) return Err($"no stash@{{{n}}}");
-                    Console.Error.WriteLine($"Dropped stash@{{{n}}}.");
-                    return 0;
-                }
+                    {
+                        int n = ParseStashIndex(pos);
+                        if (!Stash.Drop(repo, n)) return Err($"no stash@{{{n}}}");
+                        Console.Error.WriteLine($"Dropped stash@{{{n}}}.");
+                        return 0;
+                    }
                 case "clear":
                     Stash.Clear(repo);
                     Console.Error.WriteLine("Cleared the stash stack.");

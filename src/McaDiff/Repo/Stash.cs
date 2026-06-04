@@ -34,8 +34,11 @@ public static class Stash
         string branch = repo.CurrentBranch() ?? "detached HEAD";
         string stash = repo.WriteCommit(new CommitObject
         {
-            Tree = tree, Parents = [head],
-            Message = $"stash: {message} (on {branch})", Author = author, Time = DateTimeOffset.Now.ToString("o"),
+            Tree = tree,
+            Parents = [head],
+            Message = $"stash: {message} (on {branch})",
+            Author = author,
+            Time = DateTimeOffset.Now.ToString("o"),
         });
         List<string> stack = Stack(repo);
         stack.Insert(0, stash);

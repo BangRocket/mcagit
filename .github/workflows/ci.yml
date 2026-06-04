@@ -15,8 +15,8 @@ permissions:
   contents: read
 
 jobs:
-  # Style gate. Known-failing on the current codebase; intentionally NOT a
-  # required check — fix at your leisure with `dotnet format McaGit.sln`.
+  # Style gate. Green as of the format sweep — keep it that way with
+  # `dotnet format McaGit.sln` before pushing (CI runs --verify-no-changes).
   lint:
     name: lint (dotnet format)
     runs-on: ubuntu-latest

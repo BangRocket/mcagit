@@ -45,23 +45,23 @@ public static class NbtCanonical
             // Copy array backing stores explicitly: fNbt's Clone() may share the array, which on
             // the canonical-hash path would make dedup depend on the fNbt version / later mutation.
             case NbtTagType.ByteArray:
-            {
-                var a = (NbtByteArray)tag;
-                byte[] copy = (byte[])a.Value.Clone();
-                return a.Name is null ? new NbtByteArray(copy) : new NbtByteArray(a.Name, copy);
-            }
+                {
+                    var a = (NbtByteArray)tag;
+                    byte[] copy = (byte[])a.Value.Clone();
+                    return a.Name is null ? new NbtByteArray(copy) : new NbtByteArray(a.Name, copy);
+                }
             case NbtTagType.IntArray:
-            {
-                var a = (NbtIntArray)tag;
-                int[] copy = (int[])a.Value.Clone();
-                return a.Name is null ? new NbtIntArray(copy) : new NbtIntArray(a.Name, copy);
-            }
+                {
+                    var a = (NbtIntArray)tag;
+                    int[] copy = (int[])a.Value.Clone();
+                    return a.Name is null ? new NbtIntArray(copy) : new NbtIntArray(a.Name, copy);
+                }
             case NbtTagType.LongArray:
-            {
-                var a = (NbtLongArray)tag;
-                long[] copy = (long[])a.Value.Clone();
-                return a.Name is null ? new NbtLongArray(copy) : new NbtLongArray(a.Name, copy);
-            }
+                {
+                    var a = (NbtLongArray)tag;
+                    long[] copy = (long[])a.Value.Clone();
+                    return a.Name is null ? new NbtLongArray(copy) : new NbtLongArray(a.Name, copy);
+                }
             default:
                 return (NbtTag)tag.Clone(); // scalars
         }

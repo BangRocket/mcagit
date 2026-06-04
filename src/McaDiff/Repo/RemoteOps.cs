@@ -201,8 +201,8 @@ public static class RemoteOps
             foreach (string leaf in leaves)
                 if (Fetch1(t, leaf) is not { } b) missing.Add(leaf);
                 else if (Hash(b) != leaf) corrupt.Add(leaf);
-        else
-            missing.AddRange(t.Missing(leaves.ToList()));
+                else
+                    missing.AddRange(t.Missing(leaves.ToList()));
 
         return new VerifyResult(refs.Branches.Count, commits, seen.Count + leaves.Count, missing, corrupt);
     }

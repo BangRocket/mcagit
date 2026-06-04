@@ -144,7 +144,9 @@ public static class PatchExtractor
             JsonOpValues(added, NbtJson.ToJson(root), out var bas, out var val);
             return new PatchFileEntry
             {
-                Path = unit.RelativePath, Kind = UnitKind.Loose, Status = status,
+                Path = unit.RelativePath,
+                Kind = UnitKind.Loose,
+                Status = status,
                 Ops = [new PatchOp { Path = "", Base = bas, Value = val }],
             };
         }
@@ -170,7 +172,10 @@ public static class PatchExtractor
     private static ChunkPatch RootChunk(ChunkPos pos, DiffStatus status, NbtCompound? oldRoot, NbtCompound? newRoot, int timestamp)
         => new()
         {
-            X = pos.X, Z = pos.Z, Status = status, Timestamp = timestamp,
+            X = pos.X,
+            Z = pos.Z,
+            Status = status,
+            Timestamp = timestamp,
             Ops = [new PatchOp
             {
                 Path = "",

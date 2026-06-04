@@ -29,39 +29,39 @@ public static class NbtJson
             case NbtTagType.Double: return One("double", tag.DoubleValue.ToString("R", CultureInfo.InvariantCulture));
             case NbtTagType.String: return One("string", tag.StringValue);
             case NbtTagType.ByteArray:
-            {
-                var arr = new JsonArray();
-                foreach (byte v in tag.ByteArrayValue) arr.Add(v);
-                return new JsonObject { ["bytes"] = arr };
-            }
-            case NbtTagType.IntArray:
-            {
-                var arr = new JsonArray();
-                foreach (int v in tag.IntArrayValue) arr.Add(v);
-                return new JsonObject { ["ints"] = arr };
-            }
-            case NbtTagType.LongArray:
-            {
-                var arr = new JsonArray();
-                foreach (long v in tag.LongArrayValue) arr.Add(v.ToString(CultureInfo.InvariantCulture));
-                return new JsonObject { ["longs"] = arr };
-            }
-            case NbtTagType.List:
-            {
-                var list = (NbtList)tag;
-                var items = new JsonArray();
-                foreach (NbtTag t in list) items.Add(ToJson(t));
-                return new JsonObject
                 {
-                    ["list"] = new JsonObject { ["type"] = list.ListType.ToString(), ["items"] = items },
-                };
-            }
+                    var arr = new JsonArray();
+                    foreach (byte v in tag.ByteArrayValue) arr.Add(v);
+                    return new JsonObject { ["bytes"] = arr };
+                }
+            case NbtTagType.IntArray:
+                {
+                    var arr = new JsonArray();
+                    foreach (int v in tag.IntArrayValue) arr.Add(v);
+                    return new JsonObject { ["ints"] = arr };
+                }
+            case NbtTagType.LongArray:
+                {
+                    var arr = new JsonArray();
+                    foreach (long v in tag.LongArrayValue) arr.Add(v.ToString(CultureInfo.InvariantCulture));
+                    return new JsonObject { ["longs"] = arr };
+                }
+            case NbtTagType.List:
+                {
+                    var list = (NbtList)tag;
+                    var items = new JsonArray();
+                    foreach (NbtTag t in list) items.Add(ToJson(t));
+                    return new JsonObject
+                    {
+                        ["list"] = new JsonObject { ["type"] = list.ListType.ToString(), ["items"] = items },
+                    };
+                }
             case NbtTagType.Compound:
-            {
-                var obj = new JsonObject();
-                foreach (NbtTag t in (NbtCompound)tag) obj[t.Name!] = ToJson(t);
-                return new JsonObject { ["compound"] = obj };
-            }
+                {
+                    var obj = new JsonObject();
+                    foreach (NbtTag t in (NbtCompound)tag) obj[t.Name!] = ToJson(t);
+                    return new JsonObject { ["compound"] = obj };
+                }
             default:
                 throw new NotSupportedException($"Cannot encode tag type {tag.TagType}.");
         }
@@ -79,11 +79,11 @@ public static class NbtJson
         switch (key)
         {
             case "byte":
-            {
-                int bv = val!.GetValue<int>();
-                if (bv is < 0 or > 255) throw new FormatException($"byte value out of range: {bv}");
-                return Named(name, (byte)bv, static (n, v) => new NbtByte(n, v), static v => new NbtByte(v));
-            }
+                {
+                    int bv = val!.GetValue<int>();
+                    if (bv is < 0 or > 255) throw new FormatException($"byte value out of range: {bv}");
+                    return Named(name, (byte)bv, static (n, v) => new NbtByte(n, v), static v => new NbtByte(v));
+                }
             case "short": return Named(name, val!.GetValue<short>(), static (n, v) => new NbtShort(n, v), static v => new NbtShort(v));
             case "int": return Named(name, val!.GetValue<int>(), static (n, v) => new NbtInt(n, v), static v => new NbtInt(v));
             case "long": return Named(name, long.Parse(val!.GetValue<string>(), CultureInfo.InvariantCulture), static (n, v) => new NbtLong(n, v), static v => new NbtLong(v));
@@ -91,20 +91,20 @@ public static class NbtJson
             case "double": return Named(name, double.Parse(val!.GetValue<string>(), CultureInfo.InvariantCulture), static (n, v) => new NbtDouble(n, v), static v => new NbtDouble(v));
             case "string": return Named(name, val!.GetValue<string>(), static (n, v) => new NbtString(n, v), static v => new NbtString(v));
             case "bytes":
-            {
-                byte[] data = val!.AsArray().Select(x => (byte)x!.GetValue<int>()).ToArray();
-                return name is null ? new NbtByteArray(data) : new NbtByteArray(name, data);
-            }
+                {
+                    byte[] data = val!.AsArray().Select(x => (byte)x!.GetValue<int>()).ToArray();
+                    return name is null ? new NbtByteArray(data) : new NbtByteArray(name, data);
+                }
             case "ints":
-            {
-                int[] data = val!.AsArray().Select(x => x!.GetValue<int>()).ToArray();
-                return name is null ? new NbtIntArray(data) : new NbtIntArray(name, data);
-            }
+                {
+                    int[] data = val!.AsArray().Select(x => x!.GetValue<int>()).ToArray();
+                    return name is null ? new NbtIntArray(data) : new NbtIntArray(name, data);
+                }
             case "longs":
-            {
-                long[] data = val!.AsArray().Select(x => long.Parse(x!.GetValue<string>(), CultureInfo.InvariantCulture)).ToArray();
-                return name is null ? new NbtLongArray(data) : new NbtLongArray(name, data);
-            }
+                {
+                    long[] data = val!.AsArray().Select(x => long.Parse(x!.GetValue<string>(), CultureInfo.InvariantCulture)).ToArray();
+                    return name is null ? new NbtLongArray(data) : new NbtLongArray(name, data);
+                }
             case "list": return BuildList(val!.AsObject(), name, depth);
             case "compound": return BuildCompound(val!.AsObject(), name, depth);
             default: throw new NotSupportedException($"Unknown NBT json tag '{key}'.");
