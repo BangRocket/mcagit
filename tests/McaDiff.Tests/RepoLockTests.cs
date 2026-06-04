@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using fNbt;
 using McaDiff.Anvil;
 using McaDiff.Cli;
@@ -53,6 +54,27 @@ public class RepoLockTests
 
         using RepoLock other = RepoLock.Acquire(repo.Dir, "commit");
         Assert.Equal(2, RepoCommands.Push(repo.Dir, ["origin", "main"]));           // locked before it ever dials the remote
+    }
+
+    [Fact]
+    public async Task ConcurrentAcquire_ExactlyOneWins()
+    {
+        string dir = TestAnvil.TempDir("lkrace");
+        using var barrier = new Barrier(2);
+        int wins = 0;
+        var held = new ConcurrentBag<RepoLock>();
+
+        void Attempt()
+        {
+            barrier.SignalAndWait();                 // line both threads up on the same instant
+            try { held.Add(RepoLock.Acquire(dir, "commit")); Interlocked.Increment(ref wins); }
+            catch (RepoLockedException) { /* the loser */ }
+        }
+        await Task.WhenAll(Task.Run(Attempt), Task.Run(Attempt));
+
+        Assert.Equal(1, wins);                       // OS advisory lock → exactly one winner, no sleeps
+        foreach (RepoLock l in held) l.Dispose();
+        using RepoLock again = RepoLock.Acquire(dir, "commit"); // freed → reacquire succeeds
     }
 
     // ---- helpers ----
