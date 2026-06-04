@@ -28,6 +28,11 @@ public static class NbtIdentity
             c.Get("z") is { TagType: NbtTagType.Int } tz)
             return $"@{tx.IntValue},{ty.IntValue},{tz.IntValue}";
 
+        // POI records: position is a length-3 int array named "pos" (unique within a section),
+        // so reordered records aren't reported as spurious modifications.
+        if (c.Get("pos") is { TagType: NbtTagType.IntArray } poiPos && poiPos.IntArrayValue is { Length: 3 } pp)
+            return $"@{pp[0]},{pp[1]},{pp[2]}";
+
         // Entities (1.16+): UUID stored as a 4-int array.
         if (c.Get("UUID") is { TagType: NbtTagType.IntArray } uuid &&
             uuid.IntArrayValue is { Length: 4 } v)

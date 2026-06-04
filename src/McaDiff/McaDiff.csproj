@@ -12,6 +12,8 @@
 
   <ItemGroup>
     <PackageReference Include="fNbt" Version="1.0.0" />
+    <!-- LZ4 frame codec for region-file-compression=lz4 chunks (Minecraft 1.20.5+). -->
+    <PackageReference Include="K4os.Compression.LZ4.Streams" Version="1.3.8" />
   </ItemGroup>
 
 </Project>

@@ -136,6 +136,8 @@ public sealed class RegionFile
         if (parts.Length == 3 && parts[0] == "r"
             && int.TryParse(parts[1], out int x) && int.TryParse(parts[2], out int z))
             return (x, z);
-        return (0, 0); // non-standard name — coords unknown, chunk coords become region-local
+        // Don't silently default to (0,0) — that would cite wrong absolute block coords in
+        // every diff/patch path for this region. A region dir should only hold r.X.Z.mca files.
+        throw new FormatException($"non-standard region file name (expected r.X.Z.mca): {System.IO.Path.GetFileName(path)}");
     }
 }

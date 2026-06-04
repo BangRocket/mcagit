@@ -11,8 +11,14 @@ namespace McaDiff.Model;
 /// </summary>
 public static class WorldSource
 {
-    // Dimension sub-roots, relative to the world root ("" = overworld).
+    // Standard dimension sub-roots, relative to the world root ("" = overworld).
     private static readonly string[] DimensionRoots = ["", "DIM-1", "DIM1"];
+
+    // Vanilla dimension paths that, if present under dimensions/, would duplicate the standard roots.
+    private static readonly HashSet<string> VanillaDimensionPaths = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "dimensions/minecraft/overworld", "dimensions/minecraft/the_nether", "dimensions/minecraft/the_end",
+    };
 
     // Chunk-bearing categories (each holds r.X.Z.mca files).
     private static readonly string[] RegionCategories = ["region", "entities", "poi"];
@@ -51,8 +57,8 @@ public static class WorldSource
         string full = Path.GetFullPath(root);
         var units = new Dictionary<string, WorldUnit>(StringComparer.Ordinal);
 
-        // Region-style categories across dimensions.
-        foreach (string dim in DimensionRoots)
+        // Region-style categories across dimensions (standard + data-pack/mod dimensions).
+        foreach (string dim in DimensionRootsFor(full))
         {
             foreach (string category in RegionCategories)
             {
@@ -77,6 +83,22 @@ public static class WorldSource
         }
 
         return units;
+    }
+
+    /// <summary>The standard dimension roots plus any data-pack/mod dimensions found under
+    /// <c>dimensions/&lt;namespace&gt;/&lt;path&gt;/</c> (a feature since 1.16).</summary>
+    private static IEnumerable<string> DimensionRootsFor(string fullRoot)
+    {
+        foreach (string d in DimensionRoots) yield return d;
+
+        string dimsDir = Path.Combine(fullRoot, "dimensions");
+        if (!Directory.Exists(dimsDir)) yield break;
+        foreach (string nsDir in Directory.EnumerateDirectories(dimsDir))
+            foreach (string pathDir in Directory.EnumerateDirectories(nsDir))
+            {
+                string rel = Path.GetRelativePath(fullRoot, pathDir).Replace('\\', '/');
+                if (!VanillaDimensionPaths.Contains(rel)) yield return rel; // not a dupe of ""/DIM-1/DIM1
+            }
     }
 
     private static void Add(Dictionary<string, WorldUnit> units, string root, string file, UnitKind kind, string category)
