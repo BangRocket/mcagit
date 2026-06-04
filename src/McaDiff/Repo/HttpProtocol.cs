@@ -11,7 +11,9 @@ public sealed class RefUpdate
     [JsonPropertyName("force")] public bool Force { get; set; }
 }
 
-internal static class HttpProtocol
+/// <summary>The HTTP wire-protocol serialization contract, shared by the client transport, the
+/// built-in server, and any external server implementation (e.g. a hosting hub).</summary>
+public static class HttpProtocol
 {
     public static readonly JsonSerializerOptions Json = new()
     {
