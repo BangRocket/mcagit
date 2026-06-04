@@ -281,8 +281,8 @@ partial class Program
             mcadiff log [--oneline|-p|--stat] [-n N] [<ref>]
                         [--author S] [--grep S] [--since D] [--until D] [--merges|--no-merges]
             mcadiff show [<ref>]                  A commit's metadata + diff
-            mcadiff checkout <ref> [<world-out>]  Materialize a snapshot
-            mcadiff reset [<ref>] [--soft|--mixed|--hard]   Move HEAD (default --mixed, ref HEAD)
+            mcadiff checkout <ref> [<world-out>] [--force] [-y]   Materialize a snapshot
+            mcadiff reset [<ref>] [--soft|--mixed|--hard] [-y]   Move HEAD (default --mixed, ref HEAD)
             mcadiff restore <ref> <path>...       Restore paths from a snapshot
             mcadiff revert <commit> | --continue | --abort   Undo a commit (stops on conflict)
             mcadiff branch [<name> [<start>]] | -d <name> | -m <old> <new>
@@ -292,7 +292,7 @@ partial class Program
             mcadiff cherry-pick <commit> | --continue | --abort   (stops on conflict)
             mcadiff rebase [--onto <base>] <up> | --continue | --skip | --abort
             mcadiff stash [push|list|pop|apply|drop|clear]   Shelve / restore the worktree
-            mcadiff clean [-n|-f] [-d]            Remove untracked worktree files (-d: also dirs)
+            mcadiff clean [-n|-f] [-d] [-y]      Remove untracked worktree files (-d: also dirs; -y: no prompt)
             mcadiff commit -S …                   Sign the commit (SSH key)
             mcadiff config [--global] <key> [<v>] | --list | --unset <key>
 

@@ -13,6 +13,12 @@ public static class PathGuard
     /// or throws if it would escape <paramref name="root"/>.</summary>
     public static string Confine(string root, string rel)
     {
+        // On Windows a ':' in a relative path opens an NTFS Alternate Data Stream ("file.json:hidden")
+        // — it stays inside the root so the prefix check below passes, but writes invisible content
+        // (issue #25). Reject ':' on Windows; it's a normal filename char on Linux, so leave it there.
+        if (OperatingSystem.IsWindows() && rel.Contains(':'))
+            throw new InvalidDataException($"unsafe path contains ':' (NTFS alternate data stream): '{rel}'");
+
         string baseFull = Path.GetFullPath(root);
         string full = Path.GetFullPath(Path.Combine(baseFull, rel));
         string prefix = baseFull.EndsWith(Path.DirectorySeparatorChar) ? baseFull : baseFull + Path.DirectorySeparatorChar;

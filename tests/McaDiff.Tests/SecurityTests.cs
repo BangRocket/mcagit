@@ -28,6 +28,16 @@ public class SecurityTests
     }
 
     [Fact]
+    public void PathGuard_RejectsNtfsAlternateDataStream_OnWindows()
+    {
+        string root = TestAnvil.TempDir("pg3");
+        if (OperatingSystem.IsWindows())
+            Assert.Throws<InvalidDataException>(() => PathGuard.Confine(root, "session.json:hidden")); // ADS (issue #25)
+        else
+            Assert.StartsWith(Path.GetFullPath(root), PathGuard.Confine(root, "a:b.dat")); // ':' is a valid char on Linux
+    }
+
+    [Fact]
     public void Checkout_RejectsTraversalManifest()
     {
         Repository repo = Repository.Init(TestAnvil.TempDir("co"));

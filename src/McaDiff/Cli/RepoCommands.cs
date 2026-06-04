@@ -288,11 +288,17 @@ public static class RepoCommands
 
     public static int Reset(string? dashC, string[] a)
     {
-        var (pos, opts) = Parse(a, [], ["--hard", "--soft", "--mixed"]);
+        var (pos, opts) = Parse(a, [], ["--hard", "--soft", "--mixed", "-y", "--yes"]);
         if (Open(dashC) is not { } repo) return NoRepo();
         string spec = pos.Count > 0 ? pos[0] : "HEAD"; // git defaults to HEAD
         string target;
         try { target = repo.ResolveRef(spec); } catch (Exception ex) { return Err(ex.Message); }
+
+        if (opts.ContainsKey("--hard")
+            && !ConfirmDestroy("reset --hard discards all uncommitted changes in the worktree.",
+                opts.ContainsKey("-y") || opts.ContainsKey("--yes")))
+        { Console.Error.WriteLine("Aborted."); return 1; }
+
         string? from = repo.HeadCommit();
 
         // Move HEAD via the branch, or HEAD itself when detached (git moves HEAD either way).
@@ -500,7 +506,7 @@ public static class RepoCommands
 
     public static int Checkout(string? dashC, string[] a)
     {
-        var (pos, opts) = Parse(a, [], ["--force"]);
+        var (pos, opts) = Parse(a, [], ["--force", "-y", "--yes"]);
         if (Open(dashC) is not { } repo) return NoRepo();
         if (pos.Count < 1) return Err("usage: checkout <ref> [<world-out>] [--force]");
         string refName = pos[0];
@@ -524,6 +530,12 @@ public static class RepoCommands
         }
 
         if (WorldLooksOpen(outDir)) return Err(WorldOpenMsg(outDir));
+
+        // Force-overwriting the live worktree (which has uncommitted changes) is destructive — confirm.
+        if (opts.ContainsKey("--force") && isWorktree && StatusCalc.Compute(repo, outDir).Count > 0
+            && !ConfirmDestroy($"This discards uncommitted changes in '{outDir}' and restores {refName}.",
+                opts.ContainsKey("-y") || opts.ContainsKey("--yes")))
+        { Console.Error.WriteLine("Aborted."); return 1; }
 
         string? from = repo.HeadCommit();
         Manifest manifest = repo.ReadManifest(repo.ReadCommit(commit).Tree);
@@ -1254,7 +1266,7 @@ public static class RepoCommands
 
     public static int Clean(string? dashC, string[] a)
     {
-        var (_, opts) = Parse(a, ["--world"], ["-n", "--dry-run", "-f", "--force", "-d"]);
+        var (_, opts) = Parse(a, ["--world"], ["-n", "--dry-run", "-f", "--force", "-d", "-y", "--yes"]);
         if (Open(dashC) is not { } repo) return NoRepo();
         string? world = opts.GetValueOrDefault("--world") ?? repo.Worktree;
         if (world is null) return Err("no worktree bound; use --world <dir>");
@@ -1262,6 +1274,9 @@ public static class RepoCommands
         bool force = opts.ContainsKey("-f") || opts.ContainsKey("--force");
         bool dirs = opts.ContainsKey("-d");
         if (!dry && !force) return Err("clean would remove untracked files; pass -f to remove or -n to preview");
+        if (!dry && !ConfirmDestroy($"This permanently deletes untracked files in '{world}'.",
+                opts.ContainsKey("-y") || opts.ContainsKey("--yes")))
+        { Console.Error.WriteLine("Aborted."); return 1; }
 
         Manifest head = repo.HeadCommit() is { } h ? repo.ReadManifest(repo.ReadCommit(h).Tree) : new Manifest();
         var keep = new HashSet<string>(StringComparer.Ordinal);
@@ -1371,6 +1386,18 @@ public static class RepoCommands
 
     private static string WorldOpenMsg(string worldDir)
         => $"'{worldDir}' looks like it's open in Minecraft (session.lock is held). Stop the server, then try again.";
+
+    /// <summary>Confirms a destructive worktree op with an interactive human. Proceeds silently when
+    /// <paramref name="yes"/> (a <c>-y</c>/<c>--yes</c> flag) is set or stdin isn't a terminal
+    /// (scripts / CI / tests), so only a real prompt is gated — automation is never blocked (issue #26).</summary>
+    private static bool ConfirmDestroy(string warning, bool yes)
+    {
+        if (yes || Console.IsInputRedirected) return true;
+        Console.Error.Write($"{warning} Continue? [y/N] ");
+        string? answer = Console.ReadLine()?.Trim();
+        return string.Equals(answer, "y", StringComparison.OrdinalIgnoreCase)
+            || string.Equals(answer, "yes", StringComparison.OrdinalIgnoreCase);
+    }
 
     private static void PrintStatusSection(string title, IReadOnlyList<StatusEntry> entries)
     {
