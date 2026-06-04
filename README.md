@@ -377,7 +377,7 @@ compare-and-swap concurrency model, and the encryption stance) is written up in
 dotnet test
 ```
 
-122 tests covering: the NBT comparer (add/remove/modify/type-change, identity-list
+220+ tests covering: the NBT comparer (add/remove/modify/type-change, identity-list
 matching, array summarize/expand); the lossless `NbtJson` codec (incl. longs
 beyond 2^53); `NbtPath` get/set/remove by key, index and identity; `RegionWriter`
 round-trip; the full patch pipeline (forward/reverse round-trips, conflict guard,

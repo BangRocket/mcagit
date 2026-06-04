@@ -1,0 +1,24 @@
+# Normalize line endings so the ubuntu + windows CI legs agree (the `dotnet format` gate and
+# shell scripts in workflows assume LF).
+* text=auto eol=lf
+
+*.cs       text eol=lf
+*.csproj   text eol=lf
+*.sln      text eol=lf
+*.md       text eol=lf
+*.yml      text eol=lf
+*.yaml     text eol=lf
+*.json     text eol=lf
+*.jsonc    text eol=lf
+*.sh       text eol=lf
+
+# Minecraft world payloads are binary — never let git touch their bytes (the sample worlds
+# under compare-worlds/ must round-trip exactly).
+*.mca      binary
+*.mcr      binary
+*.mcc      binary
+*.dat      binary
+*.dat_old  binary
+*.nbt      binary
+*.mcapatch binary
+SHA256SUMS binary

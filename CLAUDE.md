@@ -10,7 +10,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```sh
 dotnet build -c Release
-dotnet test                                            # full suite (~122 tests, all synthetic — no fixtures needed)
+dotnet test                                            # full suite (220+ tests, all synthetic — no fixtures needed)
 dotnet test --filter "FullyQualifiedName~NbtComparer"  # one test class
 dotnet test --filter "DisplayName~merge"               # by name fragment
 dotnet run --project src/McaDiff -- <args>             # run the CLI
@@ -69,5 +69,5 @@ CI (`.github/workflows/ci.yml`) re-runs build + tests (ubuntu/windows), coverage
 
 - `diff`/`extract`/`status` never modify a world; `apply` only writes its fresh output dir; only `checkout`/`reset --hard`/`merge`/`rebase`/`bisect`/`clean`/`stash` touch the bound worktree.
 - Commit → checkout must reproduce a world faithfully (playable in Minecraft); tests assert exact reproduction.
-- LZ4 chunks (compression type 4) are detected and handled as unsupported — stored as raw blobs, never decoded.
+- LZ4 chunks (compression type 4) are fully decoded and re-encoded (`ChunkCodec`, via `K4os.Compression.LZ4`). Only type 127 (Custom) remains undecodable — a whole region containing one falls back to a raw blob.
 - README documents behavior in detail (options, repo layout, limitations) — update it when changing user-facing behavior; recent commits follow a "git-likeness tier" naming convention with matching `GitLikeTierNTests.cs` files.
