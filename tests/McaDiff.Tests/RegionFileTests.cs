@@ -41,7 +41,7 @@ public class RegionFileTests
     public void RealRegionFile_ParsesAndDecodes_WhenAvailable()
     {
         // Optional: runs only when a real region file is present (this dev box).
-        string path = Environment.GetEnvironmentVariable("MCADIFF_TEST_REGION")
+        string path = Environment.GetEnvironmentVariable("MCAGIT_TEST_REGION")
             ?? "/Volumes/Storage/Code/minecraft/dobbscraftbackups/region/r.-1.-1.mca";
         if (!File.Exists(path))
             return; // soft skip — no fixture in this environment

@@ -50,7 +50,7 @@ metadata:
 
 ## LOW: Chunk Timestamp Loss on Checkout
 - **File**: `src/McaDiff/Repo/Checkout.cs`, line 26
-- All chunks are written with `timestamp: 0`. Minecraft may re-save all chunks immediately on first load, making `mcadiff status` show spurious modifications.
+- All chunks are written with `timestamp: 0`. Minecraft may re-save all chunks immediately on first load, making `mcagit status` show spurious modifications.
 - This is a known design limitation (timestamps not stored in manifest).
 - **Fix**: Store timestamps per-chunk in manifest (breaking format change), or write current time as timestamp.
 

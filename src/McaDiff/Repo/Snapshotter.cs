@@ -32,7 +32,7 @@ public static class Snapshotter
         string root = Path.GetFullPath(worldDir);
         IgnoreRules ignore = IgnoreRules.Load(root);
         // If the repo lives inside the world (e.g. `init` run in the world folder), never capture its
-        // own metadata — the live mcadiff.lock can't even be read while we hold it (issue #26).
+        // own metadata — the live mcagit.lock can't even be read while we hold it (issue #26).
         string? repoPrefix = repoDir is null ? null : Path.GetFullPath(repoDir) + Path.DirectorySeparatorChar;
         string[] files = Directory.EnumerateFiles(root, "*", SearchOption.AllDirectories)
             .Where(f => !SkipNames.Contains(Path.GetFileName(f))

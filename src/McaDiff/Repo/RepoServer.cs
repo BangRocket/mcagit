@@ -5,7 +5,7 @@ using System.Text.Json;
 namespace McaDiff.Repo;
 
 /// <summary>
-/// Built-in HTTP server exposing a repository to network remotes (<c>mcadiff serve</c>).
+/// Built-in HTTP server exposing a repository to network remotes (<c>mcagit serve</c>).
 /// Reads (clone/fetch) are anonymous; writes (push) require <c>allowPush</c> and,
 /// if a <c>token</c> is configured, a matching <c>Authorization</c> header — the
 /// "anonymous read, authenticated push" model git uses over HTTP.

@@ -1,4 +1,4 @@
-# CodeRabbit configuration — path-scoped review guidance keyed to mcadiff's invariants.
+# CodeRabbit configuration — path-scoped review guidance keyed to mcagit's invariants.
 # https://docs.coderabbit.ai/guides/configure-coderabbit
 language: en-US
 
@@ -40,7 +40,7 @@ reviews:
     - path: "src/McaDiff/Cli/**"
       instructions: >
         Validate args and return clean git-style exit codes; never throw a raw stack trace (the
-        top-level catch-all maps failures to "mcadiff: error: <msg>" + exit 2). Destructive worktree
+        top-level catch-all maps failures to "mcagit: error: <msg>" + exit 2). Destructive worktree
         ops confirm unless -y or non-interactive stdin.
     - path: "tests/**"
       instructions: >

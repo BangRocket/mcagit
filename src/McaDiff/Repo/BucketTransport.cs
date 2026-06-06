@@ -34,7 +34,7 @@ public sealed class BucketTransport : IRemoteTransport, IBatchTransport
     {
         _bucket = bucket;
         _prefix = prefix.Trim('/');
-        _tempDir = Directory.CreateTempSubdirectory("mcadiff-bucket").FullName;
+        _tempDir = Directory.CreateTempSubdirectory("mcagit-bucket").FullName;
     }
 
     private string Key(string suffix) => _prefix.Length == 0 ? suffix : $"{_prefix}/{suffix}";

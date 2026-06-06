@@ -22,7 +22,7 @@ When comparing `checkout_newer` vs `New_World_Newer` at byte level, 23 of 36 fil
 - Icon files, datapacks, advancements, stats (raw blobs) — stored as-is.
 
 ### Authoritative test: semantic diff
-The `mcadiff` diff tool is the authoritative check. "No differences" exit 0 = pass.
+The `mcagit` diff tool is the authoritative check. "No differences" exit 0 = pass.
 Byte-level `Get-FileHash` comparison is informational only.
 
 ## GC Idempotency: Second Run Rewrites Pack

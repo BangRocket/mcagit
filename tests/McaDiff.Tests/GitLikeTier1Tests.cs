@@ -173,7 +173,7 @@ public class GitLikeTier1Tests
         string key = Path.Combine(dir, "id_ed25519");
         if (!GenerateKey(key)) return; // key generation unavailable/blocked — skip
 
-        const string payload = "mcadiff signs this";
+        const string payload = "mcagit signs this";
         string sig = SshSigner.Sign(payload, key);
         Assert.Contains("BEGIN SSH SIGNATURE", sig);
 
@@ -223,7 +223,7 @@ public class GitLikeTier1Tests
         {
             var psi = new ProcessStartInfo("ssh-keygen")
             { RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
-            foreach (string a in new[] { "-q", "-t", "ed25519", "-N", "", "-C", "mcadiff-test", "-f", path })
+            foreach (string a in new[] { "-q", "-t", "ed25519", "-N", "", "-C", "mcagit-test", "-f", path })
                 psi.ArgumentList.Add(a);
             using var p = Process.Start(psi)!;
             p.StandardOutput.ReadToEnd();

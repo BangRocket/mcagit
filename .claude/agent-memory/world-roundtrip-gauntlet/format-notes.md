@@ -47,5 +47,5 @@ metadata:
 ## Support Line Recommendation
 Keep current format as v1 baseline. For any breaking changes:
 - Bump packfile version byte
-- Add `mcadiff migrate` command for repos
+- Add `mcagit migrate` command for repos
 - Keep loose object format (SHA-256 + zlib) unchanged (too fundamental)

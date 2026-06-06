@@ -49,11 +49,11 @@ public sealed class DiffOptions
     private DiffOptions Fail(string message) { Error = message; return this; }
 
     public const string Usage = """
-        mcadiff diff — show a git-style diff
+        mcagit diff — show a git-style diff
 
         USAGE:
-            mcadiff diff <A> <B>                 Two world folders or files (.mca/.dat)
-            mcadiff [-C <repo>] diff [<a> [<b>]] Inside a repo, compare snapshots:
+            mcagit diff <A> <B>                 Two world folders or files (.mca/.dat)
+            mcagit [-C <repo>] diff [<a> [<b>]] Inside a repo, compare snapshots:
                                                    (no args)  worktree vs HEAD
                                                    <a>        <a> vs worktree
                                                    <a> <b>    <a> vs <b>

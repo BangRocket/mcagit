@@ -19,7 +19,7 @@ public static class PackTransfer
         List<string> ordered = objects.Select(o => o.Hash)
             .OrderByDescending(h => byHash[h].Length).ThenBy(h => h, StringComparer.Ordinal).ToList();
 
-        string staging = Path.Combine(Path.GetTempPath(), "mcadiff-packsend-" + Guid.NewGuid().ToString("N"));
+        string staging = Path.Combine(Path.GetTempPath(), "mcagit-packsend-" + Guid.NewGuid().ToString("N"));
         try
         {
             string? id = Packfile.Write(staging, ordered, h => byHash[h]);
@@ -34,7 +34,7 @@ public static class PackTransfer
     /// Returns the number imported.</summary>
     public static int ImportInto(Repository repo, byte[] pack, byte[] idx)
     {
-        string staging = Path.Combine(Path.GetTempPath(), "mcadiff-packrecv-" + Guid.NewGuid().ToString("N"));
+        string staging = Path.Combine(Path.GetTempPath(), "mcagit-packrecv-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(staging);
         string packPath = Path.Combine(staging, "incoming.pack");
         try

@@ -42,7 +42,7 @@ Example: `SingleEntryPaletteTests` asserts a diff-path normalization does not di
 - Build inputs with `TestAnvil.Root` / `WriteRegion` / `WriteLoose`; allocate scratch dirs with `TestAnvil.TempDir`.
 - Name files by feature or tier (`GitLikeTierNTests.cs`, `BucketTransportTests.cs`).
 - Prefer deterministic concurrency primitives (`Barrier`, `ManualResetEventSlim`) over sleeps — see `RepoLockTests.ConcurrentAcquire_ExactlyOneWins`.
-- `Assert.Skip` does **not** exist in xUnit 2.9.3. A test that depends on an unavailable environment (a real region file via `MCADIFF_TEST_REGION`, or `ssh-keygen`) returns early; be aware this shows green when skipped.
+- `Assert.Skip` does **not** exist in xUnit 2.9.3. A test that depends on an unavailable environment (a real region file via `MCAGIT_TEST_REGION`, or `ssh-keygen`) returns early; be aware this shows green when skipped.
 
 ## Running
 
@@ -50,5 +50,5 @@ Example: `SingleEntryPaletteTests` asserts a diff-path normalization does not di
 dotnet test                                            # everything
 dotnet test --filter "FullyQualifiedName~Packfile"     # one class
 dotnet test --filter "DisplayName~merge"               # by name fragment
-MCADIFF_TEST_REGION=/path/to/r.0.0.mca dotnet test     # enable the real-region parse test
+MCAGIT_TEST_REGION=/path/to/r.0.0.mca dotnet test     # enable the real-region parse test
 ```
