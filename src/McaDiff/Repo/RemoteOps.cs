@@ -1,4 +1,5 @@
 using System.Text.RegularExpressions;
+using McaDiff.Output;
 
 namespace McaDiff.Repo;
 
@@ -11,10 +12,10 @@ public static class RemoteOps
 {
     public sealed record PushResult(int ObjectsCopied, bool FastForward);
 
-    public static PushResult Push(Repository repo, string remote, string branch, bool force, string? token)
+    public static PushResult Push(Repository repo, string remote, string branch, bool force, string? token, Progress? progress = null)
     {
         using IRemoteTransport t = Transports.Connect(repo.GetRemote(remote) ?? remote, token);
-        PushResult r = PushTo(repo, t, branch, force);
+        PushResult r = PushTo(repo, t, branch, force, progress);
         if (IsName(remote)) repo.WriteRemoteTracking(remote, branch, repo.ReadBranch(branch)!);
         return r;
     }
@@ -33,7 +34,7 @@ public static class RemoteOps
 
     // ---- transport-agnostic cores (also used by tests with an injected transport) ----
 
-    public static PushResult PushTo(Repository repo, IRemoteTransport t, string branch, bool force)
+    public static PushResult PushTo(Repository repo, IRemoteTransport t, string branch, bool force, Progress? progress = null)
     {
         if (repo.ReadBranch(branch) is not { } local)
             throw new InvalidOperationException($"no such branch: {branch}");
@@ -45,14 +46,24 @@ public static class RemoteOps
 
         var candidates = new HashSet<string>();
         Transfer.CollectReachable(repo, local, candidates);
+        progress?.Begin("Counting objects");
+        progress?.Done(candidates.Count, candidates.Count);
         IReadOnlyList<string> missing = t.Missing(candidates.ToList());
 
-        // A bucket batches the missing objects into one pack (≈1 write); other transports
-        // stay one-object-per-call.
+        // A bucket/HTTP batches the missing objects into one pack (≈1 write); other transports
+        // stay one-object-per-call. Either way report per object as we read them out; the phase ends
+        // (", done.") once the batch is sent / the last object is written.
+        progress?.Begin("Writing objects");
+        long sent = 0;
         if (t is IBatchTransport batch)
-            batch.PutObjects(missing.Select(h => (h, repo.Objects.Read(h))).ToList());
+        {
+            var toSend = new List<(string Hash, byte[] Content)>(missing.Count);
+            foreach (string h in missing) { toSend.Add((h, repo.Objects.Read(h))); progress?.Update(++sent, missing.Count); }
+            batch.PutObjects(toSend);
+        }
         else
-            foreach (string h in missing) t.PutObject(h, repo.Objects.ReadRaw(h));
+            foreach (string h in missing) { t.PutObject(h, repo.Objects.ReadRaw(h)); progress?.Update(++sent, missing.Count); }
+        progress?.Done(missing.Count, missing.Count);
 
         t.UpdateRef(branch, remoteTip, local, force);
         return new PushResult(missing.Count, ff);

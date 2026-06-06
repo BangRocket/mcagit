@@ -619,6 +619,11 @@ public sealed class Repository
         string? oldTip = HeadCommit();
         string hash = WriteCommit(commit);
 
+        // Flush this commit's staged objects into one packfile *before* the ref moves, so the branch
+        // can never point at objects that aren't durable yet. No-op unless the caller opened a staging
+        // session (the commit command does); merge/rebase/etc. stay loose, exactly as before.
+        Objects.CommitStaging();
+
         // Advance the current branch; if HEAD is detached, move HEAD itself and
         // leave every branch untouched (committing on a detached HEAD must never
         // silently clobber 'main').

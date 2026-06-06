@@ -304,6 +304,19 @@ overlapping backup runs can't silently drop a commit. The lock is an OS advisory
 releases automatically if the process crashes — a leftover `mcadiff.lock` never wedges the
 repo.
 
+**Progress.** `commit`, `checkout`, and `push` print git-style progress to **stderr**, repainting
+one line in place:
+
+```text
+Snapshotting world:  86% (748/870 files), 271503 chunks
+Checking out: 100% (3174/3174), done.
+Counting objects: 311047, done.
+Writing objects: 100% (4128/4128), done.
+```
+
+It's shown only when stderr is an interactive terminal, so pipes, CI, and `--json` consumers stay
+clean (the same rule as color); set `NO_PROGRESS` to turn it off everywhere.
+
 ### Remotes & maintenance
 
 Sync history between repositories — push world backups offsite or pull them down.

@@ -25,21 +25,32 @@ public static class ChunkCodec
     // payload could otherwise inflate to gigabytes and OOM the process (issue #21).
     private const long MaxNbtBytes = 128L * 1024 * 1024;
 
-    public static NbtCompound Decode(RawChunk chunk)
+    public static NbtCompound Decode(RawChunk chunk) => ParseChecked(RawNbt(chunk));
+
+    /// <summary>
+    /// Decompresses and canonicalizes a chunk into its stored-object bytes WITHOUT building an fNbt
+    /// tree — the allocation-light commit path. Equivalent to <c>NbtCanonical.Serialize(Decode(chunk))</c>
+    /// (pinned byte-for-byte by NbtCanonicalRawTests), but skipping the tag-tree materialization is what
+    /// keeps a cold commit from being allocation/GC-bound.
+    /// </summary>
+    public static byte[] DecodeCanonicalRaw(RawChunk chunk)
     {
-        // We decompress every scheme ourselves (bounded), then parse the plain NBT — so the inflate is
-        // size-capped and the depth scan runs before fNbt's recursive parser (issues #21, #22). LZ4
-        // (type 4, since 1.20.5) is an LZ4 frame wrapping uncompressed NBT; type 127 Custom is opaque.
-        byte[] raw = chunk.Compression switch
-        {
-            ChunkCompression.None => chunk.Payload,
-            ChunkCompression.ZLib => InflateBounded(new ZLibStream(new MemoryStream(chunk.Payload), CompressionMode.Decompress)),
-            ChunkCompression.GZip => InflateBounded(new GZipStream(new MemoryStream(chunk.Payload), CompressionMode.Decompress)),
-            ChunkCompression.Lz4 => InflateBounded(LZ4Stream.Decode(new MemoryStream(chunk.Payload))),
-            _ => throw new UnsupportedChunkException(chunk.Pos, chunk.Compression), // type 127 Custom
-        };
-        return ParseChecked(raw);
+        byte[] raw = RawNbt(chunk);
+        NbtDepthGuard.Check(raw); // reject pathological nesting up front (issue #22), as ParseChecked does
+        return NbtCanonical.CanonicalizeRaw(raw);
     }
+
+    // We decompress every scheme ourselves (bounded) so the inflate is size-capped and the depth scan
+    // runs before any recursive parse (issues #21, #22). LZ4 (type 4, since 1.20.5) is an LZ4 frame
+    // wrapping uncompressed NBT; type 127 Custom is opaque.
+    private static byte[] RawNbt(RawChunk chunk) => chunk.Compression switch
+    {
+        ChunkCompression.None => chunk.Payload,
+        ChunkCompression.ZLib => InflateBounded(new ZLibStream(new MemoryStream(chunk.Payload), CompressionMode.Decompress)),
+        ChunkCompression.GZip => InflateBounded(new GZipStream(new MemoryStream(chunk.Payload), CompressionMode.Decompress)),
+        ChunkCompression.Lz4 => InflateBounded(LZ4Stream.Decode(new MemoryStream(chunk.Payload))),
+        _ => throw new UnsupportedChunkException(chunk.Pos, chunk.Compression), // type 127 Custom
+    };
 
     /// <summary>Drains a decompressor to a byte[], throwing past <see cref="MaxNbtBytes"/>.</summary>
     private static byte[] InflateBounded(Stream decompressor)
@@ -99,15 +110,25 @@ public static class ChunkCodec
     /// Loads a standalone NBT file (e.g. <c>level.dat</c>, <c>playerdata/*.dat</c>).
     /// Compression is auto-detected (these are usually GZip).
     /// </summary>
-    public static NbtCompound LoadNbtFile(string path)
+    public static NbtCompound LoadNbtFile(string path) => ParseChecked(RawNbtFile(path));
+
+    /// <summary>Loads a standalone NBT file and canonicalizes it without building an fNbt tree — the
+    /// commit path for loose <c>.dat</c> files. Companion to <see cref="DecodeCanonicalRaw"/>.</summary>
+    public static byte[] LoadNbtCanonicalRaw(string path)
+    {
+        byte[] raw = RawNbtFile(path);
+        NbtDepthGuard.Check(raw);
+        return NbtCanonical.CanonicalizeRaw(raw);
+    }
+
+    // Auto-detect compression by magic (as fNbt does), but decompress ourselves (bounded) so the same
+    // untrusted-input guards as chunk decode apply (issues #21, #22).
+    private static byte[] RawNbtFile(string path)
     {
         byte[] bytes = File.ReadAllBytes(path);
-        // Auto-detect compression by magic (as fNbt does), but decompress ourselves (bounded) and
-        // depth-check before parsing — same untrusted-input guards as chunk decode (issues #21, #22).
-        byte[] raw = bytes is [0x1f, 0x8b, ..] ? InflateBounded(new GZipStream(new MemoryStream(bytes), CompressionMode.Decompress))
+        return bytes is [0x1f, 0x8b, ..] ? InflateBounded(new GZipStream(new MemoryStream(bytes), CompressionMode.Decompress))
             : bytes is [0x78, _, ..] ? InflateBounded(new ZLibStream(new MemoryStream(bytes), CompressionMode.Decompress))
             : bytes;
-        return ParseChecked(raw);
     }
 
     /// <summary>Saves a standalone NBT file (defaults to GZip, as Minecraft writes).</summary>

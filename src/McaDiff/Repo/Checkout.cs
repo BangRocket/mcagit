@@ -1,6 +1,7 @@
 using fNbt;
 using McaDiff.Anvil;
 using McaDiff.Nbt;
+using McaDiff.Output;
 
 namespace McaDiff.Repo;
 
@@ -10,10 +11,13 @@ public static class Checkout
     /// <param name="prune">When true (a full checkout/reset/bisect), worktree files not in
     /// the snapshot are removed so it reproduces the snapshot exactly — ignored files
     /// (.mcaignore) and session.lock are preserved. Left false for a partial restore.</param>
-    public static void Materialize(Repository repo, Manifest manifest, string worldOut, bool prune = false)
+    public static void Materialize(Repository repo, Manifest manifest, string worldOut, bool prune = false, Progress? progress = null)
     {
         Directory.CreateDirectory(worldOut);
         if (prune) GuardNotRepo(worldOut, repo.Dir); // never let a checkout prune the repo itself
+
+        int total = manifest.Regions.Sum(r => r.Value.Count) + manifest.Nbt.Count + manifest.Blobs.Count, done = 0;
+        progress?.Begin("Checking out");
 
         // Every output path is confined to worldOut: a hostile manifest can carry
         // entry keys like "../../.ssh/authorized_keys" and Path.Combine would honor them.
@@ -26,6 +30,7 @@ public static class Checkout
                 NbtCompound root = NbtCanonical.Deserialize(repo.Objects.Read(hash));
                 raws.Add(new RawChunk(pos, ChunkCompression.ZLib,
                     ChunkCodec.Encode(root, ChunkCompression.ZLib), external: false, timestamp: 0));
+                progress?.Update(++done, total);
             }
             RegionWriter.Write(PathGuard.Confine(worldOut, rel), raws); // empty list → valid empty region
         }
@@ -35,6 +40,7 @@ public static class Checkout
             string outFile = PathGuard.Confine(worldOut, rel);
             Directory.CreateDirectory(Path.GetDirectoryName(outFile)!);
             ChunkCodec.SaveNbtFile(outFile, NbtCanonical.Deserialize(repo.Objects.Read(hash)));
+            progress?.Update(++done, total);
         }
 
         foreach ((string rel, string hash) in manifest.Blobs)
@@ -42,6 +48,7 @@ public static class Checkout
             string outFile = PathGuard.Confine(worldOut, rel);
             Directory.CreateDirectory(Path.GetDirectoryName(outFile)!);
             File.WriteAllBytes(outFile, repo.Objects.Read(hash));
+            progress?.Update(++done, total);
         }
 
         foreach (string rel in manifest.EmptyDirs)
@@ -49,6 +56,7 @@ public static class Checkout
 
         // Prune AFTER writing, so the snapshot's own .mcaignore (a blob we just wrote) governs.
         if (prune) PruneStray(manifest, worldOut, repo.Dir);
+        progress?.Done(total, total);
     }
 
     /// <summary>Refuses to prune when the checkout target is, or contains, the repository —
