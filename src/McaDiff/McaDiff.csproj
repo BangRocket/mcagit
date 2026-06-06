@@ -8,6 +8,11 @@
     <RootNamespace>McaDiff</RootNamespace>
     <AssemblyName>mcadiff</AssemblyName>
     <InvariantGlobalization>true</InvariantGlobalization>
+    <!-- The commit/snapshot path is allocation-heavy and runs Parallel.ForEach over regions; under
+         Workstation GC its threads serialize on the single heap's allocation lock (~1 core utilized).
+         Server GC gives per-core heaps so allocation parallelizes across the 8 cores. -->
+    <ServerGarbageCollection>true</ServerGarbageCollection>
+    <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
   </PropertyGroup>
 
   <ItemGroup>

@@ -10,7 +10,7 @@ namespace McaDiff.Nbt;
 /// recursively (lists, which are ordered, are left intact) so two semantically
 /// equal chunks that differ only in NBT key order still hash identically.
 /// </summary>
-public static class NbtCanonical
+public static partial class NbtCanonical
 {
     /// <summary>Max NBT nesting we'll process — matches Minecraft's own 512-deep cap. A
     /// hostile chunk nested thousands deep would otherwise overflow the stack (uncatchable).</summary>

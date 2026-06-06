@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.IO.Compression;
 using System.Security.Cryptography;
 using Microsoft.Win32.SafeHandles;
@@ -197,6 +198,126 @@ public sealed class Packfile : IDisposable
         File.Move(tmp, packPath);
         File.Move(Path.ChangeExtension(tmp, ".idx"), Path.ChangeExtension(packPath, ".idx"));
         return id;
+    }
+
+    /// <summary>
+    /// Streams whole (non-delta) objects into a new pack as they are produced, so a commit's new
+    /// objects land in ONE file instead of hundreds of thousands of loose ones — without holding them
+    /// in memory. (Buffering them in a dictionary instead keeps the whole commit's objects live, and
+    /// GC marking the growing retained set starves the parallel snapshot — measured on a 300k-chunk
+    /// world.) Each blob is stored as a type-0 entry (zlib, no delta); <c>gc</c> deltifies later.
+    /// <see cref="Add"/> is thread-safe — compression runs outside the lock; only the sequential append
+    /// is serialized — and <see cref="Finish"/> writes the index and atomically installs the pack.
+    /// </summary>
+    public sealed class Appender : IDisposable
+    {
+        private readonly string _objectsDir;
+        private readonly string _tmp;
+        private readonly FileStream _fs;
+        private readonly ConcurrentDictionary<string, long> _offsets = new(StringComparer.Ordinal);
+        private readonly object _lock = new();
+        private bool _closed;
+
+        public Appender(string objectsDir)
+        {
+            _objectsDir = objectsDir;
+            string packDir = Path.Combine(objectsDir, "pack");
+            Directory.CreateDirectory(packDir);
+            // A "*.pack.tmp" name is ignored by OpenAll ("*.pack") and swept by gc if a crash orphans it.
+            _tmp = Path.Combine(packDir, "incoming-" + Guid.NewGuid().ToString("N") + ".pack.tmp");
+            _fs = File.Create(_tmp);
+            _fs.WriteByte((byte)'M'); _fs.WriteByte((byte)'C'); _fs.WriteByte((byte)'A'); _fs.WriteByte((byte)'P');
+            _fs.WriteByte(Version);
+        }
+
+        public bool Contains(string hash) => _offsets.ContainsKey(hash);
+
+        /// <summary>Appends <paramref name="content"/> as a whole object unless it's already staged.</summary>
+        public void Add(string hash, ReadOnlySpan<byte> content)
+        {
+            if (_offsets.ContainsKey(hash)) return;
+            byte[] comp = Deflate(content.ToArray());
+            lock (_lock)
+            {
+                if (_closed || _offsets.ContainsKey(hash)) return; // lost a race / already finished
+                long off = _fs.Position;
+                _fs.WriteByte(0);                 // type 0 = whole object
+                WriteVarint(_fs, (ulong)comp.Length);
+                _fs.Write(comp);
+                _offsets[hash] = off;
+            }
+        }
+
+        /// <summary>The raw zlib bytes of a staged object (positioned read from the open temp pack),
+        /// or null if it isn't staged here.</summary>
+        public byte[]? ReadRaw(string hash)
+        {
+            if (!_offsets.TryGetValue(hash, out long off)) return null;
+            lock (_lock)
+            {
+                if (_closed) return null;
+                long save = _fs.Position;
+                try
+                {
+                    _fs.Position = off + 1;       // skip the type byte
+                    ulong len = ReadVarintFromStream(_fs);
+                    byte[] comp = new byte[(int)len];
+                    _fs.ReadExactly(comp);
+                    return comp;
+                }
+                finally { _fs.Position = save; }
+            }
+        }
+
+        /// <summary>Writes the index and atomically installs the pack; returns its id (null if empty).</summary>
+        public string? Finish()
+        {
+            lock (_lock)
+            {
+                if (_closed) return null;
+                _closed = true;
+                _fs.Flush(flushToDisk: true);
+                _fs.Dispose();
+                if (_offsets.IsEmpty) { TryDelete(_tmp); return null; }
+
+                var entries = _offsets.Select(kv => (kv.Key, kv.Value)).ToList();
+                string id = PackId(entries.Select(e => e.Key).ToList());
+                string packPath = Path.Combine(_objectsDir, "pack", $"pack-{id}.pack");
+                if (File.Exists(packPath)) { TryDelete(_tmp); return id; } // identical set already packed
+                WriteIndex(Path.ChangeExtension(_tmp, ".idx"), entries);
+                File.Move(_tmp, packPath);
+                File.Move(Path.ChangeExtension(_tmp, ".idx"), Path.ChangeExtension(packPath, ".idx"));
+                return id;
+            }
+        }
+
+        /// <summary>Discards the in-progress pack (a failed/abandoned commit) — leaves nothing behind.</summary>
+        public void Dispose()
+        {
+            lock (_lock)
+            {
+                if (_closed) return;
+                _closed = true;
+                try { _fs.Dispose(); } catch { /* best effort */ }
+                TryDelete(_tmp);
+            }
+        }
+
+        private static void TryDelete(string path) { try { File.Delete(path); } catch { /* best effort */ } }
+    }
+
+    private static ulong ReadVarintFromStream(Stream s)
+    {
+        ulong v = 0;
+        int shift = 0;
+        while (true)
+        {
+            int b = s.ReadByte();
+            if (b < 0) throw new InvalidDataException("truncated varint in pack");
+            v |= (ulong)(b & 0x7F) << shift;
+            if ((b & 0x80) == 0) return v;
+            shift += 7;
+        }
     }
 
     private sealed record WindowEntry(byte[] Content, long Offset, int Depth);

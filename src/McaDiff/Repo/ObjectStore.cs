@@ -28,10 +28,55 @@ public sealed class ObjectStore
         if (_packs is not null) { foreach (Packfile p in _packs) p.Dispose(); _packs = null; }
     }
 
+    // ---- commit staging ----
+    // During a commit we stream the commit's *new* objects straight into a single packfile instead of
+    // writing one loose file per chunk. The per-loose-file cost (temp-create + rename, hammering the FS
+    // catalog/journal) is what makes a cold commit of a 300k-chunk world crawl — brutally so on HFS+.
+    // Objects are written to disk as they're produced (not retained in memory), so the live heap stays
+    // small and GC doesn't choke the parallel snapshot; only a hash→offset index is kept in memory.
+    // Installed by CommitStaging just before the branch ref advances; discarded by AbortStaging on a
+    // failed commit — cleaner than leaving orphan loose objects.
+    private Packfile.Appender? _stagePack;
+
+    /// <summary>Begins a staging session (see above). Returns a handle that discards the in-progress
+    /// pack on Dispose unless <see cref="CommitStaging"/> already installed it — so an aborted commit
+    /// leaves nothing behind.</summary>
+    public IDisposable BeginStaging()
+    {
+        _stagePack = new Packfile.Appender(_objectsDir);
+        return new StagingScope(this);
+    }
+
+    /// <summary>Installs the staged objects as one packfile and ends the session. No-op when no session
+    /// is active, so commit-creating paths that didn't stage (merge, rebase, …) keep writing loose
+    /// objects exactly as before.</summary>
+    public void CommitStaging()
+    {
+        Packfile.Appender? pack = Interlocked.Exchange(ref _stagePack, null);
+        if (pack is null) return;
+        pack.Finish();
+        ReloadPacks();
+    }
+
+    /// <summary>Discards the in-progress staged pack without installing it (a failed/abandoned commit).</summary>
+    public void AbortStaging() => Interlocked.Exchange(ref _stagePack, null)?.Dispose();
+
+    private sealed class StagingScope(ObjectStore store) : IDisposable
+    {
+        public void Dispose() => store.AbortStaging(); // no-op once CommitStaging has cleared it
+    }
+
     /// <summary>Stores <paramref name="content"/> if new; returns its hash either way.</summary>
     public string Write(ReadOnlySpan<byte> content)
     {
         string hash = Convert.ToHexStringLower(SHA256.HashData(content));
+        if (_stagePack is { } pack)
+        {
+            // Stream a new object into the staged pack; dedup against the store + the staged pack so an
+            // unchanged chunk (already in a prior pack) is never re-stored. Add is race-safe.
+            if (!Exists(hash)) pack.Add(hash, content);
+            return hash;
+        }
         string path = PathFor(hash);
         if (!File.Exists(path))
         {
@@ -55,6 +100,8 @@ public sealed class ObjectStore
 
     public byte[] Read(string hash)
     {
+        if (_stagePack is { } sp && sp.ReadRaw(hash) is { } staged)
+            return InflateBounded(staged, MaxObjectBytes);
         string path = PathFor(hash);
         if (File.Exists(path))
         {
@@ -90,6 +137,7 @@ public sealed class ObjectStore
     /// recompressed from pack content when the object isn't loose.</summary>
     public byte[] ReadRaw(string hash)
     {
+        if (_stagePack is { } pack && pack.ReadRaw(hash) is { } staged) return staged;
         string p = PathFor(hash);
         return File.Exists(p) ? File.ReadAllBytes(p) : Compress(Read(hash));
     }
@@ -156,7 +204,8 @@ public sealed class ObjectStore
         return size;
     }
 
-    public bool Exists(string hash) => IsValidHash(hash) && (File.Exists(PathFor(hash)) || Packs.Any(p => p.Contains(hash)));
+    public bool Exists(string hash) => IsValidHash(hash)
+        && ((_stagePack?.Contains(hash) ?? false) || File.Exists(PathFor(hash)) || Packs.Any(p => p.Contains(hash)));
 
     /// <summary>A full object id: 64 lowercase hex chars. Validated before any hash reaches
     /// <see cref="PathFor"/>, so a hostile peer can't pass "..config" and traverse out of objects/.</summary>

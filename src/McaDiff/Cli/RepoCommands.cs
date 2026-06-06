@@ -78,6 +78,10 @@ public static class RepoCommands
         // interval) — branch advancement is last-writer-wins, so overlapping runs could drop a commit.
         if (TryLock(repo, "commit") is not { } commitLock) return Err(LockedMsg);
         using var _commitLock = commitLock;
+        // Buffer this commit's new objects and flush them as one packfile (ObjectStore staging) rather
+        // than writing a loose file per chunk — the per-file FS cost dominates a cold commit. The
+        // session is dropped automatically if we return before the commit is created.
+        using var _stage = repo.Objects.BeginStaging();
         if (Hooks.Run(repo, "pre-commit") != 0) return Err("pre-commit hook failed; commit aborted");
 
         // With a staging index, commit the staged tree; otherwise snapshot the whole worktree.
@@ -87,7 +91,7 @@ public static class RepoCommands
         else
         {
             if (World(repo, pos, 0) is not { } world) return NoWorld();
-            manifest = Snapshotter.Snapshot(repo, world);
+            manifest = Snapshotter.Snapshot(repo, world, new Progress(Progress.ShouldShow()));
         }
         string tree = repo.WriteManifest(manifest);
         string? head = repo.HeadCommit();
@@ -128,7 +132,7 @@ public static class RepoCommands
             else
                 try
                 {
-                    RemoteOps.PushResult pr = RemoteOps.Push(repo, remote, branch, force: false, Token(opts));
+                    RemoteOps.PushResult pr = RemoteOps.Push(repo, remote, branch, force: false, Token(opts), new Progress(Progress.ShouldShow()));
                     pushHuman = $"pushed {branch} -> {remote} ({pr.ObjectsCopied} objects{(pr.FastForward ? "" : ", forced")})";
                     pushJson = new() { ["remote"] = remote, ["branch"] = branch, ["objects"] = pr.ObjectsCopied, ["fastForward"] = pr.FastForward };
                 }
@@ -591,7 +595,7 @@ public static class RepoCommands
 
         string? from = repo.HeadCommit();
         Manifest manifest = repo.ReadManifest(repo.ReadCommit(commit).Tree);
-        Repo.Checkout.Materialize(repo, manifest, outDir, prune: true);
+        Repo.Checkout.Materialize(repo, manifest, outDir, prune: true, new Progress(Progress.ShouldShow()));
 
         bool onBranch = repo.ReadBranch(refName) is not null;
         if (onBranch) repo.SetHeadToBranch(refName); else repo.SetHeadDetached(commit);
@@ -781,6 +785,7 @@ public static class RepoCommands
         string remote = pos.Count > 0 ? pos[0] : "origin";
         bool force = opts.ContainsKey("--force");
         string? token = Token(opts);
+        var prog = new Progress(Progress.ShouldShow());
 
         if (opts.ContainsKey("--all"))
         {
@@ -789,7 +794,7 @@ public static class RepoCommands
             {
                 try
                 {
-                    RemoteOps.PushResult pr = RemoteOps.Push(repo, remote, b, force, token);
+                    RemoteOps.PushResult pr = RemoteOps.Push(repo, remote, b, force, token, prog);
                     total += pr.ObjectsCopied;
                     Console.Error.WriteLine($"  {b} -> {remote} ({pr.ObjectsCopied} objects{(pr.FastForward ? "" : ", forced")})");
                 }
@@ -804,7 +809,7 @@ public static class RepoCommands
         if (branch is null) return Err("detached HEAD — specify a branch to push");
         try
         {
-            RemoteOps.PushResult r = RemoteOps.Push(repo, remote, branch, opts.ContainsKey("--force"), Token(opts));
+            RemoteOps.PushResult r = RemoteOps.Push(repo, remote, branch, opts.ContainsKey("--force"), Token(opts), prog);
             Console.Error.WriteLine($"Pushed {branch} -> {remote} ({r.ObjectsCopied} objects{(r.FastForward ? "" : ", forced")})");
             return 0;
         }

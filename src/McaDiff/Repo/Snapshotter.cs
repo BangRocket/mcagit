@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using fNbt;
 using McaDiff.Anvil;
 using McaDiff.Nbt;
+using McaDiff.Output;
 
 namespace McaDiff.Repo;
 
@@ -18,15 +19,15 @@ public static class Snapshotter
 {
     private static readonly string[] SkipNames = ["session.lock"];
 
-    public static Manifest Snapshot(Repository repo, string worldDir)
-        => Build(worldDir, new Ctx(repo.Objects, repo.Cache, WriteCache: true), repo.Dir);
+    public static Manifest Snapshot(Repository repo, string worldDir, Progress? progress = null)
+        => Build(worldDir, new Ctx(repo.Objects, repo.Cache, WriteCache: true), repo.Dir, progress);
 
     public static Manifest HashOnly(Repository repo, string worldDir)
-        => Build(worldDir, new Ctx(Store: null, repo.Cache, WriteCache: false), repo.Dir);
+        => Build(worldDir, new Ctx(Store: null, repo.Cache, WriteCache: false), repo.Dir, null);
 
     private readonly record struct Ctx(ObjectStore? Store, ChunkCache? Cache, bool WriteCache);
 
-    private static Manifest Build(string worldDir, Ctx ctx, string? repoDir = null)
+    private static Manifest Build(string worldDir, Ctx ctx, string? repoDir = null, Progress? progress = null)
     {
         string root = Path.GetFullPath(worldDir);
         IgnoreRules ignore = IgnoreRules.Load(root);
@@ -39,12 +40,20 @@ public static class Snapshotter
                         && !ignore.IsIgnored(Path.GetRelativePath(root, f).Replace('\\', '/')))
             .ToArray();
 
+        progress?.Begin("Snapshotting world");
+        int total = files.Length, done = 0;
+        long chunks = 0;
         var results = new ConcurrentBag<Entry>();
         Parallel.ForEach(files, f =>
         {
             string rel = Path.GetRelativePath(root, f).Replace('\\', '/');
-            results.Add(Classify(f, rel, ctx));
+            Entry e = Classify(f, rel, ctx);
+            results.Add(e);
+            if (progress is not null)
+                progress.Update(Interlocked.Increment(ref done), total,
+                    $"{Interlocked.Add(ref chunks, e.Chunks?.Count ?? 0)} chunks");
         });
+        progress?.Done(total, total, $"{chunks} chunks");
 
         var manifest = new Manifest();
         foreach (Entry e in results)
@@ -102,8 +111,11 @@ public static class Snapshotter
 
                 // Retry so a transient parse hiccup never silently downgrades the whole
                 // region to a blob; a genuine UnsupportedChunkException (LZ4) still falls back.
-                NbtCompound root = Retry(() => ChunkCodec.Decode(rc));
-                string hash = Put(NbtCanonical.Serialize(root), ctx);
+                // Canonicalize straight from the decompressed bytes — no fNbt tree (the per-tag object
+                // churn is what makes a cold commit allocation-bound). Byte-identical to the tree path
+                // (NbtCanonicalRawTests), so hashes/dedup are unchanged.
+                byte[] canon = Retry(() => ChunkCodec.DecodeCanonicalRaw(rc));
+                string hash = Put(canon, ctx);
                 if (ctx.WriteCache) ctx.Cache?.Set(cacheKey, hash);
                 map[posKey] = hash;
             }
@@ -124,8 +136,9 @@ public static class Snapshotter
     private static string? TryNbt(string fullPath, Ctx ctx)
     {
         // Retry so a rare transient failure can't misclassify valid NBT as a blob
-        // (which would make manifests nondeterministic); genuine non-NBT → blob.
-        try { return Put(NbtCanonical.Serialize(Retry(() => ChunkCodec.LoadNbtFile(fullPath))), ctx); }
+        // (which would make manifests nondeterministic); genuine non-NBT → blob. Canonicalize from
+        // raw bytes (no fNbt tree), byte-identical to the tree path (NbtCanonicalRawTests).
+        try { return Put(Retry(() => ChunkCodec.LoadNbtCanonicalRaw(fullPath)), ctx); }
         catch (Exception e) when (IsParseFailure(e)) { return null; }
     }
 
