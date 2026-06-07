@@ -1,13 +1,13 @@
 ---
 name: test-suite-conventions
-description: xUnit framework, tier grouping, assertion style, naming patterns, and house-style rules for McaDiff tests
+description: xUnit framework, tier grouping, assertion style, naming patterns, and house-style rules for McaGit tests
 metadata:
   type: reference
 ---
 
 ## Framework
 - **xUnit** with `[Fact]` and `[Theory]`/`[InlineData]`. No NUnit, no MSTest.
-- Namespace: `McaDiff.Tests` (all test files).
+- Namespace: `McaGit.Tests` (all test files).
 - No `IClassFixture` or shared state — every test constructs its own world via `TestAnvil.TempDir("label")`.
 
 ## Tier Grouping

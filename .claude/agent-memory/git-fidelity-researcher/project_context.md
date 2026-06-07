@@ -25,13 +25,13 @@ mcagit is a git-style VCS for Minecraft Anvil worlds (Java Edition). Key design 
 - Tier 5: stash, rebase, clean, ranges, reflog syntax, hooks, remote polish
 
 **Key files:**
-- `src/McaDiff/Cli/RepoCommands.cs` — all porcelain command implementations
-- `src/McaDiff/Repo/Repository.cs` — ref resolution, reflog, HEAD, branches, tags
-- `src/McaDiff/Repo/Merger.cs` — 3-way merge, --abort, --continue
-- `src/McaDiff/Repo/Stash.cs` — stash push/pop/apply/drop/clear
-- `src/McaDiff/Repo/Rebase.cs` — non-interactive rebase
-- `src/McaDiff/Repo/RemoteOps.cs` — clone/fetch/push
-- `src/McaDiff/Repo/Staging.cs` — index (add/unstage)
-- `src/McaDiff/Repo/IgnoreRules.cs` — .mcaignore rules
+- `src/McaGit/Cli/RepoCommands.cs` — all porcelain command implementations
+- `src/McaGit/Repo/Repository.cs` — ref resolution, reflog, HEAD, branches, tags
+- `src/McaGit/Repo/Merger.cs` — 3-way merge, --abort, --continue
+- `src/McaGit/Repo/Stash.cs` — stash push/pop/apply/drop/clear
+- `src/McaGit/Repo/Rebase.cs` — non-interactive rebase
+- `src/McaGit/Repo/RemoteOps.cs` — clone/fetch/push
+- `src/McaGit/Repo/Staging.cs` — index (add/unstage)
+- `src/McaGit/Repo/IgnoreRules.cs` — .mcaignore rules
 
 **Why:** Established from full codebase review on 2026-06-03.

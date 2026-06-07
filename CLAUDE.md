@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-`mcagit` — a semantic, git-style diff/patch/version-control tool for Anvil-format Minecraft (Java Edition) worlds. Single .NET 10 (LTS) console app (`src/McaDiff`, assembly name `mcagit`) + xUnit test project. External dependencies: `fNbt` (NBT tag tree parsing), `K4os.Compression.LZ4` (LZ4 chunks), plus `Azure.Storage.Blobs` / `AWSSDK.S3` for cloud remotes.
+`mcagit` — a semantic, git-style diff/patch/version-control tool for Anvil-format Minecraft (Java Edition) worlds. Single .NET 10 (LTS) console app (`src/McaGit`, assembly name `mcagit`) + xUnit test project. External dependencies: `fNbt` (NBT tag tree parsing), `K4os.Compression.LZ4` (LZ4 chunks), plus `Azure.Storage.Blobs` / `AWSSDK.S3` for cloud remotes.
 
 ## Commands
 
@@ -13,12 +13,12 @@ dotnet build -c Release
 dotnet test                                            # full suite (220+ tests, all synthetic — no fixtures needed)
 dotnet test --filter "FullyQualifiedName~NbtComparer"  # one test class
 dotnet test --filter "DisplayName~merge"               # by name fragment
-dotnet run --project src/McaDiff -- <args>             # run the CLI
+dotnet run --project src/McaGit -- <args>             # run the CLI
 ```
 
 - One test (`RegionFileTests`) optionally parses a real region file when `MCAGIT_TEST_REGION` points at one; auto-skipped otherwise.
-- `compare-worlds/New_World_Older` and `New_World_Newer` are real sample worlds for manual end-to-end checks (e.g. `dotnet run --project src/McaDiff -- compare-worlds/New_World_Older compare-worlds/New_World_Newer`).
-- Tests build synthetic worlds/regions via `tests/McaDiff.Tests/TestAnvil.cs` — use it when adding tests.
+- `compare-worlds/New_World_Older` and `New_World_Newer` are real sample worlds for manual end-to-end checks (e.g. `dotnet run --project src/McaGit -- compare-worlds/New_World_Older compare-worlds/New_World_Newer`).
+- Tests build synthetic worlds/regions via `tests/McaGit.Tests/TestAnvil.cs` — use it when adding tests.
 
 ## CLI shape
 

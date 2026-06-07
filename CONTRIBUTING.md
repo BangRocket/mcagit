@@ -1,6 +1,6 @@
 # Contributing to mcagit
 
-Thanks for helping. mcagit is a single .NET 10 (LTS) console app (`src/McaDiff`, assembly `mcagit`) plus an xUnit test project. Runtime dependencies: `fNbt`, `K4os.Compression.LZ4`, and `Azure.Storage.Blobs` / `AWSSDK.S3` (cloud remotes).
+Thanks for helping. mcagit is a single .NET 10 (LTS) console app (`src/McaGit`, assembly `mcagit`) plus an xUnit test project. Runtime dependencies: `fNbt`, `K4os.Compression.LZ4`, and `Azure.Storage.Blobs` / `AWSSDK.S3` (cloud remotes).
 
 ## Build and test
 
@@ -9,7 +9,7 @@ dotnet build -c Release
 dotnet test                                            # full suite (all synthetic — no fixtures)
 dotnet test --filter "FullyQualifiedName~NbtComparer"  # one class
 dotnet test --filter "DisplayName~merge"               # by name fragment
-dotnet run --project src/McaDiff -- <args>             # run the CLI
+dotnet run --project src/McaGit -- <args>             # run the CLI
 ```
 
 Targets `net10.0`; install the .NET 10 SDK.
@@ -22,7 +22,7 @@ Targets `net10.0`; install the .NET 10 SDK.
 
 ## Writing tests
 
-Tests build synthetic worlds and regions through `tests/McaDiff.Tests/TestAnvil.cs` — there are **no binary fixtures**. Use `TestAnvil.Root`, `TestAnvil.WriteRegion`, `TestAnvil.WriteLoose`, and `TestAnvil.TempDir` to construct inputs. See [`TESTING.md`](TESTING.md) for the test-type taxonomy and which kind to reach for.
+Tests build synthetic worlds and regions through `tests/McaGit.Tests/TestAnvil.cs` — there are **no binary fixtures**. Use `TestAnvil.Root`, `TestAnvil.WriteRegion`, `TestAnvil.WriteLoose`, and `TestAnvil.TempDir` to construct inputs. See [`TESTING.md`](TESTING.md) for the test-type taxonomy and which kind to reach for.
 
 Recent work follows a tiered naming convention (`GitLikeTierNTests.cs`, and per-feature files like `BucketTransportTests.cs`).
 

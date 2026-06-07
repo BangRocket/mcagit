@@ -1,6 +1,6 @@
 # Testing guide
 
-All tests are synthetic — there are **no binary fixtures**. Inputs are built in-memory through `tests/McaDiff.Tests/TestAnvil.cs` and written to temp dirs. This keeps the suite fast, deterministic, and reviewable. When adding a test, pick the narrowest type that proves the behavior.
+All tests are synthetic — there are **no binary fixtures**. Inputs are built in-memory through `tests/McaGit.Tests/TestAnvil.cs` and written to temp dirs. This keeps the suite fast, deterministic, and reviewable. When adding a test, pick the narrowest type that proves the behavior.
 
 ## Test types
 
