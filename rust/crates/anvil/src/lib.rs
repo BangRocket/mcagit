@@ -24,3 +24,5 @@ pub type Result<T> = std::result::Result<T, AnvilError>;
 
 pub mod compression;
 pub use compression::ChunkCompression;
+pub mod chunk;
+pub use chunk::{ChunkPos, RawChunk};
