@@ -237,7 +237,12 @@ public sealed class Packfile : IDisposable
         progress?.Begin("gc: packing");
         Action onObject = () => progress?.Update(Interlocked.Increment(ref done), total);
 
-        if (threads <= 1 || orderedHashes.Count < threads)
+        // Don't oversplit: past the core count, more (smaller) segments only cost delta quality and temp
+        // files with no extra throughput — and this defangs an absurd --threads (one near the object count
+        // would otherwise create ~one segment temp file per object). Keep a few objects per segment.
+        const int MinObjectsPerSegment = 4;
+        int effectiveThreads = Math.Min(threads, Math.Max(1, orderedHashes.Count / MinObjectsPerSegment));
+        if (effectiveThreads <= 1)
         {
             string? sid = Write(objectsDir, orderedHashes, load, onObject);
             progress?.Done(total, total, $"{orderedHashes.Count} objects");
@@ -251,12 +256,12 @@ public sealed class Packfile : IDisposable
         string packPath = Path.Combine(packDir, $"pack-{id}.pack");
         if (File.Exists(packPath)) { progress?.Done(total, total, "already packed"); return id; }
 
-        List<(int Start, int Count)> segments = PartitionByBytes(orderedHashes, sizeOf, threads);
+        List<(int Start, int Count)> segments = PartitionByBytes(orderedHashes, sizeOf, effectiveThreads);
 
         // Parallel phase: each segment -> its own temp body file (peak memory = window per worker).
         var segFiles = new string[segments.Count];
         var segEntries = new List<(string Hash, long Offset)>[segments.Count];
-        Parallel.For(0, segments.Count, new ParallelOptions { MaxDegreeOfParallelism = threads }, k =>
+        Parallel.For(0, segments.Count, new ParallelOptions { MaxDegreeOfParallelism = effectiveThreads }, k =>
         {
             (int start, int count) = segments[k];
             var slice = new List<string>(count);
