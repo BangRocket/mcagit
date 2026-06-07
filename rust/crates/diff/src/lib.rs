@@ -22,3 +22,7 @@ pub mod comparer;
 pub use comparer::{walk, DiffSink};
 pub mod change;
 pub use change::{compare, ChangeKind, ChangeSink, NbtChange};
+pub mod world;
+pub use world::{diff, ChunkDiff, ChunkStatus, FileDiff, FileStatus, WorldDiff};
+pub mod format;
+pub use format::render;
