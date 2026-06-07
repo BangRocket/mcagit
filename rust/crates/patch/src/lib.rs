@@ -31,3 +31,5 @@ pub mod op_sink;
 pub use op_sink::PatchOpSink;
 pub mod extract;
 pub use extract::extract;
+pub mod apply;
+pub use apply::{apply, ApplyReport};
