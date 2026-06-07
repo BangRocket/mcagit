@@ -32,3 +32,7 @@ pub use manifest::{CommitObject, Manifest};
 pub mod repository;
 pub use repository::Repository;
 pub mod snapshot;
+pub mod checkout;
+pub use checkout::checkout;
+pub mod status;
+pub use status::{status, Change, ChangeKind};
