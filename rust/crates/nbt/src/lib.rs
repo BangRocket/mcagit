@@ -29,3 +29,5 @@ pub mod read;
 pub use read::read;
 pub mod write;
 pub use write::write_named;
+pub mod canonical;
+pub use canonical::canonical_bytes;
