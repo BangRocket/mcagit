@@ -85,7 +85,7 @@ internal static class TestAnvil
     /// <summary>Creates a unique temp directory for a test and returns its path.</summary>
     public static string TempDir(string label)
     {
-        string dir = Path.Combine(Path.GetTempPath(), $"mcadiff-test-{label}-{Guid.NewGuid():N}");
+        string dir = Path.Combine(Path.GetTempPath(), $"mcagit-test-{label}-{Guid.NewGuid():N}");
         Directory.CreateDirectory(dir);
         return dir;
     }

@@ -1,6 +1,6 @@
 # Serverless cloud backend — design notes
 
-mcadiff can push/clone a repository to a dumb object-storage bucket (Azure Blob, or any
+mcagit can push/clone a repository to a dumb object-storage bucket (Azure Blob, or any
 S3-compatible store) with **no server-side process**. The whole sync protocol runs
 client-side over a minimal `IBucket` interface (get / put / put-if-match / list / delete).
 This note records the decisions behind that, so they don't get re-litigated.
@@ -30,7 +30,7 @@ downloaded on demand.
 
 ### Decision: reuse the existing custom `Packfile` format
 
-We reuse mcadiff's own `Packfile` (the same format `gc` already writes — git-style opcode
+We reuse mcagit's own `Packfile` (the same format `gc` already writes — git-style opcode
 delta chains between similar chunks) rather than adopting git's on-disk pack format.
 
 - **Pro:** zero new format. The reader/writer, delta encoder, and index already exist and
@@ -38,7 +38,7 @@ delta chains between similar chunks) rather than adopting git's on-disk pack for
   chunks (e.g. a chunk whose only change is `InhabitedTime`) carries over for free.
 - **Pro:** the pack is content-addressed by its own id, so uploads are idempotent and a
   half-finished push leaves no dangling ref (the ref is the last, CAS-guarded write).
-- **Con:** not interoperable with git tooling — but nothing else speaks mcadiff's object
+- **Con:** not interoperable with git tooling — but nothing else speaks mcagit's object
   model anyway (manifests-as-trees, canonical NBT blobs), so git-pack compatibility would
   buy nothing.
 
@@ -77,7 +77,7 @@ snapshot without dragging down the entire backup history.
 
 ## Encryption (reframed)
 
-mcadiff does **not** encrypt bucket objects at rest. A world's NBT is recoverable by
+mcagit does **not** encrypt bucket objects at rest. A world's NBT is recoverable by
 anyone who can read the bucket. The practical answer today is the provider's **server-side
 encryption (SSE)** plus tight bucket ACLs and per-backup credentials.
 

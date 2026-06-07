@@ -38,31 +38,31 @@ public static class RepoCommands
         // common off-by-one-folder mistake (worlds nest under saves/).
         if (opts.GetValueOrDefault("--worktree") is { } wtCheck && Directory.Exists(wtCheck)
             && !File.Exists(Path.Combine(Path.GetFullPath(wtCheck), "level.dat")))
-            Console.Error.WriteLine($"mcadiff: warning: '{wtCheck}' has no level.dat — is it a Minecraft world folder?");
+            Console.Error.WriteLine($"mcagit: warning: '{wtCheck}' has no level.dat — is it a Minecraft world folder?");
         string dir = dashC ?? (pos.Count > 0 ? pos[0] : Directory.GetCurrentDirectory());
 
-        // Refuse to scatter repo internals (objects/, refs/, HEAD, mcadiff.lock) into a world folder —
+        // Refuse to scatter repo internals (objects/, refs/, HEAD, mcagit.lock) into a world folder —
         // the snapshot would then try to read its own metadata and crash (issue #26). Bind the world
         // and put the repo beside it instead.
         if (opts.GetValueOrDefault("--worktree") is null
             && !Repository.IsRepository(dir)
             && File.Exists(Path.Combine(Path.GetFullPath(dir), "level.dat")))
             return Err($"'{dir}' looks like a Minecraft world (has level.dat). Create the repo beside it and bind the world:\n"
-                + $"  mcadiff init {dir}.mcagit --worktree {dir}");
+                + $"  mcagit init {dir}.mcagit --worktree {dir}");
 
         // git init is idempotent — re-running it on an existing repo reinitializes (exit 0).
         if (Repository.IsRepository(dir))
         {
             Repository existing = Repository.Open(dir);
             if (opts.GetValueOrDefault("--worktree") is { } wt0) existing.Worktree = wt0;
-            Console.Error.WriteLine($"Reinitialized existing mcadiff repository in {dir}"
+            Console.Error.WriteLine($"Reinitialized existing mcagit repository in {dir}"
                 + (existing.Worktree is { } w0 ? $" (worktree {w0})" : ""));
             return 0;
         }
 
         Repository repo = Repository.Init(dir);
         if (opts.GetValueOrDefault("--worktree") is { } wt) repo.Worktree = wt;
-        Console.Error.WriteLine($"Initialized empty mcadiff repository in {dir}"
+        Console.Error.WriteLine($"Initialized empty mcagit repository in {dir}"
             + (repo.Worktree is { } w ? $" (worktree {w})" : ""));
         return 0;
     }
@@ -687,7 +687,7 @@ public static class RepoCommands
         {
             Console.Error.WriteLine($"Automatic merge stopped — {result.Conflicts.Count} conflict(s) need resolution.");
             PrintConflicts(result.Conflicts);
-            Console.Error.WriteLine("Resolve in the worktree, then `mcadiff merge --continue` (or `mcadiff merge --abort`).");
+            Console.Error.WriteLine("Resolve in the worktree, then `mcagit merge --continue` (or `mcagit merge --abort`).");
             return 1;
         }
         if (result.HasConflicts)
@@ -817,7 +817,7 @@ public static class RepoCommands
     }
 
     private static string? Token(Dictionary<string, string?> opts)
-        => opts.GetValueOrDefault("--token") ?? Environment.GetEnvironmentVariable("MCADIFF_TOKEN");
+        => opts.GetValueOrDefault("--token") ?? Environment.GetEnvironmentVariable("MCAGIT_TOKEN");
 
     public static int Serve(string? dashC, string[] a)
     {
@@ -849,7 +849,7 @@ public static class RepoCommands
         string? dir = dashC ?? (pos.Count > 0 ? pos[0] : null);
         if (dir is null || !Repository.IsRepository(dir)) { Console.Error.WriteLine("serve-stdio: not a repository"); return 2; }
         // ssh has already authenticated the caller, so write is allowed by default. An operator can
-        // pin a key to fetch/clone only with a forced command: command="mcadiff serve-stdio <path> --read-only".
+        // pin a key to fetch/clone only with a forced command: command="mcagit serve-stdio <path> --read-only".
         bool allowWrite = !opts.ContainsKey("--read-only");
         var svc = new RemoteService(Repository.Open(dir), allowWrite);
         using Stream input = Console.OpenStandardInput();
@@ -987,7 +987,7 @@ public static class RepoCommands
                 if (repo.ReadBranch(spec) is not null) { Console.WriteLine(spec); continue; }
             }
             try { string h = repo.ResolveRef(spec); Console.WriteLine(opts.ContainsKey("--short") ? repo.Objects.Abbreviate(h) : h); }
-            catch (Exception ex) { Console.Error.WriteLine($"mcadiff: {ex.Message}"); rc = 1; }
+            catch (Exception ex) { Console.Error.WriteLine($"mcagit: {ex.Message}"); rc = 1; }
         }
         return rc;
     }
@@ -1550,12 +1550,12 @@ public static class RepoCommands
 
     private static int Err(string message)
     {
-        Console.Error.WriteLine($"mcadiff: {message}");
+        Console.Error.WriteLine($"mcagit: {message}");
         return 2;
     }
 
     private const string LockedMsg =
-        "repository is locked by another mcadiff process (concurrent commit/push) — retry once it finishes";
+        "repository is locked by another mcagit process (concurrent commit/push) — retry once it finishes";
 
     /// <summary>Takes the repo lock, or returns null if another process holds it (caller exits 2).</summary>
     private static RepoLock? TryLock(Repository repo, string operation)

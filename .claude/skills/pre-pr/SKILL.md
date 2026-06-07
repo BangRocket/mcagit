@@ -1,13 +1,13 @@
 ---
 name: pre-pr
-description: Run the full pre-PR gate for mcadiff - tests, agent reviews mapped from the branch diff, and an aggregated findings block for the PR description. Use before opening any PR, or when asked "is this branch ready for a PR?"
+description: Run the full pre-PR gate for mcagit - tests, agent reviews mapped from the branch diff, and an aggregated findings block for the PR description. Use before opening any PR, or when asked "is this branch ready for a PR?"
 ---
 
 Execute the CLAUDE.md pre-PR checklist mechanically. Do not skip steps; do not substitute your own review for the agents'.
 
 ## Steps
 
-1. **Tests first.** Run `dotnet test -c Release`. On machines without the .NET 9 runtime (SDK 10 only), prefix with `DOTNET_ROLL_FORWARD=LatestMajor`. If anything fails, stop — fix before continuing. Set `MCADIFF_TEST_REGION` to `compare-worlds/New_World_Older/region/r.0.0.mca` so the real-region test runs.
+1. **Tests first.** Run `dotnet test -c Release`. On machines without the .NET 9 runtime (SDK 10 only), prefix with `DOTNET_ROLL_FORWARD=LatestMajor`. If anything fails, stop — fix before continuing. Set `MCAGIT_TEST_REGION` to `compare-worlds/New_World_Older/region/r.0.0.mca` so the real-region test runs.
 
 2. **Map the diff to agents.** Run `git diff main...HEAD --stat` (or `--name-only`) and match touched paths against the delegation rules:
    - `src/McaDiff/Diff/`, `Nbt/`, or `Patch/` → launch `nbt-diff-invariant-reviewer`

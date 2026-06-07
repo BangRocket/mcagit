@@ -1,6 +1,6 @@
-# Contributing to mcadiff
+# Contributing to mcagit
 
-Thanks for helping. mcadiff is a single .NET 10 (LTS) console app (`src/McaDiff`, assembly `mcadiff`) plus an xUnit test project. Runtime dependencies: `fNbt`, `K4os.Compression.LZ4`, and `Azure.Storage.Blobs` / `AWSSDK.S3` (cloud remotes).
+Thanks for helping. mcagit is a single .NET 10 (LTS) console app (`src/McaDiff`, assembly `mcagit`) plus an xUnit test project. Runtime dependencies: `fNbt`, `K4os.Compression.LZ4`, and `Azure.Storage.Blobs` / `AWSSDK.S3` (cloud remotes).
 
 ## Build and test
 

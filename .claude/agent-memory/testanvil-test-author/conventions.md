@@ -34,4 +34,4 @@ metadata:
 - No mocking of the object store or repository.
 - `TestAnvil.TempDir(label)` for isolated temp dirs — each test gets its own.
 - SSH-signing tests guard on `SshSigner.Available` and silently return if unavailable.
-- "Real region file" test in RegionFileTests silently skips if env var `MCADIFF_TEST_REGION` is unset (soft skip, not `[Skip]`).
+- "Real region file" test in RegionFileTests silently skips if env var `MCAGIT_TEST_REGION` is unset (soft skip, not `[Skip]`).

@@ -47,8 +47,8 @@ public static class Hooks
                 WorkingDirectory = repo.Worktree ?? repo.Dir,
             };
             if (scriptArg is not null) psi.ArgumentList.Add(scriptArg);
-            psi.Environment["MCADIFF_DIR"] = repo.Dir;
-            if (repo.Worktree is { } w) psi.Environment["MCADIFF_WORKTREE"] = w;
+            psi.Environment["MCAGIT_DIR"] = repo.Dir;
+            if (repo.Worktree is { } w) psi.Environment["MCAGIT_WORKTREE"] = w;
 
             using Process? p = Process.Start(psi);
             if (p is null) return null;

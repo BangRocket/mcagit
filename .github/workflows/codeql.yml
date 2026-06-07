@@ -1,6 +1,6 @@
 name: codeql
 
-# Static security analysis. mcadiff parses untrusted binary input (region
+# Static security analysis. mcagit parses untrusted binary input (region
 # files, NBT, patches, packfiles) and ships a network server — exactly the
 # profile CodeQL's C# taint-tracking queries are built for. `build-mode: none`
 # analyzes from source without a full build.

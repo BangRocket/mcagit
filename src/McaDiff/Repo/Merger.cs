@@ -133,7 +133,7 @@ public static class Merger
                 Tree = tree,
                 Parents = [acc, bases[i]],
                 Message = "virtual merge base",
-                Author = "mcadiff",
+                Author = "mcagit",
                 Time = "1970-01-01T00:00:00.0000000+00:00", // fixed ⇒ deterministic, dedupable
             });
         }

@@ -49,7 +49,7 @@ jobs:
         os: [ubuntu-latest, windows-latest]
     env:
       # Enables the otherwise-skipped real-region parse test in RegionFileTests.
-      MCADIFF_TEST_REGION: ${{ github.workspace }}/compare-worlds/New_World_Older/region/r.0.0.mca
+      MCAGIT_TEST_REGION: ${{ github.workspace }}/compare-worlds/New_World_Older/region/r.0.0.mca
     steps:
       - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - uses: actions/setup-dotnet@9a946fdbd5fb07b82b2f5a4466058b876ab72bb2 # v5.3.0
@@ -96,7 +96,7 @@ jobs:
         shell: bash
         run: |
           set -eu
-          MCADIFF="./gauntlet-bin/mcadiff"
+          MCAGIT="./gauntlet-bin/mcagit"
           OLD=compare-worlds/New_World_Older
           NEW=compare-worlds/New_World_Newer
           TMP=$(mktemp -d)
@@ -118,32 +118,32 @@ jobs:
             echo "PASS: $desc"
           }
 
-          expect 0 "self-diff is clean"            $MCADIFF "$OLD" "$OLD"
-          expect 1 "cross-diff finds changes"      $MCADIFF "$OLD" "$NEW"
+          expect 0 "self-diff is clean"            $MCAGIT "$OLD" "$OLD"
+          expect 1 "cross-diff finds changes"      $MCAGIT "$OLD" "$NEW"
 
-          expect 0 "extract old->new"              $MCADIFF extract "$OLD" "$NEW" -o "$TMP/changes.mcapatch"
-          expect 0 "apply forward, no conflicts"   $MCADIFF apply "$TMP/changes.mcapatch" "$OLD" -o "$TMP/old-updated"
-          expect 0 "forward result matches NEW"    $MCADIFF "$TMP/old-updated" "$NEW"
-          expect 0 "apply reverse, no conflicts"   $MCADIFF apply --reverse "$TMP/changes.mcapatch" "$NEW" -o "$TMP/new-restored"
-          expect 0 "reverse result matches OLD"    $MCADIFF "$TMP/new-restored" "$OLD"
+          expect 0 "extract old->new"              $MCAGIT extract "$OLD" "$NEW" -o "$TMP/changes.mcapatch"
+          expect 0 "apply forward, no conflicts"   $MCAGIT apply "$TMP/changes.mcapatch" "$OLD" -o "$TMP/old-updated"
+          expect 0 "forward result matches NEW"    $MCAGIT "$TMP/old-updated" "$NEW"
+          expect 0 "apply reverse, no conflicts"   $MCAGIT apply --reverse "$TMP/changes.mcapatch" "$NEW" -o "$TMP/new-restored"
+          expect 0 "reverse result matches OLD"    $MCAGIT "$TMP/new-restored" "$OLD"
 
           cp -r "$OLD" "$TMP/world"
-          expect 0 "init repo"                     $MCADIFF init "$TMP/repo" --worktree "$TMP/world"
-          expect 0 "set user.name"                 $MCADIFF -C "$TMP/repo" config user.name ci
-          expect 0 "set user.email"                $MCADIFF -C "$TMP/repo" config user.email ci@example.com
-          expect 0 "commit older"                  $MCADIFF -C "$TMP/repo" commit -m older
+          expect 0 "init repo"                     $MCAGIT init "$TMP/repo" --worktree "$TMP/world"
+          expect 0 "set user.name"                 $MCAGIT -C "$TMP/repo" config user.name ci
+          expect 0 "set user.email"                $MCAGIT -C "$TMP/repo" config user.email ci@example.com
+          expect 0 "commit older"                  $MCAGIT -C "$TMP/repo" commit -m older
           rm -rf "$TMP/world" && cp -r "$NEW" "$TMP/world"
-          expect 0 "commit newer"                  $MCADIFF -C "$TMP/repo" commit -m newer
+          expect 0 "commit newer"                  $MCAGIT -C "$TMP/repo" commit -m newer
           # Use the stable branch ref (main / main~1), not HEAD/HEAD~1: `checkout main~1`
           # detaches HEAD to the older commit, so any later HEAD-relative ref would drift.
-          expect 0 "checkout main (newer)"         $MCADIFF -C "$TMP/repo" checkout main "$TMP/co-newer"
-          expect 0 "main reproduces NEW"           $MCADIFF "$TMP/co-newer" "$NEW"
-          expect 0 "checkout main~1 (older)"       $MCADIFF -C "$TMP/repo" checkout main~1 "$TMP/co-older"
-          expect 0 "main~1 reproduces OLD"         $MCADIFF "$TMP/co-older" "$OLD"
+          expect 0 "checkout main (newer)"         $MCAGIT -C "$TMP/repo" checkout main "$TMP/co-newer"
+          expect 0 "main reproduces NEW"           $MCAGIT "$TMP/co-newer" "$NEW"
+          expect 0 "checkout main~1 (older)"       $MCAGIT -C "$TMP/repo" checkout main~1 "$TMP/co-older"
+          expect 0 "main~1 reproduces OLD"         $MCAGIT "$TMP/co-older" "$OLD"
 
-          expect 0 "gc repacks"                    $MCADIFF -C "$TMP/repo" gc
-          expect 0 "fsck after gc"                 $MCADIFF -C "$TMP/repo" fsck
-          expect 0 "checkout main~1 after gc"      $MCADIFF -C "$TMP/repo" checkout main~1 "$TMP/co-older-2"
-          expect 0 "post-gc checkout matches OLD"  $MCADIFF "$TMP/co-older-2" "$OLD"
+          expect 0 "gc repacks"                    $MCAGIT -C "$TMP/repo" gc
+          expect 0 "fsck after gc"                 $MCAGIT -C "$TMP/repo" fsck
+          expect 0 "checkout main~1 after gc"      $MCAGIT -C "$TMP/repo" checkout main~1 "$TMP/co-older-2"
+          expect 0 "post-gc checkout matches OLD"  $MCAGIT "$TMP/co-older-2" "$OLD"
 
           echo "round-trip gauntlet PASSED"

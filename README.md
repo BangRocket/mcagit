@@ -1,9 +1,9 @@
-# mcadiff
+# mcagit
 
 A semantic, **git-style diff for Anvil-format Minecraft (Java Edition) worlds**.
 
 Git only sees `.mca` region files as opaque binary blobs — `git diff` reports
-"binary files differ" and nothing more. `mcadiff` opens both worlds, parses every
+"binary files differ" and nothing more. `mcagit` opens both worlds, parses every
 region → chunk → NBT element, and prints what actually changed:
 
 ```text
@@ -11,7 +11,7 @@ diff --mca entities/r.0.0.mca
   @@ chunk (0, 0) @@
     ~ DataVersion: 3955 → 3956
     ~ Entities[uuid:641b80dde18a476d8dcb56cb10f440c5].Pos[1]: -30.9d → -22.9d
-    + mcadiff_demo: "hello from mcadiff"
+    + mcagit_demo: "hello from mcagit"
 
 diff --nbt level.dat
   ~ Data.DayTime: 6121995L → 6127995L
@@ -27,17 +27,44 @@ forward-porting (see [Patch & restore](#patch--restore)), and it includes a
 `init`/`commit`/`log`/`checkout`/`branch` plus a true 3-way `merge`
 (see [Version control](#version-control)).
 
+## Why not just zip my world folder?
+
+Zipping your save is a full copy you can only restore *wholesale* — and it can't
+tell you what changed. mcagit treats a world the way git treats source: it
+understands what's *inside* it.
+
+| Just zipping the world | mcagit |
+|---|---|
+| Full copy every backup | Stores only the **chunks that changed** — content-addressed dedup |
+| "Restore" = overwrite everything | **Undo one change**: restore a single region, chunk, or NBT node — or the whole world |
+| No idea what changed | **Semantic diff** — exactly which chunks, blocks, and entities differ |
+| Can't combine two people's edits | **3-way merge** of two builders' work |
+| A pile of dated zips | Real **history** — branches, tags, signed snapshots |
+
+It's the only Minecraft tool that understands what a world *is*. Even git-backed
+backups (FastBack) treat the world as opaque binaries — `git diff` just says
+"binary files differ," and one block edit rewrites the whole region file. mcagit
+dedups and diffs at the **chunk** level: what FastBack would be if it understood
+the world.
+
+**And it works on backups you already have.** Block-loggers (CoreProtect, Prism)
+only help if they were installed *before* the grief; when they weren't, the usual
+advice is "restore everything." mcagit does retroactive forensics and surgical
+rollback from ordinary snapshots — no prior plugin, no database. It won't tell you
+*who* (that's the loggers' job) — it tells you *what* changed, *where*, and puts it
+back.
+
 ## Install
 
-Grab a self-contained binary from the [Releases](https://github.com/BangRocket/mcadiff/releases) page — no .NET runtime required. Builds are published for `win-x64`, `linux-x64`, `linux-arm64`, `osx-x64`, and `osx-arm64`, each with a `SHA256SUMS` file.
+Grab a self-contained binary from the [Releases](https://github.com/BangRocket/mcagit/releases) page — no .NET runtime required. Builds are published for `win-x64`, `linux-x64`, `linux-arm64`, `osx-x64`, and `osx-arm64`, each with a `SHA256SUMS` file.
 
 ```sh
 # Linux / macOS (adjust RID + tag)
-curl -sSfL -o mcadiff.tar.gz https://github.com/BangRocket/mcadiff/releases/latest/download/mcadiff-<tag>-linux-x64.tar.gz
-tar -xzf mcadiff.tar.gz && chmod +x mcadiff && ./mcadiff --help
+curl -sSfL -o mcagit.tar.gz https://github.com/BangRocket/mcagit/releases/latest/download/mcagit-<tag>-linux-x64.tar.gz
+tar -xzf mcagit.tar.gz && chmod +x mcagit && ./mcagit --help
 ```
 
-On Windows, download the `win-x64` `.zip` and run `mcadiff.exe`.
+On Windows, download the `win-x64` `.zip` and run `mcagit.exe`.
 
 ## Build from source
 
@@ -45,17 +72,17 @@ Requires the **.NET 10 SDK** (LTS); the only NuGet dependencies (`fNbt`, `K4os.C
 
 ```sh
 dotnet build -c Release
-dotnet run --project src/McaDiff -- <A> <B>     # or run the built mcadiff binary
+dotnet run --project src/McaDiff -- <A> <B>     # or run the built mcagit binary
 ```
 
-mcadiff targets **.NET 10 (LTS)**. The published release binaries are self-contained, so end users need no .NET runtime at all.
+mcagit targets **.NET 10 (LTS)**. The published release binaries are self-contained, so end users need no .NET runtime at all.
 
 `<A>` and `<B>` are either **two world folders** or **two single files**
 (`.mca` region files or `.dat` loose NBT files).
 
 ```sh
-mcadiff ~/backups/world-monday ~/backups/world-tuesday
-mcadiff old/region/r.0.0.mca new/region/r.0.0.mca
+mcagit ~/backups/world-monday ~/backups/world-tuesday
+mcagit old/region/r.0.0.mca new/region/r.0.0.mca
 ```
 
 ## Example
@@ -64,7 +91,7 @@ Diffing two saves of the same world a minute apart — the loose-NBT view
 (`--only nbt`) reads like a play-by-play of what the player did:
 
 ```sh
-mcadiff --only nbt New_World_Older New_World_Newer
+mcagit --only nbt New_World_Older New_World_Newer
 ```
 
 ```text
@@ -103,18 +130,18 @@ on the chunks nearest the player. Use `--summary` for a per-file overview.
 
 ## Inspect a world
 
-Beyond "what changed", mcadiff can answer "what *is* the world right now" — read-only
+Beyond "what changed", mcagit can answer "what *is* the world right now" — read-only
 queries over the same parsed NBT (they never modify the world; exit `0` found / `1`
 none / `2` error, so they script cleanly):
 
 ```sh
-mcadiff inspect -2 -60 -7 <world>            # block + biome at a coordinate
-mcadiff find block-entity chest <world> --near 0,64,0 --radius 128
-mcadiff find entity zombie <world>           # mobs/frames/stands (entities/ + legacy)
-mcadiff find sign <world> --text spawn       # signs whose text matches (1.20+ and legacy)
-mcadiff players <world>                       # last-saved positions / health / gamemode
-mcadiff poi <world> --type bed                # points of interest (beds/workstations/portals)
-mcadiff where-changed <old> <new>             # "where did the griefing happen?" — classify + locate
+mcagit inspect -2 -60 -7 <world>            # block + biome at a coordinate
+mcagit find block-entity chest <world> --near 0,64,0 --radius 128
+mcagit find entity zombie <world>           # mobs/frames/stands (entities/ + legacy)
+mcagit find sign <world> --text spawn       # signs whose text matches (1.20+ and legacy)
+mcagit players <world>                       # last-saved positions / health / gamemode
+mcagit poi <world> --type bed                # points of interest (beds/workstations/portals)
+mcagit where-changed <old> <new>             # "where did the griefing happen?" — classify + locate
 ```
 
 `where-changed` decodes the block-level diff of two world folders and reports how many blocks
@@ -150,20 +177,20 @@ For a world folder, across the overworld and the `DIM-1` / `DIM1` dimensions:
 
 ## Patch & restore
 
-`mcadiff` can turn a diff into a portable, **bidirectional** patch and apply it
+`mcagit` can turn a diff into a portable, **bidirectional** patch and apply it
 to another world. Use it to roll a save forward, or — applied in reverse — to
 **restore** old, known-good state (undo griefing, corruption, accidental edits)
 without overwriting everything else.
 
 ```sh
 # 1. Capture the changes from <old> to <new> as a patch file
-mcadiff extract <old> <new> -o changes.mcapatch
+mcagit extract <old> <new> -o changes.mcapatch
 
 # 2. Apply forward onto a base (writes a NEW world; never mutates the target)
-mcadiff apply changes.mcapatch <base-world> -o <output-world>
+mcagit apply changes.mcapatch <base-world> -o <output-world>
 
 # 3. …or apply in reverse onto the newer world to restore the old state
-mcadiff apply --reverse changes.mcapatch <new-world> -o <restored-world>
+mcagit apply --reverse changes.mcapatch <new-world> -o <restored-world>
 ```
 
 **Non-destructive by design:**
@@ -193,20 +220,20 @@ them onto **old** (`extract <base> <target>` — base first):
 
 ```sh
 # 1. Capture old → new as a patch
-mcadiff extract New_World_Older New_World_Newer -o changes.mcapatch
+mcagit extract New_World_Older New_World_Newer -o changes.mcapatch
 #   Wrote changes.mcapatch — 13 files, 4707 ops.
 
 # 2. Apply onto old → a fresh updated world (New_World_Older is never modified)
-mcadiff apply changes.mcapatch New_World_Older -o Old_Updated
+mcagit apply changes.mcapatch New_World_Older -o Old_Updated
 #   Applied 4711 ops across 13 files; 0 conflicts.
 
 # 3. Verify it now matches new
-mcadiff Old_Updated New_World_Newer
+mcagit Old_Updated New_World_Newer
 #   No differences.
 ```
 
 The reverse direction restores instead: keep the same patch and run
-`mcadiff apply --reverse changes.mcapatch New_World_Newer -o Old_Restored` to
+`mcagit apply --reverse changes.mcapatch New_World_Newer -o Old_Restored` to
 rebuild the older state from the newer world. Both directions are verified
 end-to-end against these worlds in the test suite.
 
@@ -237,34 +264,34 @@ you pass `-C <repo>`; a **bound worktree** (the world) lets `commit`/`status`/
 `diff`/`checkout` take no path — just like git's working tree.
 
 ```sh
-mcadiff init <repo> --worktree <world>     # create a repo, bind a world
+mcagit init <repo> --worktree <world>     # create a repo, bind a world
 cd <repo>                                   # …or prefix commands with -C <repo>
 
-mcadiff commit -m "before raid"             # snapshot the bound worktree
+mcagit commit -m "before raid"             # snapshot the bound worktree
 # …play, then:
-mcadiff commit -m "after raid"              # only changed chunks add objects
+mcagit commit -m "after raid"              # only changed chunks add objects
 
-mcadiff status                              # changes vs HEAD (by hash; fast)
-mcadiff diff                                # worktree vs HEAD
-mcadiff diff <refA> <refB>                  # any two snapshots (branch/commit/HEAD/path)
-mcadiff log [--oneline|-p|--stat]           # history (optionally with diffs)
-mcadiff show <ref>                          # a commit's metadata + diff
-mcadiff checkout <ref> [<world-out>]        # materialize a snapshot
-mcadiff reset <ref> [--hard]                # move the branch (─ worktree with --hard)
-mcadiff restore <ref> <path>...             # restore specific files from a snapshot
-mcadiff revert <commit>                     # new commit that undoes a commit
-mcadiff branch [name]                       # list / create branches
-mcadiff tag -a v1 -m "season 1" [-s]        # annotated (optionally SSH-signed) tags
-mcadiff merge <other-branch>               # 3-way merge (stops on conflict)
-mcadiff merge --continue | --abort          # finish / undo a conflicted merge
+mcagit status                              # changes vs HEAD (by hash; fast)
+mcagit diff                                # worktree vs HEAD
+mcagit diff <refA> <refB>                  # any two snapshots (branch/commit/HEAD/path)
+mcagit log [--oneline|-p|--stat]           # history (optionally with diffs)
+mcagit show <ref>                          # a commit's metadata + diff
+mcagit checkout <ref> [<world-out>]        # materialize a snapshot
+mcagit reset <ref> [--hard]                # move the branch (─ worktree with --hard)
+mcagit restore <ref> <path>...             # restore specific files from a snapshot
+mcagit revert <commit>                     # new commit that undoes a commit
+mcagit branch [name]                       # list / create branches
+mcagit tag -a v1 -m "season 1" [-s]        # annotated (optionally SSH-signed) tags
+mcagit merge <other-branch>               # 3-way merge (stops on conflict)
+mcagit merge --continue | --abort          # finish / undo a conflicted merge
 
-mcadiff add <path>... | restore --staged …  # stage / unstage (the index)
-mcadiff stash [push|pop|list|drop|clear]    # shelve / restore the worktree
-mcadiff rebase [--onto <base>] <upstream>   # replay commits onto a new base
-mcadiff bisect start|good|bad|reset         # binary-search for a bad commit
-mcadiff clean [-n|-f]                        # remove untracked worktree files
-mcadiff fsck                                 # verify object integrity + reachability
-mcadiff rev-parse|cat-file|hash-object|ls-tree   # plumbing
+mcagit add <path>... | restore --staged …  # stage / unstage (the index)
+mcagit stash [push|pop|list|drop|clear]    # shelve / restore the worktree
+mcagit rebase [--onto <base>] <upstream>   # replay commits onto a new base
+mcagit bisect start|good|bad|reset         # binary-search for a bad commit
+mcagit clean [-n|-f]                        # remove untracked worktree files
+mcagit fsck                                 # verify object integrity + reachability
+mcagit rev-parse|cat-file|hash-object|ls-tree   # plumbing
 ```
 
 Revisions accept `HEAD`, branch/tag names, abbreviated hashes, `~n` / `^n` suffixes,
@@ -281,7 +308,7 @@ Pre-commit / post-commit **hooks** run from `<repo>/hooks/`.
 
 ### Where it diverges from git (on purpose)
 
-mcadiff is git-shaped but a world isn't a source tree — a few behaviors differ deliberately:
+mcagit is git-shaped but a world isn't a source tree — a few behaviors differ deliberately:
 
 - **`commit` exits `0` on "nothing to commit"** (git exits `1`). A scheduled backup of an unchanged
   world isn't an error; `commit --json`'s `committed` flag distinguishes the cases.
@@ -291,7 +318,7 @@ mcadiff is git-shaped but a world isn't a source tree — a few behaviors differ
 - **No byte-identical restore** — `checkout` re-encodes chunks canonically (sorted keys, re-zlib) and
   resets region chunk timestamps; reproduction is semantically faithful (loads in Minecraft), not
   bit-for-bit.
-- **`git log` / `git fsck` can't read an mcadiff repo** and vice-versa — the object model (manifests
+- **`git log` / `git fsck` can't read an mcagit repo** and vice-versa — the object model (manifests
   as trees, canonical-NBT blobs, a custom packfile format) is its own; there's no git interop goal.
 
 **Automating backups.** `commit --push <remote>` snapshots and pushes in one shot (and
@@ -301,7 +328,7 @@ from "nothing changed" — exit code stays `0` for both). `commit` and `push` ta
 repository lock (git's `index.lock` model) for their duration: a second concurrent
 invocation **fails fast** (exit `2`) instead of racing branch advancement, so two
 overlapping backup runs can't silently drop a commit. The lock is an OS advisory lock that
-releases automatically if the process crashes — a leftover `mcadiff.lock` never wedges the
+releases automatically if the process crashes — a leftover `mcagit.lock` never wedges the
 repo.
 
 **Progress.** `commit`, `checkout`, and `push` print git-style progress to **stderr**, repainting
@@ -325,15 +352,15 @@ cloud bucket (**`azure://`**, **`s3://`**). Because objects are content-addresse
 transfer copies only what the other side lacks.
 
 ```sh
-mcadiff clone <src> <dest> [--depth N] [--token T]   # src: path | http(s):// | ssh:// | azure:// | s3://
-mcadiff remote add origin <url>
-mcadiff push  [<remote> [<branch>]] [--force] [--token T]   # fast-forward-checked
-mcadiff fetch [<remote> [<branch>]] [--token T]            # into refs/remotes/<remote>/*
-mcadiff push  [<remote>] --all                # push every branch
-mcadiff ls-remote [<remote>]                  # list a remote's refs
-mcadiff verify-remote [<remote>] [--deep]     # check offsite integrity (--deep: hash every object)
-mcadiff reflog                                # HEAD movement history
-mcadiff gc                                    # repack reachable objects + prune the rest
+mcagit clone <src> <dest> [--depth N] [--token T]   # src: path | http(s):// | ssh:// | azure:// | s3://
+mcagit remote add origin <url>
+mcagit push  [<remote> [<branch>]] [--force] [--token T]   # fast-forward-checked
+mcagit fetch [<remote> [<branch>]] [--token T]            # into refs/remotes/<remote>/*
+mcagit push  [<remote>] --all                # push every branch
+mcagit ls-remote [<remote>]                  # list a remote's refs
+mcagit verify-remote [<remote>] [--deep]     # check offsite integrity (--deep: hash every object)
+mcagit reflog                                # HEAD movement history
+mcagit gc                                    # repack reachable objects + prune the rest
 ```
 
 **`--depth N`** makes a *shallow* clone — only the last N commits, with their worlds
@@ -347,14 +374,14 @@ disaster recovery without dragging down the whole backup history.
 
 ```sh
 # HTTP: run a daemon. Read is open; push needs --allow-push and (optionally) a token.
-mcadiff -C <repo> serve --port 8421 --allow-push --token s3cret
-mcadiff clone http://host:8421 ./world.mcagit          # anonymous
-mcadiff push origin main --token s3cret                # authenticated
+mcagit -C <repo> serve --port 8421 --allow-push --token s3cret
+mcagit clone http://host:8421 ./world.mcagit          # anonymous
+mcagit push origin main --token s3cret                # authenticated
 
-# SSH: no daemon — runs `mcadiff serve-stdio` on the remote over your ssh session.
-# Auth & encryption are ssh's job (keys/agent); requires mcadiff on the remote.
-mcadiff clone ssh://user@host/path/to/world.mcagit ./world.mcagit
-mcadiff push  ssh://user@host/path/to/world.mcagit main
+# SSH: no daemon — runs `mcagit serve-stdio` on the remote over your ssh session.
+# Auth & encryption are ssh's job (keys/agent); requires mcagit on the remote.
+mcagit clone ssh://user@host/path/to/world.mcagit ./world.mcagit
+mcagit push  ssh://user@host/path/to/world.mcagit main
 ```
 
 By default an SSH caller that can reach `serve-stdio` may push (shell access ≈ push
@@ -362,7 +389,7 @@ access). To pin a key to **fetch/clone only**, give it a forced command in the r
 `~/.ssh/authorized_keys`:
 
 ```text
-command="mcadiff serve-stdio /path/to/world.mcagit --read-only",no-pty ssh-ed25519 AAAA… reader@key
+command="mcagit serve-stdio /path/to/world.mcagit --read-only",no-pty ssh-ed25519 AAAA… reader@key
 ```
 
 **Serverless cloud buckets** (no daemon — push straight to object storage). There's
@@ -375,13 +402,13 @@ other.
 ```sh
 # Azure Blob Storage — azure://<account>/<container>/<path>
 export AZURE_STORAGE_CONNECTION_STRING='…'     # or: AZURE_STORAGE_KEY (+ account from the URL)
-mcadiff clone azure://myacct/backups/world ./world.mcagit
-mcadiff push  azure://myacct/backups/world main
+mcagit clone azure://myacct/backups/world ./world.mcagit
+mcagit push  azure://myacct/backups/world main
 
 # Any S3-compatible store (AWS, Cloudflare R2, Backblaze B2, MinIO) — s3://<bucket>/<path>
 export AWS_ACCESS_KEY_ID=… AWS_SECRET_ACCESS_KEY=… AWS_REGION=us-east-1
 export S3_ENDPOINT_URL='https://…'             # only for non-AWS providers (R2/B2/MinIO)
-mcadiff push s3://my-bucket/world main
+mcagit push s3://my-bucket/world main
 ```
 
 Credentials come from the env (Azure: connection string, or account + `AZURE_STORAGE_KEY`;
@@ -392,7 +419,7 @@ R2 do. `verify-remote` walks the bucket's history and confirms every referenced 
 present (`--deep` re-hashes each one) — a quick offsite bit-rot / partial-upload check.
 
 > **Encryption:** bucket objects are content-addressed but **not encrypted at rest by
-> mcadiff** — a world's NBT is recoverable by anyone who can read the bucket. For private
+> mcagit** — a world's NBT is recoverable by anyone who can read the bucket. For private
 > backups, rely on the provider's server-side encryption (SSE) and tight bucket ACLs.
 > Client-side (zero-knowledge) encryption would need to be record-level — encrypting whole
 > objects breaks cross-snapshot dedup, the very thing that makes incremental pushes cheap —
@@ -477,7 +504,7 @@ the binary delta codec, packfile round-trips/compression and gc repacking; the
 recursive merge base (incl. criss-cross) and the merge stop/continue/abort workflow;
 bisect convergence and the staging index; and HEAD@{n}, stash (+gc survival), rebase
 (+`--onto`), clean, and hooks. One test additionally parses a real region file when
-`MCADIFF_TEST_REGION` points at one (auto-skipped otherwise).
+`MCAGIT_TEST_REGION` points at one (auto-skipped otherwise).
 
 ## Minecraft version support
 
@@ -533,4 +560,4 @@ Excluded: Alpha/Beta/MCRegion (`.mcr`, pre-1.2.1) — a different container.
 
 ## License
 
-GPL-3.0-or-later. See [LICENSE](LICENSE). mcadiff is free software: you may redistribute and/or modify it under the terms of the GNU General Public License, version 3 or (at your option) any later version. It is distributed WITHOUT ANY WARRANTY. As copyleft, distributed derivatives must also be GPL-licensed with source available.
+GPL-3.0-or-later. See [LICENSE](LICENSE). mcagit is free software: you may redistribute and/or modify it under the terms of the GNU General Public License, version 3 or (at your option) any later version. It is distributed WITHOUT ANY WARRANTY. As copyleft, distributed derivatives must also be GPL-licensed with source available.

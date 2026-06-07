@@ -1,12 +1,12 @@
 ---
 name: user-profile
-description: Steven Cady's preferences and profile as observed in the mcadiff project
+description: Steven Cady's preferences and profile as observed in the mcagit project
 metadata:
   type: user
 ---
 
 ## Role and Context
-- Building mcadiff: a git-like version control system for Minecraft Java Edition world saves
+- Building mcagit: a git-like version control system for Minecraft Java Edition world saves
 - Deep understanding of both Minecraft formats and software engineering (git internals, packfiles, delta compression, bisect, etc.)
 - Wants authoritative, spec-grounded answers — will push back on vague or hedged statements
 

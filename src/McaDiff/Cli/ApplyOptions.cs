@@ -1,6 +1,6 @@
 namespace McaDiff.Cli;
 
-/// <summary>Parsed options for <c>mcadiff apply</c>.</summary>
+/// <summary>Parsed options for <c>mcagit apply</c>.</summary>
 public sealed class ApplyOptions
 {
     public string? PatchPath { get; private set; }
@@ -52,10 +52,10 @@ public sealed class ApplyOptions
     private ApplyOptions Fail(string message) { Error = message; return this; }
 
     public const string Usage = """
-        mcadiff apply — apply a patch to a target world, non-destructively
+        mcagit apply — apply a patch to a target world, non-destructively
 
         USAGE:
-            mcadiff apply [options] <patch.mcapatch> <target> -o <output-dir>
+            mcagit apply [options] <patch.mcapatch> <target> -o <output-dir>
 
         The target world is copied to <output-dir>; only patched nodes are rewritten,
         each guarded so it never clobbers unexpected data (a mismatch is reported as a

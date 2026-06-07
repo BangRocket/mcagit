@@ -5,7 +5,7 @@ using Xunit;
 
 namespace McaDiff.Tests;
 
-/// <summary>Tests for StatusCalc — the backbone of `mcadiff status`, previously uncovered (issue #8 B-1).</summary>
+/// <summary>Tests for StatusCalc — the backbone of `mcagit status`, previously uncovered (issue #8 B-1).</summary>
 public class StatusCalcTests
 {
     [Fact]

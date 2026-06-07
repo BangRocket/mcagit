@@ -1,6 +1,6 @@
 name: release
 
-# Builds self-contained, single-file mcadiff binaries for every supported
+# Builds self-contained, single-file mcagit binaries for every supported
 # platform and publishes them as a GitHub Release. Triggered manually via the
 # Actions UI (`workflow_dispatch`) or via the `/release` ChatOps command on a
 # merged PR (release-on-comment.yml dispatches here).
@@ -62,8 +62,8 @@ jobs:
             dotnet publish src/McaDiff -c Release -r "$RID" --self-contained \
               -p:PublishSingleFile=true -o "publish/$RID"
             case "$RID" in
-              win-*) (cd "publish/$RID" && zip -q "../../artifacts/mcadiff-${TAG}-${RID}.zip" mcadiff.exe) ;;
-              *)     tar -czf "artifacts/mcadiff-${TAG}-${RID}.tar.gz" -C "publish/$RID" mcadiff ;;
+              win-*) (cd "publish/$RID" && zip -q "../../artifacts/mcagit-${TAG}-${RID}.zip" mcagit.exe) ;;
+              *)     tar -czf "artifacts/mcagit-${TAG}-${RID}.tar.gz" -C "publish/$RID" mcagit ;;
             esac
           done
           (cd artifacts && sha256sum ./* > SHA256SUMS)
@@ -74,8 +74,8 @@ jobs:
         # turned on and killing reflection-based JSON) is only caught here.
         run: |
           set -euo pipefail
-          ./publish/linux-x64/mcadiff --help >/dev/null
-          ./publish/linux-x64/mcadiff compare-worlds/New_World_Older compare-worlds/New_World_Older
+          ./publish/linux-x64/mcagit --help >/dev/null
+          ./publish/linux-x64/mcagit compare-worlds/New_World_Older compare-worlds/New_World_Older
       - name: create GitHub release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -84,11 +84,11 @@ jobs:
           TAG: ${{ steps.stamp.outputs.tag }}
         run: |
           set -euo pipefail
-          BODY="mcadiff build from commit \`${GITHUB_SHA}\`."
+          BODY="mcagit build from commit \`${GITHUB_SHA}\`."
           if [ -n "${TRIGGERING_PR}" ]; then
             BODY="$(printf '%s\n\n%s' "${BODY}" "Dispatched from PR #${TRIGGERING_PR}.")"
           fi
           gh release create "${TAG}" \
-            --title "mcadiff ${TAG}" \
+            --title "mcagit ${TAG}" \
             --notes "${BODY}" \
             artifacts/*

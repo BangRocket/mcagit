@@ -162,7 +162,7 @@ public class GitLikeTier5Tests
         string world = TestAnvil.TempDir("hk2w");
         repo.Worktree = world;
         WriteNote(world, "x");
-        WriteHook(repo, "post-commit", "#!/bin/sh\n: > \"$MCADIFF_DIR/post-ran\"\n");
+        WriteHook(repo, "post-commit", "#!/bin/sh\n: > \"$MCAGIT_DIR/post-ran\"\n");
 
         Assert.Equal(0, RepoCommands.Commit(repo.Dir, ["-m", "ok"]));
         Assert.NotNull(repo.HeadCommit());

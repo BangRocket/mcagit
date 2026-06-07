@@ -10,7 +10,7 @@ namespace McaDiff.Repo;
 /// </summary>
 public static class SshSigner
 {
-    public const string Namespace = "mcadiff";
+    public const string Namespace = "mcagit";
 
     /// <summary>Whether <c>ssh-keygen</c> is on PATH (signing/verifying needs it).</summary>
     public static bool Available => Which("ssh-keygen") is not null;
@@ -25,7 +25,7 @@ public static class SshSigner
         if (!Available)
             throw new InvalidOperationException("ssh-keygen not found on PATH — cannot sign");
 
-        string dir = Directory.CreateTempSubdirectory("mcadiff-sign").FullName;
+        string dir = Directory.CreateTempSubdirectory("mcagit-sign").FullName;
         try
         {
             string dataFile = Path.Combine(dir, "payload");
@@ -50,7 +50,7 @@ public static class SshSigner
         if (string.IsNullOrEmpty(signature)) return new(false, false, null, "object is not signed");
         if (!Available) return new(false, false, null, "ssh-keygen not found on PATH — cannot verify");
 
-        string dir = Directory.CreateTempSubdirectory("mcadiff-verify").FullName;
+        string dir = Directory.CreateTempSubdirectory("mcagit-verify").FullName;
         try
         {
             string sigFile = Path.Combine(dir, "payload.sig");

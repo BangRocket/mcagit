@@ -1,6 +1,6 @@
 # Architecture decision records
 
-Short records of the load-bearing design decisions behind mcadiff — the *why*, so future changes
+Short records of the load-bearing design decisions behind mcagit — the *why*, so future changes
 don't quietly undo them. Each is a single page.
 
 - [0001 — NBT identity-based list matching](0001-nbt-identity.md)

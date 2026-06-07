@@ -16,7 +16,7 @@ public class GitFidelityLeftoverTests
         string notARepo = TestAnvil.TempDir("nrepo");
         // Reading an (almost certainly) unset global key must report "unset" (exit 1),
         // NOT "not a repository" (exit 2). Read-only — never writes ~/.mcaconfig.
-        int rc = RepoCommands.Config(notARepo, ["--global", "mcadiff.audit.almostcertainlyunset"]);
+        int rc = RepoCommands.Config(notARepo, ["--global", "mcagit.audit.almostcertainlyunset"]);
         Assert.NotEqual(2, rc); // 2 == NoRepo; the fix makes --global repo-independent
     }
 

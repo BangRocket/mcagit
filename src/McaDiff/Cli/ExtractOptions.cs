@@ -2,7 +2,7 @@ using McaDiff.Diff;
 
 namespace McaDiff.Cli;
 
-/// <summary>Parsed options for <c>mcadiff extract</c>.</summary>
+/// <summary>Parsed options for <c>mcagit extract</c>.</summary>
 public sealed class ExtractOptions
 {
     public string? OldPath { get; private set; }
@@ -59,10 +59,10 @@ public sealed class ExtractOptions
     private ExtractOptions Fail(string message) { Error = message; return this; }
 
     public const string Usage = """
-        mcadiff extract — write a portable patch of the changes from <old> to <new>
+        mcagit extract — write a portable patch of the changes from <old> to <new>
 
         USAGE:
-            mcadiff extract [options] <old> <new> -o <patch.mcapatch>
+            mcagit extract [options] <old> <new> -o <patch.mcapatch>
 
         OPTIONS:
             -o, --output <file>   Patch file to write (required).
@@ -73,6 +73,6 @@ public sealed class ExtractOptions
             -h, --help            Show this help.
 
         The patch stores both old and new values, so it can later be applied forward
-        or in reverse (see `mcadiff apply`).
+        or in reverse (see `mcagit apply`).
         """;
 }

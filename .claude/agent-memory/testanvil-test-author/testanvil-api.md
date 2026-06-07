@@ -5,7 +5,7 @@ metadata:
   type: reference
 ---
 
-## TestAnvil Static Methods (C:\Users\steven.cady\repos\personal\mcadiff\tests\McaDiff.Tests\TestAnvil.cs)
+## TestAnvil Static Methods (C:\Users\steven.cady\repos\personal\mcagit\tests\McaDiff.Tests\TestAnvil.cs)
 
 | Method | Signature | Notes |
 |--------|-----------|-------|
@@ -15,7 +15,7 @@ metadata:
 | `WriteSingleChunkRegion` | `static void WriteSingleChunkRegion(string path, ChunkPos pos, NbtCompound root)` | Writes real Anvil region file with one ZLib-compressed chunk. |
 | `WriteRegion` | `static void WriteRegion(string path, params (ChunkPos Pos, NbtCompound Root)[] chunks)` | Writes region via real RegionWriter with multiple chunks. |
 | `WriteLoose` | `static void WriteLoose(string path, NbtCompound root)` | Writes GZip NBT file (level.dat, playerdata, etc.) via ChunkCodec.SaveNbtFile. |
-| `TempDir` | `static string TempDir(string label)` | Creates unique temp dir at `%TEMP%/mcadiff-test-{label}-{guid}`. Returns path. |
+| `TempDir` | `static string TempDir(string label)` | Creates unique temp dir at `%TEMP%/mcagit-test-{label}-{guid}`. Returns path. |
 
 ## Idiomatic Composition Patterns
 

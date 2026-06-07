@@ -3,10 +3,10 @@ using System.Diagnostics;
 namespace McaDiff.Repo;
 
 /// <summary>
-/// Transport over ssh: runs <c>mcadiff serve-stdio &lt;path&gt;</c> on the remote host
+/// Transport over ssh: runs <c>mcagit serve-stdio &lt;path&gt;</c> on the remote host
 /// and speaks the framed stdio protocol over the ssh pipe. Authentication and
 /// encryption are ssh's job (keys/agent) — exactly like git over ssh. Requires
-/// mcadiff installed on the remote. URL: <c>ssh://[user@]host[:port]/path/to/repo</c>.
+/// mcagit installed on the remote. URL: <c>ssh://[user@]host[:port]/path/to/repo</c>.
 /// </summary>
 public sealed class SshTransport : IRemoteTransport
 {
@@ -24,7 +24,7 @@ public sealed class SshTransport : IRemoteTransport
         };
         if (uri.Port > 0) { psi.ArgumentList.Add("-p"); psi.ArgumentList.Add(uri.Port.ToString()); }
         psi.ArgumentList.Add(string.IsNullOrEmpty(uri.UserInfo) ? uri.Host : $"{uri.UserInfo}@{uri.Host}");
-        psi.ArgumentList.Add("mcadiff");
+        psi.ArgumentList.Add("mcagit");
         psi.ArgumentList.Add("serve-stdio");
         psi.ArgumentList.Add(Uri.UnescapeDataString(uri.AbsolutePath));
 

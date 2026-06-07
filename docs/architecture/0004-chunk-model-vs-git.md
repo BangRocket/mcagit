@@ -6,9 +6,9 @@ Accepted.
 
 ## Context
 
-mcadiff is deliberately git-shaped (commits, branches, tags, merge, remotes, packfiles). But a world is
+mcagit is deliberately git-shaped (commits, branches, tags, merge, remotes, packfiles). But a world is
 not a tree of text files, and copying git's model literally would either lose semantics or be wildly
-inefficient. The decision is *where* mcadiff matches git and where it diverges.
+inefficient. The decision is *where* mcagit matches git and where it diverges.
 
 ## Decision
 
@@ -28,7 +28,7 @@ Deliberate divergences from git:
 
 ## Consequences
 
-- `git log` / `git fsck` cannot operate on an mcadiff repo — the object model (manifests-as-trees,
+- `git log` / `git fsck` cannot operate on an mcagit repo — the object model (manifests-as-trees,
   canonical-NBT blobs, custom packfile format) is its own; this is intentional and there is no git
   interop goal.
 - A change that touches diff/patch/repo semantics must go through the shared comparison walk and

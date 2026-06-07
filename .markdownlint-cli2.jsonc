@@ -1,5 +1,5 @@
 {
-  // markdownlint config for mcadiff's human-facing docs (README, CLAUDE.md).
+  // markdownlint config for mcagit's human-facing docs (README, CLAUDE.md).
   // Structural rules stay on; purely stylistic ones that fight normal prose
   // and our table style are off.
   "config": {

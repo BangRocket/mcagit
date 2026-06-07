@@ -1,6 +1,6 @@
 ---
 name: project-state
-description: Current implementation state of mcadiff's Anvil/NBT code: what works, what's missing, key gaps found in 2026-06 audit
+description: Current implementation state of mcagit's Anvil/NBT code: what works, what's missing, key gaps found in 2026-06 audit
 metadata:
   type: project
 ---

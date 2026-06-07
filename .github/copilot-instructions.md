@@ -1,6 +1,6 @@
-# Copilot / AI agent instructions for mcadiff
+# Copilot / AI agent instructions for mcagit
 
-mcadiff is a semantic, git-style diff / patch / version-control tool for Anvil-format Minecraft (Java Edition) worlds. One .NET 10 (LTS) console app (`src/McaDiff`) plus an xUnit test project. Dependencies: `fNbt` (NBT tree), `K4os.Compression.LZ4` (LZ4 chunks), `Azure.Storage.Blobs` / `AWSSDK.S3` (cloud remotes).
+mcagit is a semantic, git-style diff / patch / version-control tool for Anvil-format Minecraft (Java Edition) worlds. One .NET 10 (LTS) console app (`src/McaDiff`) plus an xUnit test project. Dependencies: `fNbt` (NBT tree), `K4os.Compression.LZ4` (LZ4 chunks), `Azure.Storage.Blobs` / `AWSSDK.S3` (cloud remotes).
 
 When suggesting code, hold these load-bearing invariants. They are correctness, not style.
 

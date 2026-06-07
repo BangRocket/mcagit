@@ -7,7 +7,7 @@ using McaDiff.Repo;
 
 // Global, git-style: an optional leading `-C <repo>` selects the repository
 // (otherwise it's discovered from the current directory). `diff` is the default
-// when the first token isn't a known subcommand, so `mcadiff <A> <B>` still works.
+// when the first token isn't a known subcommand, so `mcagit <A> <B>` still works.
 string? dashC = null;
 int idx = 0;
 if (args.Length >= 1 && args[0] == "-C")
@@ -27,7 +27,7 @@ try
 catch (Exception ex)
 {
     // Never show a raw stack trace — every failure is a clean one-liner + exit 2 (issue #26).
-    Console.Error.WriteLine($"mcadiff: error: {ex.Message}");
+    Console.Error.WriteLine($"mcagit: error: {ex.Message}");
     return 2;
 }
 
@@ -87,16 +87,16 @@ int Help() { Console.WriteLine(TopUsage); return 0; }
 int ShortHelp()
 {
     Console.WriteLine("""
-        mcadiff — back up, compare, and restore Minecraft worlds.
+        mcagit — back up, compare, and restore Minecraft worlds.
 
-          Set it up:        mcadiff init <repo>.mcagit --worktree <world>
-          Save a backup:    mcadiff -C <repo> backup -m "before the raid"
-          See what changed: mcadiff -C <repo> diff
-          Go back:          mcadiff -C <repo> undo            (discard changes since the last backup)
-                            mcadiff -C <repo> checkout <ref>  (restore a specific backup)
-          List backups:     mcadiff -C <repo> log --oneline
+          Set it up:        mcagit init <repo>.mcagit --worktree <world>
+          Save a backup:    mcagit -C <repo> backup -m "before the raid"
+          See what changed: mcagit -C <repo> diff
+          Go back:          mcagit -C <repo> undo            (discard changes since the last backup)
+                            mcagit -C <repo> checkout <ref>  (restore a specific backup)
+          List backups:     mcagit -C <repo> log --oneline
 
-        Full command list: mcadiff --help
+        Full command list: mcagit --help
         """);
     return 0;
 }
@@ -108,7 +108,7 @@ static string[] BackupArgs(string? verb, string[] a)
     return [.. a, "-m", $"backup {DateTime.Now:yyyy-MM-dd HH:mm}"];
 }
 
-// `mcadiff <A> <B>` shorthand only when the first token is an existing path; otherwise it's a
+// `mcagit <A> <B>` shorthand only when the first token is an existing path; otherwise it's a
 // mistyped/unknown subcommand — reject it (don't silently run a diff) and suggest the closest.
 int UnknownOrDiff(string[] t, string? repoDir)
 {
@@ -116,9 +116,9 @@ int UnknownOrDiff(string[] t, string? repoDir)
         return RunDiff(t, repoDir);
     string token = t.Length > 0 ? t[0] : "";
     string? guess = NearestCommand(token);
-    Console.Error.WriteLine($"mcadiff: '{token}' is not a command"
+    Console.Error.WriteLine($"mcagit: '{token}' is not a command"
         + (guess is not null ? $" — did you mean '{guess}'?" : "."));
-    Console.Error.WriteLine("Run 'mcadiff --help' for usage.");
+    Console.Error.WriteLine("Run 'mcagit --help' for usage.");
     return 2;
 }
 
@@ -195,7 +195,7 @@ static WorldDiff RunFileDiff(string pathA, string pathB, DiffRunOptions opt)
     // false reassurance. Warn so the user knows they pointed at the wrong thing (off-by-one folder).
     foreach (string p in new[] { pathA, pathB })
         if (Directory.Exists(p) && !File.Exists(Path.Combine(p, "level.dat")) && !Directory.Exists(Path.Combine(p, "region")))
-            Console.Error.WriteLine($"mcadiff: warning: '{p}' has no level.dat or region/ — is it a Minecraft world?");
+            Console.Error.WriteLine($"mcagit: warning: '{p}' has no level.dat or region/ — is it a Minecraft world?");
     return WorldDiffer.Diff(pathA, pathB, opt);
 }
 
@@ -277,7 +277,7 @@ int RunApply(string[] a)
         int? expected = o.Reverse ? patch.TargetDataVersion : patch.BaseDataVersion;
         int? actual = WorldSource.DataVersion(o.TargetPath!);
         if (expected is { } e && actual is { } act && e != act)
-            Console.Error.WriteLine($"mcadiff: warning: patch was made for DataVersion {e} but the target is {act} — "
+            Console.Error.WriteLine($"mcagit: warning: patch was made for DataVersion {e} but the target is {act} — "
                 + "paths may not match (see README \"Patches are version-specific\").");
 
         var settings = new ApplySettings(o.Reverse, o.Force, o.DryRun, o.Only);
@@ -296,7 +296,7 @@ static string? MissingPath(string p) => File.Exists(p) || Directory.Exists(p) ? 
 
 static int Fail(string message, string? usage = null)
 {
-    Console.Error.WriteLine($"mcadiff: {message}");
+    Console.Error.WriteLine($"mcagit: {message}");
     if (usage is not null) { Console.Error.WriteLine(); Console.Error.WriteLine(usage); }
     return 2;
 }
@@ -304,70 +304,70 @@ static int Fail(string message, string? usage = null)
 partial class Program
 {
     private const string TopUsage = """
-        mcadiff — semantic diff, patch & version control for Anvil Minecraft worlds
+        mcagit — semantic diff, patch & version control for Anvil Minecraft worlds
 
         Add `-C <repo>` before any command to select the repository (default: the
         current directory or nearest ancestor).
 
         DIFF / PATCH
-            mcadiff diff <A> <B>                  Git-style diff of two worlds/files
-            mcadiff diff [<a> [<b>]]              In a repo: worktree vs HEAD, <a> vs
+            mcagit diff <A> <B>                  Git-style diff of two worlds/files
+            mcagit diff [<a> [<b>]]              In a repo: worktree vs HEAD, <a> vs
                                                   worktree, or <a> vs <b> (refs/worlds)
-            mcadiff extract <old> <new> -o <p>    Write a portable patch
-            mcadiff apply <patch> <target> -o <o> Apply a patch (non-destructive)
+            mcagit extract <old> <new> -o <p>    Write a portable patch
+            mcagit apply <patch> <target> -o <o> Apply a patch (non-destructive)
 
         REPOSITORY (content-addressed, deduplicated)
-            mcadiff init [<repo>] [--worktree <world>]
-            mcadiff add <path>... | add .         Stage paths into the index
-            mcadiff commit [-m <msg>] [<world>] [--push <remote>] [--json]
+            mcagit init [<repo>] [--worktree <world>]
+            mcagit add <path>... | add .         Stage paths into the index
+            mcagit commit [-m <msg>] [<world>] [--push <remote>] [--json]
                                                   Commit the index/worktree; optionally
                                                   push, and emit a machine-readable result
-            mcadiff restore --staged <path>...    Unstage paths (index → HEAD)
-            mcadiff status [<world>]              Staged / unstaged changes
-            mcadiff diff --staged                 Staged changes (index vs HEAD)
-            mcadiff bisect (start|bad|good|skip|reset|log)   Binary-search for a bad commit
-            mcadiff log [--oneline|-p|--stat] [-n N] [<ref>]
+            mcagit restore --staged <path>...    Unstage paths (index → HEAD)
+            mcagit status [<world>]              Staged / unstaged changes
+            mcagit diff --staged                 Staged changes (index vs HEAD)
+            mcagit bisect (start|bad|good|skip|reset|log)   Binary-search for a bad commit
+            mcagit log [--oneline|-p|--stat] [-n N] [<ref>]
                         [--author S] [--grep S] [--since D] [--until D] [--merges|--no-merges] [--decorate] [--all]
-            mcadiff show [<ref>]                  A commit's metadata + diff
-            mcadiff checkout <ref> [<world-out>] [--force] [-y]   Materialize a snapshot
-            mcadiff reset [<ref>] [--soft|--mixed|--hard] [-y]   Move HEAD (default --mixed, ref HEAD)
-            mcadiff restore <ref> <path>...       Restore paths from a snapshot
-            mcadiff revert <commit> | --continue | --abort   Undo a commit (stops on conflict)
-            mcadiff branch [<name> [<start>]] | -d <name> | -m <old> <new>
-            mcadiff tag [-a -m <msg> [-s]] [-f] [<name> [<ref>]] | -d <name> | -v <name>
-            mcadiff merge <ref> [--theirs|--ours]  3-way merge (stops on conflict)
-            mcadiff merge --continue | --abort     Finish / undo a conflicted merge
-            mcadiff cherry-pick <commit> | --continue | --abort   (stops on conflict)
-            mcadiff rebase [--onto <base>] <up> | --continue | --skip | --abort
-            mcadiff stash [push|list|pop|apply|drop|clear]   Shelve / restore the worktree
-            mcadiff clean [-n|-f] [-d] [-y]      Remove untracked worktree files (-d: also dirs; -y: no prompt)
-            mcadiff commit -S …                   Sign the commit (SSH key)
-            mcadiff config [--global] <key> [<v>] | --list | --unset <key>
+            mcagit show [<ref>]                  A commit's metadata + diff
+            mcagit checkout <ref> [<world-out>] [--force] [-y]   Materialize a snapshot
+            mcagit reset [<ref>] [--soft|--mixed|--hard] [-y]   Move HEAD (default --mixed, ref HEAD)
+            mcagit restore <ref> <path>...       Restore paths from a snapshot
+            mcagit revert <commit> | --continue | --abort   Undo a commit (stops on conflict)
+            mcagit branch [<name> [<start>]] | -d <name> | -m <old> <new>
+            mcagit tag [-a -m <msg> [-s]] [-f] [<name> [<ref>]] | -d <name> | -v <name>
+            mcagit merge <ref> [--theirs|--ours]  3-way merge (stops on conflict)
+            mcagit merge --continue | --abort     Finish / undo a conflicted merge
+            mcagit cherry-pick <commit> | --continue | --abort   (stops on conflict)
+            mcagit rebase [--onto <base>] <up> | --continue | --skip | --abort
+            mcagit stash [push|list|pop|apply|drop|clear]   Shelve / restore the worktree
+            mcagit clean [-n|-f] [-d] [-y]      Remove untracked worktree files (-d: also dirs; -y: no prompt)
+            mcagit commit -S …                   Sign the commit (SSH key)
+            mcagit config [--global] <key> [<v>] | --list | --unset <key>
 
         REMOTES (path, http://, ssh://, azure://, s3://) & MAINTENANCE
-            mcadiff clone <src> <dest> [--depth N] [--token T]   --depth N: shallow clone (last N commits)
-            mcadiff remote [add|remove|rename|set-url|get-url ...]   url: path | http(s):// | ssh:// | azure:// | s3://
-            mcadiff fetch [<remote> [<branch>]] [--token T]
-            mcadiff push  [<remote> [<branch>]] [--force|--all] [--token T]
-            mcadiff ls-remote [<remote>] [--token T]   List a remote's refs
-            mcadiff verify-remote [<remote>] [--deep] [--token T]   Check offsite integrity (--deep: hash every object)
-            mcadiff serve [<repo>] [--port N] [--host H] [--allow-push] [--token T]
-            mcadiff reflog                        HEAD movement history
-            mcadiff gc                            Prune unreachable objects
-            mcadiff fsck                          Verify object integrity + reachability
+            mcagit clone <src> <dest> [--depth N] [--token T]   --depth N: shallow clone (last N commits)
+            mcagit remote [add|remove|rename|set-url|get-url ...]   url: path | http(s):// | ssh:// | azure:// | s3://
+            mcagit fetch [<remote> [<branch>]] [--token T]
+            mcagit push  [<remote> [<branch>]] [--force|--all] [--token T]
+            mcagit ls-remote [<remote>] [--token T]   List a remote's refs
+            mcagit verify-remote [<remote>] [--deep] [--token T]   Check offsite integrity (--deep: hash every object)
+            mcagit serve [<repo>] [--port N] [--host H] [--allow-push] [--token T]
+            mcagit reflog                        HEAD movement history
+            mcagit gc                            Prune unreachable objects
+            mcagit fsck                          Verify object integrity + reachability
 
         WORLD INSPECTION (read-only; 0 found / 1 none / 2 error)
-            mcadiff inspect <x> <y> <z> [<world>] [--dim D] [--json]   Block + biome at a coordinate
-            mcadiff find <entity|block-entity|sign> <id|--text P> [<world>] [--near x,y,z] [--radius N] [--dim D] [--json]
-            mcadiff players [<world>] [--json]            Last-saved player positions / health
-            mcadiff poi [<world>] [--type T] [--near x,y,z] [--radius N] [--dim D]   Points of interest
-            mcadiff where-changed <old-world> <new-world> [--verbose] [--json]   What/where blocks changed (grief detector)
+            mcagit inspect <x> <y> <z> [<world>] [--dim D] [--json]   Block + biome at a coordinate
+            mcagit find <entity|block-entity|sign> <id|--text P> [<world>] [--near x,y,z] [--radius N] [--dim D] [--json]
+            mcagit players [<world>] [--json]            Last-saved player positions / health
+            mcagit poi [<world>] [--type T] [--near x,y,z] [--radius N] [--dim D]   Points of interest
+            mcagit where-changed <old-world> <new-world> [--verbose] [--json]   What/where blocks changed (grief detector)
 
         PLUMBING
-            mcadiff rev-parse [--short|--abbrev-ref] <rev>...
-            mcadiff cat-file (-t|-s|-p|-e) <object>
-            mcadiff hash-object [-w] <file>
-            mcadiff ls-tree [-r] [--name-only] <tree-ish>
+            mcagit rev-parse [--short|--abbrev-ref] <rev>...
+            mcagit cat-file (-t|-s|-p|-e) <object>
+            mcagit hash-object [-w] <file>
+            mcagit ls-tree [-r] [--name-only] <tree-ish>
 
         Identity comes from user.name / user.email config; signing uses user.signingkey
         (an SSH private key) and gpg.ssh.allowedSignersFile for verification.

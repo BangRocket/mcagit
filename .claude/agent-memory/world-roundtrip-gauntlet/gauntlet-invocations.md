@@ -8,14 +8,33 @@ metadata:
 # Gauntlet Invocations
 
 ## Environment Setup
+
+### Windows (steven.cady machine)
 - SDK 10 installed, no .NET 9 runtime on this machine (uses 10.0.201).
 - Use `$env:DOTNET_ROLL_FORWARD = "LatestMajor"` in PowerShell before any dotnet command.
 - Or use `dotnet run --project src/McaDiff -c Release --no-build -- <args>` after building.
 - Build: `dotnet build -c Release` from repo root.
 
+### macOS / zsh (heidornj machine, /Volumes/Storage/Code/minecraft/mca-git)
+- Default `dotnet` on PATH is SDK 9 and CANNOT target net10.0. Use the SDK-10 binary
+  explicitly: `/usr/local/share/dotnet/dotnet` (verified 10.0.300).
+- Built CLI (assembly renamed mcadiff→mcagit 2026-06-06): `src/McaDiff/bin/Release/net10.0/mcagit.dll`.
+- CRITICAL zsh gotcha: a multi-word var like `MCAGIT="/usr/.../dotnet /path/mcagit.dll"`
+  used as a command is NOT word-split → "no such file or directory" exit 127. Define a
+  function instead:
+  ```sh
+  mcagit() { /usr/local/share/dotnet/dotnet /Volumes/Storage/Code/minecraft/mca-git/src/McaDiff/bin/Release/net10.0/mcagit.dll "$@"; }
+  ```
+- Agent bash cwd resets between calls → use absolute paths everywhere; stash the scratch
+  path in /tmp/mcagit-scratch-path.txt and re-read it each call.
+- Scratch: `SCRATCH=/tmp/mcagit-gauntlet-$(date +%Y%m%d-%H%M%S)`; cp -R the two
+  compare-worlds/ fixtures in; clean up with `rm -rf` at the end.
+- Byte spot-check raw blobs (e.g. icon.png) with `shasum -a 256` — expected byte-identical
+  after checkout (corroborates semantic "No differences").
+
 ## Scratch Setup (never mutate compare-worlds/)
 ```powershell
-$scratch = "C:\Temp\mcadiff-gauntlet-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
+$scratch = "C:\Temp\mcagit-gauntlet-$(Get-Date -Format 'yyyyMMdd-HHmmss')"
 New-Item -ItemType Directory -Force $scratch
 Copy-Item -Recurse "compare-worlds\New_World_Older" "$scratch\New_World_Older"
 Copy-Item -Recurse "compare-worlds\New_World_Newer" "$scratch\New_World_Newer"
@@ -23,7 +42,7 @@ Copy-Item -Recurse "compare-worlds\New_World_Newer" "$scratch\New_World_Newer"
 
 ## CLI Pattern
 ```powershell
-$cli = "C:\Users\steven.cady\repos\personal\mcadiff\src\McaDiff"
+$cli = "C:\Users\steven.cady\repos\personal\mcagit\src\McaDiff"
 dotnet run --project $cli -c Release --no-build -- <args>
 ```
 

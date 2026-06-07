@@ -1,10 +1,10 @@
 # Command reference
 
-Every `mcadiff` subcommand and its flags. A leading `-C <repo>` selects the repository for any command
+Every `mcagit` subcommand and its flags. A leading `-C <repo>` selects the repository for any command
 (otherwise it's discovered from the current directory). Exit codes follow git: **0** identical/clean,
 **1** differences/conflicts/not-found, **2** error.
 
-`mcadiff <A> <B>` with no subcommand is shorthand for `diff` when both are existing paths.
+`mcagit <A> <B>` with no subcommand is shorthand for `diff` when both are existing paths.
 
 ## Diff & inspect
 

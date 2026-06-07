@@ -1,6 +1,6 @@
 # Repository on-disk format
 
-An mcadiff repository is a **bare, content-addressed object store** that lives outside the world it tracks (a bound worktree is recorded in `config`). The model is git's, with one difference that matters: the unit of dedup is the **chunk**, hashed by its decoded NBT, so an unchanged chunk is stored once no matter how many snapshots reference it. This document describes the bytes so a backup can be trusted and, if needed, read without mcadiff.
+An mcagit repository is a **bare, content-addressed object store** that lives outside the world it tracks (a bound worktree is recorded in `config`). The model is git's, with one difference that matters: the unit of dedup is the **chunk**, hashed by its decoded NBT, so an unchanged chunk is stored once no matter how many snapshots reference it. This document describes the bytes so a backup can be trusted and, if needed, read without mcagit.
 
 ## Directory layout
 
@@ -20,7 +20,7 @@ An mcadiff repository is a **bare, content-addressed object store** that lives o
   logs/HEAD             reflog of HEAD movements
   shallow               newline list of shallow-boundary commits (depth-limited clone)
   chunkcache.json       payload-hash → object-hash decode cache (an accelerator; safe to delete)
-  mcadiff.lock          advisory lock held during commit / push
+  mcagit.lock          advisory lock held during commit / push
   MERGE_HEAD MERGE_MSG ORIG_HEAD MERGE_CONFLICTS   in-progress merge
   CHERRY_PICK_HEAD REVERT_HEAD SEQ_MSG             in-progress cherry-pick / revert
   REBASE_STATE                                     resumable rebase state (JSON)

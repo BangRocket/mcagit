@@ -164,7 +164,7 @@ public static class QueryCommands
 
     private static int Err(string message)
     {
-        Console.Error.WriteLine($"mcadiff: {message}");
+        Console.Error.WriteLine($"mcagit: {message}");
         return 2;
     }
 }

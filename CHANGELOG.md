@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to mcadiff are documented here. The format follows
+All notable changes to mcagit are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project uses semantic-ish `v0.x`
 tags. Releases `v0.2.0`–`v0.7.0` predate this file — see the git tag history for those.
 

@@ -88,9 +88,9 @@ Identity selectors are what make a reorder not look like a rewrite; when an elem
 ## Example
 
 ```sh
-mcadiff extract New_World_Older New_World_Newer -o changes.mcapatch
-mcadiff apply changes.mcapatch New_World_Older -o Old_Updated      # forward
-mcadiff apply --reverse changes.mcapatch New_World_Newer -o Restored  # invert
+mcagit extract New_World_Older New_World_Newer -o changes.mcapatch
+mcagit apply changes.mcapatch New_World_Older -o Old_Updated      # forward
+mcagit apply --reverse changes.mcapatch New_World_Newer -o Restored  # invert
 ```
 
 Flags: `extract` takes `--only <cats>`, `--whole-chunk`, `--whole-file`, `--note`; `apply` takes `--reverse`, `--force`, `--dry-run`, `--only`. `apply` exits `0` clean, `1` if any conflicts were skipped.

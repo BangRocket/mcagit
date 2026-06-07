@@ -5,7 +5,7 @@ using System.Text.Json;
 
 namespace McaDiff.Repo;
 
-/// <summary>Client transport over HTTP to a <c>mcadiff serve</c> endpoint.</summary>
+/// <summary>Client transport over HTTP to a <c>mcagit serve</c> endpoint.</summary>
 public sealed class HttpTransport : IRemoteTransport, IBatchTransport
 {
     private readonly HttpClient _http = new();
@@ -49,7 +49,7 @@ public sealed class HttpTransport : IRemoteTransport, IBatchTransport
         {
             string body = new StreamReader(resp.Content.ReadAsStream()).ReadToEnd();
             string hint = resp.StatusCode is HttpStatusCode.Unauthorized or HttpStatusCode.Forbidden
-                ? " (set --token / MCADIFF_TOKEN, or the server must --allow-push)" : "";
+                ? " (set --token / MCAGIT_TOKEN, or the server must --allow-push)" : "";
             throw new InvalidOperationException($"remote HTTP {(int)resp.StatusCode}: {body}{hint}");
         }
         return resp;

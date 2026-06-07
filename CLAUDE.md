@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-`mcadiff` — a semantic, git-style diff/patch/version-control tool for Anvil-format Minecraft (Java Edition) worlds. Single .NET 10 (LTS) console app (`src/McaDiff`, assembly name `mcadiff`) + xUnit test project. External dependencies: `fNbt` (NBT tag tree parsing), `K4os.Compression.LZ4` (LZ4 chunks), plus `Azure.Storage.Blobs` / `AWSSDK.S3` for cloud remotes.
+`mcagit` — a semantic, git-style diff/patch/version-control tool for Anvil-format Minecraft (Java Edition) worlds. Single .NET 10 (LTS) console app (`src/McaDiff`, assembly name `mcagit`) + xUnit test project. External dependencies: `fNbt` (NBT tag tree parsing), `K4os.Compression.LZ4` (LZ4 chunks), plus `Azure.Storage.Blobs` / `AWSSDK.S3` for cloud remotes.
 
 ## Commands
 
@@ -16,13 +16,13 @@ dotnet test --filter "DisplayName~merge"               # by name fragment
 dotnet run --project src/McaDiff -- <args>             # run the CLI
 ```
 
-- One test (`RegionFileTests`) optionally parses a real region file when `MCADIFF_TEST_REGION` points at one; auto-skipped otherwise.
+- One test (`RegionFileTests`) optionally parses a real region file when `MCAGIT_TEST_REGION` points at one; auto-skipped otherwise.
 - `compare-worlds/New_World_Older` and `New_World_Newer` are real sample worlds for manual end-to-end checks (e.g. `dotnet run --project src/McaDiff -- compare-worlds/New_World_Older compare-worlds/New_World_Newer`).
 - Tests build synthetic worlds/regions via `tests/McaDiff.Tests/TestAnvil.cs` — use it when adding tests.
 
 ## CLI shape
 
-`Program.cs` is a top-level switch over subcommands (git-style, with optional leading `-C <repo>`). `mcadiff <A> <B>` with no subcommand falls through to `diff`. Exit codes follow git: `0` = identical/clean, `1` = differences/conflicts, `2` = error. Repo subcommands live in `Cli/RepoCommands.cs`; diff/extract/apply have their own option parsers in `Cli/`.
+`Program.cs` is a top-level switch over subcommands (git-style, with optional leading `-C <repo>`). `mcagit <A> <B>` with no subcommand falls through to `diff`. Exit codes follow git: `0` = identical/clean, `1` = differences/conflicts, `2` = error. Repo subcommands live in `Cli/RepoCommands.cs`; diff/extract/apply have their own option parsers in `Cli/`.
 
 ## Architecture
 

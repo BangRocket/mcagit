@@ -1,11 +1,11 @@
 ---
 name: project-context
-description: mcadiff architecture, git-likeness tiers, chunk-based model, and key design decisions
+description: mcagit architecture, git-likeness tiers, chunk-based model, and key design decisions
 metadata:
   type: project
 ---
 
-mcadiff is a git-style VCS for Minecraft Anvil worlds (Java Edition). Key design decisions:
+mcagit is a git-style VCS for Minecraft Anvil worlds (Java Edition). Key design decisions:
 
 - Unit of dedup is the *chunk*, hashed by decoded NBT (not raw bytes). SHA-256, not SHA-1.
 - Repo is **external and bare**; bound worktree is stored in repo config.

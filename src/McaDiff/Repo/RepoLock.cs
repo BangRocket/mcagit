@@ -15,12 +15,12 @@ public sealed class RepoLockedException(string message) : Exception(message);
 /// <remarks>
 /// The lock is the OS advisory lock on an open <see cref="FileStream"/> opened with
 /// <see cref="FileShare.None"/>, so it is released automatically if the process crashes — a
-/// leftover <c>mcadiff.lock</c> file never wedges the repo. The file's contents (pid / time /
+/// leftover <c>mcagit.lock</c> file never wedges the repo. The file's contents (pid / time /
 /// host / operation) are purely informational.
 /// </remarks>
 public sealed class RepoLock : IDisposable
 {
-    public const string FileName = "mcadiff.lock";
+    public const string FileName = "mcagit.lock";
     private FileStream? _stream;
 
     private RepoLock(FileStream stream) => _stream = stream;
@@ -38,7 +38,7 @@ public sealed class RepoLock : IDisposable
         catch (IOException)
         {
             throw new RepoLockedException(
-                "repository is locked by another mcadiff process (concurrent commit/push) — retry once it finishes");
+                "repository is locked by another mcagit process (concurrent commit/push) — retry once it finishes");
         }
         try
         {
