@@ -33,3 +33,5 @@ pub mod canonical;
 pub use canonical::canonical_bytes;
 pub mod identity;
 pub use identity::identity_key;
+pub mod path;
+pub use path::NbtPath;
