@@ -35,3 +35,5 @@ pub mod identity;
 pub use identity::identity_key;
 pub mod path;
 pub use path::NbtPath;
+pub mod json;
+pub use json::{from_json, to_json};
