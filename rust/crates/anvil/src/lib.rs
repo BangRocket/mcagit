@@ -26,3 +26,4 @@ pub mod compression;
 pub use compression::ChunkCompression;
 pub mod chunk;
 pub use chunk::{ChunkPos, RawChunk};
+pub mod codec;
