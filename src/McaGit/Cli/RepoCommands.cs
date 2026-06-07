@@ -945,7 +945,7 @@ public static class RepoCommands
 
     public static int GcCmd(string? dashC, string[] a)
     {
-        var (_, opts) = Parse(a, [], ["--prune-only"]);
+        var (_, opts) = Parse(a, ["--threads"], ["--prune-only"]);
         if (Open(dashC) is not { } repo) return NoRepo();
         if (opts.ContainsKey("--prune-only"))
         {
@@ -953,7 +953,16 @@ public static class RepoCommands
             Console.Error.WriteLine($"Pruned {p.Pruned} objects ({p.BytesFreed / 1024} KiB freed), {p.Kept} reachable.");
             return 0;
         }
-        Gc.RepackResult r = Gc.Repack(repo);
+
+        int threads = Environment.ProcessorCount;
+        if (opts.GetValueOrDefault("--threads") is { } t)
+        {
+            if (!int.TryParse(t, out threads) || threads < 1)
+                return Err($"--threads expects a positive integer, got '{t}'");
+        }
+
+        var progress = new Progress(Progress.ShouldShow());
+        Gc.RepackResult r = Gc.Repack(repo, threads, progress);
         Console.Error.WriteLine($"Packed {r.Packed} objects, pruned {r.Pruned} unreachable "
             + $"({r.BytesFreed / 1024} KiB freed){(r.PackId is null ? "" : $", pack {r.PackId[..10]}")}.");
         return 0;

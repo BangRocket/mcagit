@@ -93,4 +93,34 @@ public class PackAtCommitTests
         Assert.Equal(tip, r.HeadCommit());                          // branch didn't move
         Assert.Equal(packs, r.Objects.PackFilePaths().Count());     // and no empty pack was written
     }
+
+    [Theory]
+    [InlineData("1")]
+    [InlineData("4")]
+    public void Gc_WithThreads_KeepsWorldReproducible(string threads)
+    {
+        Repository repo = BoundRepo("gct" + threads, out string world);
+        var chunks = new (ChunkPos, NbtCompound)[64];
+        for (int i = 0; i < chunks.Length; i++) chunks[i] = (new ChunkPos(i % 8, i / 8), Chunk(i));
+        TestAnvil.WriteRegion(Path.Combine(world, "region", "r.0.0.mca"), chunks);
+        Assert.Equal(0, RepoCommands.Commit(repo.Dir, ["-m", "first"]));
+        string head = Repository.Open(repo.Dir).HeadCommit()!;
+
+        Assert.Equal(0, RepoCommands.GcCmd(repo.Dir, ["--threads", threads]));
+
+        Repository r = Repository.Open(repo.Dir);
+        Assert.NotEmpty(r.Objects.PackFilePaths());
+        Assert.Empty(r.Objects.LooseHashes());
+        Assert.True(r.Objects.Exists(head));                 // HEAD survived the repack
+        // Re-committing the unchanged world is a no-op iff every chunk object survived gc intact.
+        Assert.Equal(0, RepoCommands.Commit(r.Dir, ["-m", "again"]));
+        Assert.Equal(head, Repository.Open(repo.Dir).HeadCommit());
+    }
+
+    [Fact]
+    public void Gc_RejectsInvalidThreads()
+    {
+        Repository repo = BoundRepo("gcbad", out _);
+        Assert.NotEqual(0, RepoCommands.GcCmd(repo.Dir, ["--threads", "nope"]));
+    }
 }
