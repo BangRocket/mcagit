@@ -31,3 +31,4 @@ pub mod manifest;
 pub use manifest::{CommitObject, Manifest};
 pub mod repository;
 pub use repository::Repository;
+pub mod snapshot;
