@@ -27,9 +27,7 @@ fn compare(path: &str, a: &NbtValue, b: &NbtValue, sink: &mut dyn DiffSink) {
     match (a, b) {
         (NbtValue::Compound(ma), NbtValue::Compound(mb)) => compare_compound(path, ma, mb, sink),
         (NbtValue::List(la), NbtValue::List(lb)) => compare_list(path, la, lb, sink),
-        (NbtValue::ByteArray(_), _)
-        | (NbtValue::IntArray(_), _)
-        | (NbtValue::LongArray(_), _) => {
+        (NbtValue::ByteArray(_), _) | (NbtValue::IntArray(_), _) | (NbtValue::LongArray(_), _) => {
             if a != b {
                 sink.array_changed(path, a, b);
             }
@@ -65,7 +63,11 @@ fn compare_compound(
 
 fn compare_list(path: &str, la: &[NbtValue], lb: &[NbtValue], sink: &mut dyn DiffSink) {
     let keys_a = list_keys(la);
-    let keys_b = if keys_a.is_some() { list_keys(lb) } else { None };
+    let keys_b = if keys_a.is_some() {
+        list_keys(lb)
+    } else {
+        None
+    };
     if let (Some(ka), Some(kb)) = (keys_a, keys_b) {
         compare_keyed(path, la, &ka, lb, &kb, sink);
         return;
@@ -90,8 +92,11 @@ fn compare_keyed(
     kb: &[String],
     sink: &mut dyn DiffSink,
 ) {
-    let mut b_index: HashMap<&str, usize> =
-        kb.iter().enumerate().map(|(i, k)| (k.as_str(), i)).collect();
+    let mut b_index: HashMap<&str, usize> = kb
+        .iter()
+        .enumerate()
+        .map(|(i, k)| (k.as_str(), i))
+        .collect();
     for (i, k) in ka.iter().enumerate() {
         let label = format!("{path}[{k}]");
         match b_index.remove(k.as_str()) {
@@ -177,8 +182,16 @@ mod tests {
 
     #[test]
     fn compound_add_modify_remove() {
-        let a = comp(&[("x", NbtValue::Int(1)), ("y", NbtValue::Int(2)), ("gone", NbtValue::Byte(1))]);
-        let b = comp(&[("x", NbtValue::Int(1)), ("y", NbtValue::Int(3)), ("z", NbtValue::Int(4))]);
+        let a = comp(&[
+            ("x", NbtValue::Int(1)),
+            ("y", NbtValue::Int(2)),
+            ("gone", NbtValue::Byte(1)),
+        ]);
+        let b = comp(&[
+            ("x", NbtValue::Int(1)),
+            ("y", NbtValue::Int(3)),
+            ("z", NbtValue::Int(4)),
+        ]);
         assert_eq!(run(&a, &b), vec!["+z", "-gone", "~y"]);
     }
 
@@ -204,7 +217,10 @@ mod tests {
 
     #[test]
     fn list_by_identity_reports_field_change() {
-        let a = comp(&[("e", NbtValue::List(vec![comp(&[("id", NbtValue::String("a".into()))])]))]);
+        let a = comp(&[(
+            "e",
+            NbtValue::List(vec![comp(&[("id", NbtValue::String("a".into()))])]),
+        )]);
         let b = comp(&[(
             "e",
             NbtValue::List(vec![comp(&[
@@ -224,8 +240,14 @@ mod tests {
 
     #[test]
     fn type_change_and_array_change() {
-        let a = comp(&[("v", NbtValue::Int(1)), ("arr", NbtValue::IntArray(vec![1, 2]))]);
-        let b = comp(&[("v", NbtValue::String("1".into())), ("arr", NbtValue::IntArray(vec![1, 3]))]);
+        let a = comp(&[
+            ("v", NbtValue::Int(1)),
+            ("arr", NbtValue::IntArray(vec![1, 2])),
+        ]);
+        let b = comp(&[
+            ("v", NbtValue::String("1".into())),
+            ("arr", NbtValue::IntArray(vec![1, 3])),
+        ]);
         assert_eq!(run(&a, &b), vec!["Aarr", "Tv"]);
     }
 }

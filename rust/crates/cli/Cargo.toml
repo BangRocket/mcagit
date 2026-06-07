@@ -10,6 +10,8 @@ path = "src/main.rs"
 
 [dependencies]
 mca-repo = { workspace = true }
+mca-diff = { workspace = true }
+mca-patch = { workspace = true }
 clap = { workspace = true }
 anyhow = { workspace = true }
 

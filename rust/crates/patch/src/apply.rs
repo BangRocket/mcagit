@@ -11,7 +11,8 @@ use mca_nbt::{from_json, NbtPath, NbtValue};
 use std::collections::BTreeMap;
 use std::path::Path;
 
-const B64: base64::engine::general_purpose::GeneralPurpose = base64::engine::general_purpose::STANDARD;
+const B64: base64::engine::general_purpose::GeneralPurpose =
+    base64::engine::general_purpose::STANDARD;
 
 #[derive(Debug, Default)]
 pub struct ApplyReport {
@@ -54,7 +55,11 @@ fn apply_entry(
     force: bool,
     report: &mut ApplyReport,
 ) -> Result<()> {
-    let eff = if reverse { flip(entry.status) } else { entry.status };
+    let eff = if reverse {
+        flip(entry.status)
+    } else {
+        entry.status
+    };
     let path = out_dir.join(&entry.path);
     match entry.kind {
         crate::model::EntryKind::Region => {
@@ -184,7 +189,9 @@ fn apply_op(
 
     let Some(root) = slot.as_mut() else {
         if !force {
-            report.conflicts.push(format!("{ctx}: {} (no root)", op.path));
+            report
+                .conflicts
+                .push(format!("{ctx}: {} (no root)", op.path));
         }
         return Ok(());
     };

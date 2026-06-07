@@ -460,7 +460,9 @@ dependencies = [
  "anyhow",
  "clap",
  "mca-anvil",
+ "mca-diff",
  "mca-nbt",
+ "mca-patch",
  "mca-repo",
  "tempfile",
 ]

@@ -265,7 +265,11 @@ mod tests {
 
         let wd = diff(&a, &b).unwrap();
         assert!(!wd.is_empty());
-        let region = wd.files.iter().find(|f| f.path.contains("r.0.0.mca")).unwrap();
+        let region = wd
+            .files
+            .iter()
+            .find(|f| f.path.contains("r.0.0.mca"))
+            .unwrap();
         assert_eq!(region.status, FileStatus::Modified);
         assert_eq!(region.chunks.len(), 1);
         assert_eq!(region.chunks[0].status, ChunkStatus::Modified);

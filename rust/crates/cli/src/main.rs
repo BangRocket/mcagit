@@ -2,6 +2,7 @@
 
 use anyhow::{anyhow, bail};
 use clap::{Parser, Subcommand};
+use mca_patch::WorldPatch;
 use mca_repo::{snapshot, ChangeKind, Repository};
 use std::path::PathBuf;
 use std::process::ExitCode;
@@ -46,6 +47,26 @@ enum Cmd {
     Log {
         #[arg(long)]
         oneline: bool,
+    },
+    /// Diff two worlds (semantic). Exits 1 if they differ.
+    Diff { a: PathBuf, b: PathBuf },
+    /// Extract a patch turning world A into world B.
+    Extract {
+        a: PathBuf,
+        b: PathBuf,
+        #[arg(short = 'o', long)]
+        out: PathBuf,
+    },
+    /// Apply a patch to a world, writing a fresh output world.
+    Apply {
+        patch: PathBuf,
+        world: PathBuf,
+        #[arg(short = 'o', long)]
+        out: PathBuf,
+        #[arg(long)]
+        reverse: bool,
+        #[arg(long)]
+        force: bool,
     },
 }
 
@@ -184,6 +205,48 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                 cur = c.parents.into_iter().next();
             }
             Ok(ExitCode::SUCCESS)
+        }
+
+        Cmd::Diff { a, b } => {
+            let wd = mca_diff::world::diff(a, b)?;
+            print!("{}", mca_diff::render(&wd));
+            Ok(if wd.is_empty() {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::from(1)
+            })
+        }
+
+        Cmd::Extract { a, b, out } => {
+            let patch = mca_patch::extract(a, b)?;
+            std::fs::write(out, patch.to_json()?)?;
+            eprintln!(
+                "wrote patch ({} file entries) to {}",
+                patch.files.len(),
+                out.display()
+            );
+            Ok(ExitCode::SUCCESS)
+        }
+
+        Cmd::Apply {
+            patch,
+            world,
+            out,
+            reverse,
+            force,
+        } => {
+            let wp = WorldPatch::from_json(&std::fs::read_to_string(patch)?)?;
+            let report = mca_patch::apply(&wp, world, out, *reverse, *force)?;
+            if report.conflicts.is_empty() {
+                eprintln!("applied {} ops into {}", report.applied, out.display());
+                Ok(ExitCode::SUCCESS)
+            } else {
+                eprintln!("applied with {} conflicts:", report.conflicts.len());
+                for c in &report.conflicts {
+                    eprintln!("  {c}");
+                }
+                Ok(ExitCode::from(1))
+            }
         }
     }
 }

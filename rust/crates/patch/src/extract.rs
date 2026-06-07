@@ -10,7 +10,8 @@ use mca_nbt::{to_json, NbtValue};
 use std::collections::BTreeSet;
 use std::path::Path;
 
-const B64: base64::engine::general_purpose::GeneralPurpose = base64::engine::general_purpose::STANDARD;
+const B64: base64::engine::general_purpose::GeneralPurpose =
+    base64::engine::general_purpose::STANDARD;
 
 /// Extract the changes turning `world_a` into `world_b`.
 pub fn extract(world_a: &Path, world_b: &Path) -> Result<WorldPatch> {
@@ -58,9 +59,19 @@ fn extract_one(rel: &str, a_root: &Path, b_root: &Path) -> Result<Option<PatchFi
                             Ok(Some(nbt_entry(rel, Status::Modified, ops)))
                         }
                     }
-                    _ => Ok(Some(blob_entry(rel, Status::Modified, Some(&ba), Some(&bb)))),
+                    _ => Ok(Some(blob_entry(
+                        rel,
+                        Status::Modified,
+                        Some(&ba),
+                        Some(&bb),
+                    ))),
                 },
-                EntryKind::Blob => Ok(Some(blob_entry(rel, Status::Modified, Some(&ba), Some(&bb)))),
+                EntryKind::Blob => Ok(Some(blob_entry(
+                    rel,
+                    Status::Modified,
+                    Some(&ba),
+                    Some(&bb),
+                ))),
             }
         }
         (true, false) => Ok(Some(removed_entry(rel, kind, &pa)?)),
@@ -206,7 +217,12 @@ fn nbt_entry(rel: &str, status: Status, ops: Vec<PatchOp>) -> PatchFileEntry {
         value_blob: None,
     }
 }
-fn blob_entry(rel: &str, status: Status, base: Option<&[u8]>, value: Option<&[u8]>) -> PatchFileEntry {
+fn blob_entry(
+    rel: &str,
+    status: Status,
+    base: Option<&[u8]>,
+    value: Option<&[u8]>,
+) -> PatchFileEntry {
     PatchFileEntry {
         path: rel.to_string(),
         kind: EntryKind::Blob,
@@ -300,7 +316,11 @@ mod tests {
         world(&b, 18, true);
 
         let p = extract(&a, &b).unwrap();
-        let region = p.files.iter().find(|f| f.path.contains("r.0.0.mca")).unwrap();
+        let region = p
+            .files
+            .iter()
+            .find(|f| f.path.contains("r.0.0.mca"))
+            .unwrap();
         assert_eq!(region.kind, EntryKind::Region);
         assert_eq!(region.status, Status::Modified);
         assert_eq!(region.chunks.as_ref().unwrap()[0].ops[0].path, "hp");

@@ -17,20 +17,44 @@ impl ObjectStore {
     }
 
     /// Store `content`, returning its hex blake3 id. Idempotent: storing the
-    /// same content twice yields the same id and a single file.
+    /// same content twice yields the same id and a single file. Uses an atomic
+    /// `create_new` so a single syscall serves as both the dedup check and the
+    /// create — committing a world writes hundreds of thousands of tiny objects,
+    /// so per-object syscall count dominates.
     pub fn write(&self, content: &[u8]) -> Result<String> {
+        use std::io::Write;
         let id = blake3::hash(content).to_hex().to_string();
         let (sub, rest) = id.split_at(2);
-        let dir = self.dir.join(sub);
-        let path = dir.join(rest);
-        if !path.exists() {
-            std::fs::create_dir_all(&dir)?;
-            let packed = zstd::encode_all(content, 0)?; // 0 = zstd default level
-            let tmp = dir.join(format!("{rest}.tmp"));
-            std::fs::write(&tmp, &packed)?;
-            std::fs::rename(&tmp, &path)?;
-        }
+        let path = self.dir.join(sub).join(rest);
+        let mut file = match Self::create_new(&path) {
+            Ok(Some(f)) => f,
+            Ok(None) => return Ok(id), // already stored (dedup)
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                // fan-out subdir missing — create it once, then retry.
+                std::fs::create_dir_all(self.dir.join(sub))?;
+                match Self::create_new(&path)? {
+                    Some(f) => f,
+                    None => return Ok(id),
+                }
+            }
+            Err(e) => return Err(e.into()),
+        };
+        file.write_all(&zstd::encode_all(content, 0)?)?;
         Ok(id)
+    }
+
+    /// Try to create `path` exclusively. `Ok(Some(file))` if created (caller
+    /// fills it), `Ok(None)` if it already existed.
+    fn create_new(path: &std::path::Path) -> std::io::Result<Option<std::fs::File>> {
+        match std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(path)
+        {
+            Ok(f) => Ok(Some(f)),
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(None),
+            Err(e) => Err(e),
+        }
     }
 
     /// Read and decompress the object with id `id`.
