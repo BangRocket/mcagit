@@ -20,3 +20,5 @@ pub type Result<T> = std::result::Result<T, DiffError>;
 
 pub mod comparer;
 pub use comparer::{walk, DiffSink};
+pub mod change;
+pub use change::{compare, ChangeKind, ChangeSink, NbtChange};
