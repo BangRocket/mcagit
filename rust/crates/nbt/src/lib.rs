@@ -23,3 +23,5 @@ pub enum NbtError {
 pub type Result<T> = std::result::Result<T, NbtError>;
 
 pub mod mutf8;
+pub mod value;
+pub use value::{tag_id, Compound, NbtValue};
