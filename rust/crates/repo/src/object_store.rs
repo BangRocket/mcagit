@@ -45,6 +45,32 @@ impl ObjectStore {
         self.dir.join("pack")
     }
 
+    /// Every stored object id (loose + packed), de-duplicated.
+    pub fn all_ids(&self) -> Vec<String> {
+        let mut ids = std::collections::HashSet::new();
+        if let Ok(subs) = std::fs::read_dir(&self.dir) {
+            for sub in subs.flatten() {
+                let name = sub.file_name().to_string_lossy().to_string();
+                if name.len() == 2 && sub.path().is_dir() {
+                    if let Ok(files) = std::fs::read_dir(sub.path()) {
+                        for f in files.flatten() {
+                            let fname = f.file_name().to_string_lossy().to_string();
+                            if !fname.ends_with(".tmp") {
+                                ids.insert(format!("{name}{fname}"));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        for pack in self.packs.read().unwrap().iter() {
+            for id in pack.ids() {
+                ids.insert(id.clone());
+            }
+        }
+        ids.into_iter().collect()
+    }
+
     /// Store `content`, returning its hex blake3 id. Idempotent: storing the
     /// same content twice yields the same id and a single file. Uses an atomic
     /// `create_new` so a single syscall serves as both the dedup check and the
