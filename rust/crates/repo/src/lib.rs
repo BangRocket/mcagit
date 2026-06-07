@@ -29,3 +29,5 @@ pub mod object_store;
 pub use object_store::ObjectStore;
 pub mod manifest;
 pub use manifest::{CommitObject, Manifest};
+pub mod repository;
+pub use repository::Repository;
