@@ -21,7 +21,8 @@
 ## File structure
 
 - **`src/McaGit/Repo/Packfile.cs`** (modify) — add `using McaGit.Output;`; extract `WriteSegment`; add optional `Action? onObject` to `Write`; add `WriteParallel` + private `PartitionByBytes`.
-- **`src/McaGit/Repo/Gc.cs`** (modify) — add `using McaGit.Output;`; `Repack` gains `int threads, Progress? progress`; calls `Packfile.WriteParallel`.
+- **`src/McaGit/Repo/ObjectStore.cs`** (modify) — add `PreloadPacks()` so gc can warm the lazy pack list on the main thread before the parallel phase (avoids a `_packs ??= …` init race when concurrent workers first touch a packed object).
+- **`src/McaGit/Repo/Gc.cs`** (modify) — add `using McaGit.Output;`; `Repack` gains `int threads, Progress? progress`; warms packs, then calls `Packfile.WriteParallel`.
 - **`src/McaGit/Cli/RepoCommands.cs`** (modify) — `GcCmd` parses `--threads`, creates a `Progress`, passes both to `Gc.Repack`.
 - **`tests/McaGit.Tests/PackfileTests.cs`** (create) — unit tests for `Write` and `WriteParallel` (round-trip, equivalence, fallback).
 - **`tests/McaGit.Tests/PackAtCommitTests.cs`** (modify) — add a `gc --threads` integration test (reuses its `BoundRepo`/`Chunk` helpers).
@@ -423,9 +424,26 @@ git commit -m "feat: parallel Packfile.WriteParallel (segment-parallel, serial c
 ### Task 4: Wire `Gc.Repack` to threads + progress
 
 **Files:**
+- Modify: `src/McaGit/Repo/ObjectStore.cs`
 - Modify: `src/McaGit/Repo/Gc.cs`
 
-- [ ] **Step 1: Add the `McaGit.Output` using**
+- [ ] **Step 1: Add `ObjectStore.PreloadPacks()`**
+
+`Packfile.WriteParallel` reads objects concurrently via `store.Read`. `Read`'s pack branch goes
+through the lazily-initialized `Packs` getter (`_packs ??= …`), which is not atomic — concurrent
+first-touch of a packed object could race. Warming it on the main thread before the parallel phase
+fixes this (the `Parallel.For` inside `WriteParallel` is a happens-before barrier, so the warmed
+list is visible to every worker, and nothing reassigns `_packs` during the parallel phase).
+
+In `src/McaGit/Repo/ObjectStore.cs`, add this public method (e.g. just after `ReloadPacks`):
+
+```csharp
+    /// <summary>Forces the lazy pack list to load now, on the calling thread. gc calls this before its
+    /// parallel pack-write so concurrent <see cref="Read"/>s never race the lazy <c>_packs</c> init.</summary>
+    public void PreloadPacks() => _ = Packs;
+```
+
+- [ ] **Step 2: Add the `McaGit.Output` using to Gc.cs**
 
 At the very top of `src/McaGit/Repo/Gc.cs`, above `namespace McaGit.Repo;`, add:
 
@@ -433,7 +451,7 @@ At the very top of `src/McaGit/Repo/Gc.cs`, above `namespace McaGit.Repo;`, add:
 using McaGit.Output;
 ```
 
-- [ ] **Step 2: Change `Repack`'s signature and the pack call**
+- [ ] **Step 3: Change `Repack`'s signature and the pack call**
 
 Replace the method signature line:
 
@@ -453,9 +471,10 @@ Then replace this line (currently `Gc.cs:52`):
         string? packId = Packfile.Write(store.ObjectsDir, ordered, store.Read);
 ```
 
-with:
+with (warming the pack list on this thread first, before the parallel read phase):
 
 ```csharp
+        store.PreloadPacks(); // load packs now so concurrent store.Read in WriteParallel can't race the lazy init
         string? packId = Packfile.WriteParallel(store.ObjectsDir, ordered, store.Read, threads, store.StoredSize, progress);
 ```
 
@@ -466,20 +485,20 @@ Add a backward-compatible overload right above `Repack` so any caller using the 
     public static RepackResult Repack(Repository repo) => Repack(repo, Environment.ProcessorCount, null);
 ```
 
-- [ ] **Step 3: Build**
+- [ ] **Step 4: Build**
 
 Run: `/usr/local/share/dotnet/dotnet build McaGit.sln -c Release`
 Expected: Build succeeded, 0 errors (the `GcCmd` caller still uses the parameterless overload for now).
 
-- [ ] **Step 4: Run the repo/pack suite — still green**
+- [ ] **Step 5: Run the repo/pack suite — still green**
 
 Run: `/usr/local/share/dotnet/dotnet test McaGit.sln -c Release --filter "FullyQualifiedName~PackAtCommit|FullyQualifiedName~RepoTests|FullyQualifiedName~PackfileTests"`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add src/McaGit/Repo/Gc.cs
+git add src/McaGit/Repo/ObjectStore.cs src/McaGit/Repo/Gc.cs
 git commit -m "feat: Gc.Repack drives parallel pack writing + progress"
 ```
 
