@@ -40,3 +40,5 @@ pub mod status;
 pub use status::{status, Change, ChangeKind};
 pub mod fsck;
 pub use fsck::{fsck, FsckReport};
+pub mod gc;
+pub use gc::{gc, GcReport};

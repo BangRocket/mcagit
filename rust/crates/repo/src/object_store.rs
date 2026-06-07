@@ -45,6 +45,11 @@ impl ObjectStore {
         self.dir.join("pack")
     }
 
+    /// The `objects/` directory.
+    pub fn objects_dir(&self) -> &Path {
+        &self.dir
+    }
+
     /// Every stored object id (loose + packed), de-duplicated.
     pub fn all_ids(&self) -> Vec<String> {
         let mut ids = std::collections::HashSet::new();
