@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/nbt"]
+members = ["crates/nbt", "crates/anvil"]
 
 [workspace.package]
 edition = "2021"
@@ -13,6 +13,10 @@ cesu8 = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
+mca-nbt = { path = "crates/nbt" }
+flate2 = "1"
+lz4_flex = "0.11"
+tempfile = "3"
 
 [profile.release]
 lto = "thin"
