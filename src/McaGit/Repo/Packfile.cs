@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.IO.Compression;
 using System.Security.Cryptography;
+using McaGit.Output;
 using Microsoft.Win32.SafeHandles;
 
 namespace McaGit.Repo;
@@ -131,7 +132,8 @@ public sealed class Packfile : IDisposable
     /// against a recent window. Returns the pack id, or null if there was nothing to pack.
     /// Peak memory is the window, not the whole set.
     /// </summary>
-    public static string? Write(string objectsDir, IReadOnlyList<string> orderedHashes, Func<string, byte[]> load)
+    public static string? Write(string objectsDir, IReadOnlyList<string> orderedHashes,
+        Func<string, byte[]> load, Action? onObject = null)
     {
         if (orderedHashes.Count == 0) return null;
         string packDir = Path.Combine(objectsDir, "pack");
@@ -142,62 +144,77 @@ public sealed class Packfile : IDisposable
         if (File.Exists(packPath)) return id; // identical set already packed
 
         string tmp = packPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
-        var entries = new List<(string Hash, long Offset)>(orderedHashes.Count);
-
+        List<(string Hash, long Offset)> entries;
         using (var fs = File.Create(tmp))
         {
             fs.WriteByte((byte)'M'); fs.WriteByte((byte)'C'); fs.WriteByte((byte)'A'); fs.WriteByte((byte)'P');
             fs.WriteByte(Version);
-
-            var window = new List<WindowEntry>(Window);
-            foreach (string hash in orderedHashes)
-            {
-                byte[] content = load(hash);
-                long entryOff = fs.Position;
-                byte[] compContent = Deflate(content);
-
-                // Try to delta against a recent base of comparable size.
-                byte[]? bestDelta = null;
-                WindowEntry? bestBase = null;
-                foreach (WindowEntry w in window)
-                {
-                    if (w.Depth >= MaxDepth) continue;
-                    if (content.Length > w.Content.Length * 4 || w.Content.Length > content.Length * 4) continue;
-                    byte[] d = Delta.Diff(w.Content, content);
-                    if (bestDelta is null || d.Length < bestDelta.Length) { bestDelta = d; bestBase = w; }
-                }
-
-                int depth = 0;
-                if (bestDelta is not null && bestBase is { } baseEntry)
-                {
-                    byte[] compDelta = Deflate(bestDelta);
-                    if (compDelta.Length < compContent.Length)
-                    {
-                        fs.WriteByte(1);
-                        WriteVarint(fs, (ulong)(entryOff - baseEntry.Offset));
-                        WriteVarint(fs, (ulong)compDelta.Length);
-                        fs.Write(compDelta);
-                        depth = baseEntry.Depth + 1;
-                    }
-                    else bestDelta = null;
-                }
-                if (bestDelta is null)
-                {
-                    fs.WriteByte(0);
-                    WriteVarint(fs, (ulong)compContent.Length);
-                    fs.Write(compContent);
-                }
-
-                entries.Add((hash, entryOff));
-                window.Add(new WindowEntry(content, entryOff, depth));
-                if (window.Count > Window) window.RemoveAt(0);
-            }
+            entries = WriteSegment(fs, orderedHashes, load, onObject);
         }
 
         WriteIndex(Path.ChangeExtension(tmp, ".idx"), entries);
         File.Move(tmp, packPath);
         File.Move(Path.ChangeExtension(tmp, ".idx"), Path.ChangeExtension(packPath, ".idx"));
         return id;
+    }
+
+    /// <summary>
+    /// Writes the given objects as pack entries into <paramref name="body"/> — type-0 (whole, zlib) or
+    /// type-1 (delta vs an earlier object in THIS call, via a relative back-offset) — returning each
+    /// entry's offset within <paramref name="body"/>. No MCAP header is written (the caller owns it).
+    /// Because delta bases are confined to this call and back-offsets are relative, the produced bytes
+    /// are position-independent: appending them at any file offset preserves every back-reference.
+    /// Peak memory is the window, not the whole set.
+    /// </summary>
+    private static List<(string Hash, long Offset)> WriteSegment(
+        Stream body, IReadOnlyList<string> hashes, Func<string, byte[]> load, Action? onObject)
+    {
+        var entries = new List<(string Hash, long Offset)>(hashes.Count);
+        var window = new List<WindowEntry>(Window);
+        foreach (string hash in hashes)
+        {
+            byte[] content = load(hash);
+            long entryOff = body.Position;
+            byte[] compContent = Deflate(content);
+
+            // Try to delta against a recent base of comparable size.
+            byte[]? bestDelta = null;
+            WindowEntry? bestBase = null;
+            foreach (WindowEntry w in window)
+            {
+                if (w.Depth >= MaxDepth) continue;
+                if (content.Length > w.Content.Length * 4 || w.Content.Length > content.Length * 4) continue;
+                byte[] d = Delta.Diff(w.Content, content);
+                if (bestDelta is null || d.Length < bestDelta.Length) { bestDelta = d; bestBase = w; }
+            }
+
+            int depth = 0;
+            if (bestDelta is not null && bestBase is { } baseEntry)
+            {
+                byte[] compDelta = Deflate(bestDelta);
+                if (compDelta.Length < compContent.Length)
+                {
+                    body.WriteByte(1);
+                    WriteVarint(body, (ulong)(entryOff - baseEntry.Offset));
+                    WriteVarint(body, (ulong)compDelta.Length);
+                    body.Write(compDelta);
+                    depth = baseEntry.Depth + 1;
+                }
+                else bestDelta = null;
+            }
+            if (bestDelta is null)
+            {
+                body.WriteByte(0);
+                WriteVarint(body, (ulong)compContent.Length);
+                body.Write(compContent);
+            }
+
+            entries.Add((hash, entryOff));
+            window.Add(new WindowEntry(content, entryOff, depth));
+            if (window.Count > Window) window.RemoveAt(0);
+            onObject?.Invoke();
+        }
+        return entries;
     }
 
     /// <summary>
