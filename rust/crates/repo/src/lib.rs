@@ -47,3 +47,5 @@ pub use merge::{merge, merge_base, MergeOutcome};
 pub mod replay;
 pub use replay::{cherry_pick, rebase, revert, ReplayOutcome};
 pub mod stash;
+pub mod transfer;
+pub use transfer::{clone_local, fetch_local, push_local};

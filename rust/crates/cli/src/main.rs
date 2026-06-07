@@ -124,6 +124,18 @@ enum Cmd {
         #[arg(short = 'f')]
         force: bool,
     },
+    /// Clone a local repository into <dst>.
+    Clone { src: PathBuf, dst: PathBuf },
+    /// Push a branch to a local remote repository.
+    Push {
+        remote: PathBuf,
+        branch: Option<String>,
+    },
+    /// Fetch a branch from a local remote repository.
+    Pull {
+        remote: PathBuf,
+        branch: Option<String>,
+    },
 }
 
 fn main() -> ExitCode {
@@ -634,6 +646,44 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                     println!("would remove {p}");
                 }
             }
+            Ok(ExitCode::SUCCESS)
+        }
+
+        Cmd::Clone { src, dst } => {
+            mca_repo::clone_local(src, dst)?;
+            eprintln!("Cloned {} -> {}", src.display(), dst.display());
+            Ok(ExitCode::SUCCESS)
+        }
+
+        Cmd::Push { remote, branch } => {
+            let repo = open_repo(&cli)?;
+            let branch = branch
+                .clone()
+                .or_else(|| repo.current_branch())
+                .ok_or_else(|| anyhow!("no branch to push"))?;
+            let copied = mca_repo::push_local(&repo, remote, &branch)?;
+            eprintln!("pushed {branch} -> {} ({copied} objects)", remote.display());
+            Ok(ExitCode::SUCCESS)
+        }
+
+        Cmd::Pull { remote, branch } => {
+            let repo = open_repo(&cli)?;
+            let branch = branch
+                .clone()
+                .or_else(|| repo.current_branch())
+                .ok_or_else(|| anyhow!("no branch to pull"))?;
+            let copied = mca_repo::fetch_local(&repo, remote, &branch)?;
+            // If we pulled the current branch, update the worktree.
+            if repo.current_branch().as_deref() == Some(branch.as_str()) {
+                if let (Some(wt), Some(tip)) = (repo.worktree(), repo.read_branch(&branch)) {
+                    let m = repo.read_manifest(&repo.read_commit(&tip)?.tree)?;
+                    mca_repo::checkout(&repo, &m, std::path::Path::new(&wt), true)?;
+                }
+            }
+            eprintln!(
+                "pulled {branch} from {} ({copied} objects)",
+                remote.display()
+            );
             Ok(ExitCode::SUCCESS)
         }
     }
