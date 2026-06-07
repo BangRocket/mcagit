@@ -903,7 +903,7 @@ mod tests {
             external: false,
             timestamp: 5,
         };
-        RegionWriter::write(&path, &[big.clone()]).unwrap();
+        RegionWriter::write(&path, std::slice::from_ref(&big)).unwrap();
         assert!(dir.path().join("c.1.2.mcc").exists());
 
         let rf = RegionFile::open(&path).unwrap();
@@ -968,7 +968,7 @@ Append inside the `#[cfg(test)] mod tests` block in `region.rs`:
             return;
         };
         let rf = RegionFile::open(Path::new(&path)).unwrap();
-        assert!(rf.len() > 0, "region had no chunks");
+        assert!(!rf.is_empty(), "region had no chunks");
         let mut checked = 0;
         for raw in rf.chunks() {
             if raw.compression == ChunkCompression::Custom {

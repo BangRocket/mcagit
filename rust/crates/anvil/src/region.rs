@@ -198,7 +198,10 @@ impl RegionFile {
 
     /// Extract (X, Z) from an `r.X.Z.mca` file name.
     pub fn parse_region_coords(path: &Path) -> Result<(i32, i32)> {
-        let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or_default();
+        let stem = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or_default();
         let parts: Vec<&str> = stem.split('.').collect();
         if parts.len() == 3 {
             if let (Ok(x), Ok(z)) = (parts[1].parse::<i32>(), parts[2].parse::<i32>()) {
@@ -270,7 +273,7 @@ mod tests {
             external: false,
             timestamp: 5,
         };
-        RegionWriter::write(&path, &[big.clone()]).unwrap();
+        RegionWriter::write(&path, std::slice::from_ref(&big)).unwrap();
         assert!(dir.path().join("c.1.2.mcc").exists());
 
         let rf = RegionFile::open(&path).unwrap();
@@ -310,7 +313,7 @@ mod tests {
             return;
         };
         let rf = RegionFile::open(Path::new(&path)).unwrap();
-        assert!(rf.len() > 0, "region had no chunks");
+        assert!(!rf.is_empty(), "region had no chunks");
         let mut checked = 0;
         for raw in rf.chunks() {
             if raw.compression == ChunkCompression::Custom {
