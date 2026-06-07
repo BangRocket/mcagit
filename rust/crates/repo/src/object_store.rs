@@ -4,16 +4,39 @@
 //! was compressed on disk.
 
 use crate::Result;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 pub struct ObjectStore {
     dir: PathBuf,
+    packs: Vec<crate::pack::Packfile>,
 }
 
 impl ObjectStore {
     /// `dir` is the `objects/` directory inside the repo.
     pub fn new(dir: PathBuf) -> Self {
-        Self { dir }
+        let packs = Self::load_packs(&dir);
+        Self { dir, packs }
+    }
+
+    fn load_packs(dir: &Path) -> Vec<crate::pack::Packfile> {
+        let mut packs = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(dir.join("pack")) {
+            for e in entries.flatten() {
+                let p = e.path();
+                if p.extension().and_then(|s| s.to_str()) == Some("idx") {
+                    let pack = p.with_extension("pack");
+                    if let Ok(pf) = crate::pack::Packfile::open(&pack, &p) {
+                        packs.push(pf);
+                    }
+                }
+            }
+        }
+        packs
+    }
+
+    /// The `objects/pack/` directory.
+    pub fn pack_dir(&self) -> PathBuf {
+        self.dir.join("pack")
     }
 
     /// Store `content`, returning its hex blake3 id. Idempotent: storing the
@@ -59,15 +82,23 @@ impl ObjectStore {
 
     /// Read and decompress the object with id `id`.
     pub fn read(&self, id: &str) -> Result<Vec<u8>> {
+        for pack in &self.packs {
+            if let Some(v) = pack.read(id)? {
+                return Ok(v);
+            }
+        }
         let (sub, rest) = id.split_at(2);
         let packed = std::fs::read(self.dir.join(sub).join(rest))?;
         Ok(zstd::decode_all(&packed[..])?)
     }
 
-    /// True if an object with id `id` is present.
+    /// True if an object with id `id` is present (in a pack or loose).
     pub fn exists(&self, id: &str) -> bool {
         if id.len() < 3 {
             return false;
+        }
+        if self.packs.iter().any(|p| p.contains(id)) {
+            return true;
         }
         let (sub, rest) = id.split_at(2);
         self.dir.join(sub).join(rest).exists()

@@ -25,6 +25,8 @@ pub enum RepoError {
 /// Crate result alias.
 pub type Result<T> = std::result::Result<T, RepoError>;
 
+pub mod pack;
+pub use pack::{Packfile, PackWriter};
 pub mod object_store;
 pub use object_store::ObjectStore;
 pub mod manifest;
