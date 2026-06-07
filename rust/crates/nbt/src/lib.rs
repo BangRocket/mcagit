@@ -31,3 +31,5 @@ pub mod write;
 pub use write::write_named;
 pub mod canonical;
 pub use canonical::canonical_bytes;
+pub mod identity;
+pub use identity::identity_key;
