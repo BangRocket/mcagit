@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/nbt", "crates/anvil", "crates/repo", "crates/diff", "crates/cli"]
+members = ["crates/nbt", "crates/anvil", "crates/repo", "crates/diff", "crates/patch", "crates/cli"]
 
 [workspace.package]
 edition = "2021"
@@ -17,6 +17,8 @@ mca-nbt = { path = "crates/nbt" }
 mca-anvil = { path = "crates/anvil" }
 mca-repo = { path = "crates/repo" }
 mca-diff = { path = "crates/diff" }
+mca-patch = { path = "crates/patch" }
+base64 = "0.22"
 flate2 = "1"
 lz4_flex = "0.11"
 tempfile = "3"
