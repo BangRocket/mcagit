@@ -147,3 +147,44 @@ fn diff_extract_apply_roundtrip() {
         .unwrap()
         .success());
 }
+
+#[test]
+fn plumbing_tag_revparse_lstree() {
+    let d = tempfile::tempdir().unwrap();
+    let repo = d.path().join("repo");
+    let world = d.path().join("world");
+    region_world(&world, 5);
+    assert!(mcagit()
+        .args([
+            "init",
+            repo.to_str().unwrap(),
+            "--worktree",
+            world.to_str().unwrap()
+        ])
+        .status()
+        .unwrap()
+        .success());
+    let out = mcagit()
+        .args(["-C", repo.to_str().unwrap(), "commit", "-m", "c1"])
+        .output()
+        .unwrap();
+    let commit = String::from_utf8(out.stdout).unwrap().trim().to_string();
+
+    assert!(mcagit()
+        .args(["-C", repo.to_str().unwrap(), "tag", "v1", &commit])
+        .status()
+        .unwrap()
+        .success());
+
+    let rp = mcagit()
+        .args(["-C", repo.to_str().unwrap(), "rev-parse", "v1"])
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8(rp.stdout).unwrap().trim(), commit);
+
+    let lt = mcagit()
+        .args(["-C", repo.to_str().unwrap(), "ls-tree", "v1"])
+        .output()
+        .unwrap();
+    assert!(String::from_utf8(lt.stdout).unwrap().contains("r.0.0.mca"));
+}

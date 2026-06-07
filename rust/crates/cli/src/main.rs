@@ -49,7 +49,12 @@ enum Cmd {
         oneline: bool,
     },
     /// Diff two worlds (semantic). Exits 1 if they differ.
-    Diff { a: PathBuf, b: PathBuf },
+    Diff {
+        a: PathBuf,
+        b: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
     /// Extract a patch turning world A into world B.
     Extract {
         a: PathBuf,
@@ -90,6 +95,34 @@ enum Cmd {
     Stash {
         #[arg(default_value = "push")]
         action: String,
+    },
+    /// Resolve a revision to its object id.
+    RevParse { rev: String },
+    /// Print an object's raw bytes to stdout.
+    CatFile { id: String },
+    /// List the files/regions in a snapshot.
+    LsTree { rev: String },
+    /// Create, list, or delete tags.
+    Tag {
+        name: Option<String>,
+        rev: Option<String>,
+        #[arg(short = 'd', long)]
+        delete: bool,
+    },
+    /// Move the current branch to <rev> (worktree too with --hard).
+    Reset {
+        rev: String,
+        #[arg(long)]
+        hard: bool,
+    },
+    /// Restore specific files from <rev> into the worktree.
+    Restore { rev: String, paths: Vec<String> },
+    /// Remove untracked files from the worktree (-n preview, -f remove).
+    Clean {
+        #[arg(short = 'n')]
+        dry_run: bool,
+        #[arg(short = 'f')]
+        force: bool,
     },
 }
 
@@ -230,9 +263,34 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             Ok(ExitCode::SUCCESS)
         }
 
-        Cmd::Diff { a, b } => {
+        Cmd::Diff { a, b, json } => {
             let wd = mca_diff::world::diff(a, b)?;
-            print!("{}", mca_diff::render(&wd));
+            if *json {
+                let files: Vec<_> = wd
+                    .files
+                    .iter()
+                    .map(|f| {
+                        serde_json::json!({
+                            "path": f.path,
+                            "status": format!("{:?}", f.status),
+                            "chunks": f.chunks.iter().map(|c| serde_json::json!({
+                                "x": c.x, "z": c.z,
+                                "status": format!("{:?}", c.status),
+                                "changes": c.changes.len(),
+                            })).collect::<Vec<_>>(),
+                            "nodeChanges": f.changes.iter().map(|c| serde_json::json!({
+                                "path": c.path, "kind": format!("{:?}", c.kind),
+                            })).collect::<Vec<_>>(),
+                        })
+                    })
+                    .collect();
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({ "files": files }))?
+                );
+            } else {
+                print!("{}", mca_diff::render(&wd));
+            }
             Ok(if wd.is_empty() {
                 ExitCode::SUCCESS
             } else {
@@ -450,6 +508,133 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                 }
                 other => Err(anyhow!("unknown stash action: {other}")),
             }
+        }
+
+        Cmd::RevParse { rev } => {
+            let repo = open_repo(&cli)?;
+            println!("{}", repo.resolve_ref(rev)?);
+            Ok(ExitCode::SUCCESS)
+        }
+
+        Cmd::CatFile { id } => {
+            use std::io::Write;
+            let repo = open_repo(&cli)?;
+            let resolved = repo.resolve_ref(id).unwrap_or_else(|_| id.clone());
+            let bytes = repo.objects().read(&resolved)?;
+            std::io::stdout().write_all(&bytes)?;
+            Ok(ExitCode::SUCCESS)
+        }
+
+        Cmd::LsTree { rev } => {
+            let repo = open_repo(&cli)?;
+            let commit = repo.resolve_ref(rev)?;
+            let m = repo.read_manifest(&repo.read_commit(&commit)?.tree)?;
+            for (rel, chunks) in &m.regions {
+                println!("region {rel} ({} chunks)", chunks.len());
+            }
+            for rel in m.nbt.keys() {
+                println!("nbt    {rel}");
+            }
+            for rel in m.blobs.keys() {
+                println!("blob   {rel}");
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+
+        Cmd::Tag { name, rev, delete } => {
+            let repo = open_repo(&cli)?;
+            match (name, rev, *delete) {
+                (Some(n), _, true) => {
+                    repo.delete_tag(n)?;
+                    eprintln!("Deleted tag {n}.");
+                }
+                (Some(n), Some(r), false) => {
+                    let c = repo.resolve_ref(r)?;
+                    repo.write_tag(n, &c)?;
+                    eprintln!("tag {n} -> {}", &c[..10]);
+                }
+                (Some(n), None, false) => {
+                    let c = repo.head_commit().ok_or_else(|| anyhow!("no HEAD"))?;
+                    repo.write_tag(n, &c)?;
+                    eprintln!("tag {n} -> {}", &c[..10]);
+                }
+                (None, _, _) => {
+                    for t in repo.tags() {
+                        println!("{t}");
+                    }
+                }
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+
+        Cmd::Reset { rev, hard } => {
+            let repo = open_repo(&cli)?;
+            let target = repo.resolve_ref(rev)?;
+            match repo.current_branch() {
+                Some(b) => repo.write_branch(&b, &target)?,
+                None => repo.set_head_detached(&target)?,
+            }
+            if *hard {
+                if let Some(wt) = repo.worktree() {
+                    let m = repo.read_manifest(&repo.read_commit(&target)?.tree)?;
+                    mca_repo::checkout(&repo, &m, std::path::Path::new(&wt), true)?;
+                }
+            }
+            eprintln!("reset to {}", &target[..10]);
+            Ok(ExitCode::SUCCESS)
+        }
+
+        Cmd::Restore { rev, paths } => {
+            let repo = open_repo(&cli)?;
+            let wt = repo
+                .worktree()
+                .ok_or_else(|| anyhow!("no worktree bound"))?;
+            let commit = repo.resolve_ref(rev)?;
+            let full = repo.read_manifest(&repo.read_commit(&commit)?.tree)?;
+            let mut sub = mca_repo::Manifest::default();
+            for p in paths {
+                if let Some(c) = full.regions.get(p) {
+                    sub.regions.insert(p.clone(), c.clone());
+                }
+                if let Some(h) = full.nbt.get(p) {
+                    sub.nbt.insert(p.clone(), h.clone());
+                }
+                if let Some(h) = full.blobs.get(p) {
+                    sub.blobs.insert(p.clone(), h.clone());
+                }
+            }
+            mca_repo::checkout(&repo, &sub, std::path::Path::new(&wt), false)?;
+            eprintln!("restored {} path(s) from {}", paths.len(), &commit[..10]);
+            Ok(ExitCode::SUCCESS)
+        }
+
+        Cmd::Clean { dry_run, force } => {
+            let repo = open_repo(&cli)?;
+            let wt = repo
+                .worktree()
+                .ok_or_else(|| anyhow!("no worktree bound"))?;
+            let head = repo
+                .head_commit()
+                .ok_or_else(|| anyhow!("no commits yet"))?;
+            let changes = mca_repo::status(&repo, std::path::Path::new(&wt), &head)?;
+            let untracked: Vec<&String> = changes
+                .iter()
+                .filter(|c| c.kind == ChangeKind::Added)
+                .map(|c| &c.path)
+                .collect();
+            if untracked.is_empty() {
+                eprintln!("nothing to clean");
+                return Ok(ExitCode::SUCCESS);
+            }
+            for p in &untracked {
+                if *force && !*dry_run {
+                    let _ = std::fs::remove_file(std::path::Path::new(&wt).join(p));
+                    println!("removed {p}");
+                } else {
+                    println!("would remove {p}");
+                }
+            }
+            Ok(ExitCode::SUCCESS)
         }
     }
 }

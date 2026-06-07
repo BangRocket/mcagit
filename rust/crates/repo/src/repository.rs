@@ -143,6 +143,44 @@ impl Repository {
         out
     }
 
+    fn tag_path(&self, name: &str) -> PathBuf {
+        self.dir.join("refs").join("tags").join(name)
+    }
+
+    pub fn write_tag(&self, name: &str, commit: &str) -> Result<()> {
+        let p = self.tag_path(name);
+        if let Some(parent) = p.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(p, format!("{commit}\n"))?;
+        Ok(())
+    }
+
+    pub fn read_tag(&self, name: &str) -> Option<String> {
+        std::fs::read_to_string(self.tag_path(name))
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    }
+
+    pub fn delete_tag(&self, name: &str) -> Result<()> {
+        let _ = std::fs::remove_file(self.tag_path(name));
+        Ok(())
+    }
+
+    pub fn tags(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        if let Ok(entries) = std::fs::read_dir(self.dir.join("refs").join("tags")) {
+            for e in entries.flatten() {
+                if let Ok(name) = e.file_name().into_string() {
+                    out.push(name);
+                }
+            }
+        }
+        out.sort();
+        out
+    }
+
     pub fn current_branch(&self) -> Option<String> {
         let head = std::fs::read_to_string(self.head_path()).ok()?;
         head.trim()
@@ -247,6 +285,9 @@ impl Repository {
                 .ok_or_else(|| RepoError::BadRef("HEAD".into()));
         }
         if let Some(h) = self.read_branch(base) {
+            return Ok(h);
+        }
+        if let Some(h) = self.read_tag(base) {
             return Ok(h);
         }
         if base.len() >= 4 && base.chars().all(|c| c.is_ascii_hexdigit()) {

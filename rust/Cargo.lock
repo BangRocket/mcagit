@@ -465,6 +465,7 @@ dependencies = [
  "mca-nbt",
  "mca-patch",
  "mca-repo",
+ "serde_json",
  "tempfile",
 ]
 
