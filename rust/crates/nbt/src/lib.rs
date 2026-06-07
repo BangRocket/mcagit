@@ -27,3 +27,5 @@ pub mod value;
 pub use value::{tag_id, Compound, NbtValue};
 pub mod read;
 pub use read::read;
+pub mod write;
+pub use write::write_named;
