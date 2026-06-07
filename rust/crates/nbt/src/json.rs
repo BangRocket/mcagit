@@ -28,7 +28,10 @@ pub fn to_json(v: &NbtValue) -> J {
             }
             obj("compound", J::Object(o))
         }
-        NbtValue::IntArray(a) => obj("intArray", J::Array(a.iter().map(|x| J::from(*x)).collect())),
+        NbtValue::IntArray(a) => obj(
+            "intArray",
+            J::Array(a.iter().map(|x| J::from(*x)).collect()),
+        ),
         NbtValue::LongArray(a) => obj(
             "longArray",
             J::Array(a.iter().map(|x| J::from(x.to_string())).collect()),

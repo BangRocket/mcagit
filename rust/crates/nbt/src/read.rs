@@ -137,6 +137,9 @@ mod tests {
 
     #[test]
     fn truncated_input_errors() {
-        assert_eq!(read(&[10, 0, 4, b'r']).unwrap_err(), NbtError::UnexpectedEof);
+        assert_eq!(
+            read(&[10, 0, 4, b'r']).unwrap_err(),
+            NbtError::UnexpectedEof
+        );
     }
 }

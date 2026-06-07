@@ -77,8 +77,11 @@ mod tests {
             Some("slot:2")
         );
         assert_eq!(
-            identity_key(&compound(&[("id", NbtValue::String("minecraft:stone".into()))]))
-                .as_deref(),
+            identity_key(&compound(&[(
+                "id",
+                NbtValue::String("minecraft:stone".into())
+            )]))
+            .as_deref(),
             Some("id:minecraft:stone")
         );
     }

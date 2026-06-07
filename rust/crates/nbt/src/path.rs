@@ -187,7 +187,10 @@ mod tests {
 
         let mut root = Compound::new();
         root.insert("Data".into(), NbtValue::Compound(data));
-        root.insert("Entities".into(), NbtValue::List(vec![NbtValue::Compound(ent)]));
+        root.insert(
+            "Entities".into(),
+            NbtValue::List(vec![NbtValue::Compound(ent)]),
+        );
         NbtValue::Compound(root)
     }
 
