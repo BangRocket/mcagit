@@ -9,6 +9,8 @@ pub enum AnvilError {
     Io(#[from] std::io::Error),
     #[error("nbt error: {0}")]
     Nbt(#[from] mca_nbt::NbtError),
+    #[error("lz4 frame error: {0}")]
+    Lz4(#[from] lz4_flex::frame::Error),
     #[error("unsupported chunk compression: {0}")]
     UnsupportedCompression(u8),
     #[error("decompression exceeded {0} bytes (bomb?)")]
@@ -19,3 +21,6 @@ pub enum AnvilError {
 
 /// Crate result alias.
 pub type Result<T> = std::result::Result<T, AnvilError>;
+
+pub mod compression;
+pub use compression::ChunkCompression;
