@@ -20,30 +20,47 @@ pub fn checkout(repo: &Repository, manifest: &Manifest, out_dir: &Path, prune: b
 
     // Regions, in parallel (the .NET serial bottleneck).
     let regions: Vec<(&String, &BTreeMap<String, String>)> = manifest.regions.iter().collect();
-    regions
+
+    // Flatten every chunk across every region into one job list, so a single
+    // rayon pass splits the work perfectly across cores (no nested/BTreeMap
+    // iteration). The stored object IS the chunk's canonical NBT bytes, so we
+    // re-compress it directly — no NBT parse/reserialize round-trip.
+    let jobs: Vec<(usize, &String, &String)> = regions
+        .iter()
+        .enumerate()
+        .flat_map(|(ri, (_rel, chunks))| chunks.iter().map(move |(pos, id)| (ri, pos, id)))
+        .collect();
+    let built: Vec<(usize, RawChunk)> = jobs
         .par_iter()
-        .try_for_each(|&(rel, chunks)| -> Result<()> {
-            let path = confine(out_dir, rel)?;
+        .map(|&(ri, pos, id)| {
+            let canon = store.read(id)?;
+            let payload = mca_anvil::compression::compress(ChunkCompression::ZLib, &canon)?;
+            Ok::<(usize, RawChunk), RepoError>((
+                ri,
+                RawChunk {
+                    pos: parse_pos(pos)?,
+                    compression: ChunkCompression::ZLib,
+                    payload,
+                    external: false,
+                    timestamp: 0,
+                },
+            ))
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    // Group by region, then write region files in parallel.
+    let mut by_region: Vec<Vec<RawChunk>> = (0..regions.len()).map(|_| Vec::new()).collect();
+    for (ri, rc) in built {
+        by_region[ri].push(rc);
+    }
+    by_region
+        .into_par_iter()
+        .enumerate()
+        .try_for_each(|(ri, raws)| -> Result<()> {
+            let path = confine(out_dir, regions[ri].0)?;
             if let Some(parent) = path.parent() {
                 std::fs::create_dir_all(parent)?;
             }
-            // Chunk work runs in parallel too (not just region-level). The stored
-            // object IS the chunk's canonical NBT bytes, so we re-compress it
-            // directly at a fast zlib level — no NBT parse/reserialize round-trip.
-            let raws: Vec<RawChunk> = chunks
-                .par_iter()
-                .map(|(pos_key, id)| {
-                    let canon = store.read(id)?;
-                    let payload = mca_anvil::compression::compress(ChunkCompression::ZLib, &canon)?;
-                    Ok::<RawChunk, RepoError>(RawChunk {
-                        pos: parse_pos(pos_key)?,
-                        compression: ChunkCompression::ZLib,
-                        payload,
-                        external: false,
-                        timestamp: 0,
-                    })
-                })
-                .collect::<Result<Vec<_>>>()?;
             RegionWriter::write(&path, &raws)?;
             Ok(())
         })?;
