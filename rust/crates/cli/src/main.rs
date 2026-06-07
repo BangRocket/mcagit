@@ -80,6 +80,17 @@ enum Cmd {
     Fsck,
     /// Consolidate objects into one pack and prune unreachable.
     Gc,
+    /// Create a new commit that undoes <commit>.
+    Revert { commit: String },
+    /// Apply <commit>'s change onto HEAD.
+    CherryPick { commit: String },
+    /// Replay current commits onto <upstream>.
+    Rebase { upstream: String },
+    /// Shelve/restore the worktree: stash [push|pop|list].
+    Stash {
+        #[arg(default_value = "push")]
+        action: String,
+    },
 }
 
 fn main() -> ExitCode {
@@ -351,6 +362,114 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             eprintln!("gc: kept {} objects, pruned {}", r.kept, r.pruned);
             Ok(ExitCode::SUCCESS)
         }
+
+        Cmd::Revert { commit } => {
+            let repo = open_repo(&cli)?;
+            let head = repo.head_commit().ok_or_else(|| anyhow!("no HEAD"))?;
+            let target = repo.resolve_ref(commit)?;
+            match mca_repo::revert(&repo, &head, &target, &author(&repo), &now_secs())? {
+                mca_repo::ReplayOutcome::Done(c) => {
+                    advance(&repo, &c)?;
+                    eprintln!("Reverted -> {}", &c[..10]);
+                    Ok(ExitCode::SUCCESS)
+                }
+                mca_repo::ReplayOutcome::Conflicts(x) => {
+                    print_conflicts(&x);
+                    Ok(ExitCode::from(1))
+                }
+            }
+        }
+
+        Cmd::CherryPick { commit } => {
+            let repo = open_repo(&cli)?;
+            let head = repo.head_commit().ok_or_else(|| anyhow!("no HEAD"))?;
+            let pick = repo.resolve_ref(commit)?;
+            match mca_repo::cherry_pick(&repo, &head, &pick, &now_secs())? {
+                mca_repo::ReplayOutcome::Done(c) => {
+                    advance(&repo, &c)?;
+                    eprintln!("Cherry-picked -> {}", &c[..10]);
+                    Ok(ExitCode::SUCCESS)
+                }
+                mca_repo::ReplayOutcome::Conflicts(x) => {
+                    print_conflicts(&x);
+                    Ok(ExitCode::from(1))
+                }
+            }
+        }
+
+        Cmd::Rebase { upstream } => {
+            let repo = open_repo(&cli)?;
+            let head = repo.head_commit().ok_or_else(|| anyhow!("no HEAD"))?;
+            let up = repo.resolve_ref(upstream)?;
+            match mca_repo::rebase(&repo, &up, &head, &now_secs())? {
+                mca_repo::ReplayOutcome::Done(c) => {
+                    advance(&repo, &c)?;
+                    eprintln!("Rebased -> {}", &c[..10]);
+                    Ok(ExitCode::SUCCESS)
+                }
+                mca_repo::ReplayOutcome::Conflicts(x) => {
+                    print_conflicts(&x);
+                    Ok(ExitCode::from(1))
+                }
+            }
+        }
+
+        Cmd::Stash { action } => {
+            let repo = open_repo(&cli)?;
+            match action.as_str() {
+                "list" => {
+                    for s in mca_repo::stash::list(&repo) {
+                        println!("{}", &s[..s.len().min(10)]);
+                    }
+                    Ok(ExitCode::SUCCESS)
+                }
+                "pop" => {
+                    let wt = repo
+                        .worktree()
+                        .ok_or_else(|| anyhow!("no worktree bound"))?;
+                    match mca_repo::stash::pop(&repo, std::path::Path::new(&wt))? {
+                        Some(s) => eprintln!("popped {}", &s[..10]),
+                        None => eprintln!("stash empty"),
+                    }
+                    Ok(ExitCode::SUCCESS)
+                }
+                "push" => {
+                    let wt = repo
+                        .worktree()
+                        .ok_or_else(|| anyhow!("no worktree bound"))?;
+                    match mca_repo::stash::push(
+                        &repo,
+                        std::path::Path::new(&wt),
+                        &author(&repo),
+                        &now_secs(),
+                    )? {
+                        Some(s) => eprintln!("stashed {}", &s[..10]),
+                        None => eprintln!("nothing to stash"),
+                    }
+                    Ok(ExitCode::SUCCESS)
+                }
+                other => Err(anyhow!("unknown stash action: {other}")),
+            }
+        }
+    }
+}
+
+fn advance(repo: &Repository, target: &str) -> anyhow::Result<()> {
+    match repo.current_branch() {
+        Some(b) => repo.write_branch(&b, target)?,
+        None => repo.set_head_detached(target)?,
+    }
+    if let Some(wt) = repo.worktree() {
+        let m = repo.read_manifest(&repo.read_commit(target)?.tree)?;
+        mca_repo::checkout(repo, &m, std::path::Path::new(&wt), true)?;
+    }
+    Ok(())
+}
+
+fn print_conflicts(paths: &[String]) {
+    eprintln!("CONFLICT ({} paths):", paths.len());
+    for p in paths {
+        eprintln!("  {p}");
     }
 }
 

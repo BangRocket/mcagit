@@ -44,3 +44,6 @@ pub mod gc;
 pub use gc::{gc, GcReport};
 pub mod merge;
 pub use merge::{merge, merge_base, MergeOutcome};
+pub mod replay;
+pub use replay::{cherry_pick, rebase, revert, ReplayOutcome};
+pub mod stash;

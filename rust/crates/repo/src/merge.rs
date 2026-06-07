@@ -90,10 +90,31 @@ pub fn merge(
     let mo = repo.read_manifest(&repo.read_commit(ours)?.tree)?;
     let mt = repo.read_manifest(&repo.read_commit(theirs)?.tree)?;
 
+    let (merged, conflicts) = three_way_manifest(&mb, &mo, &mt);
+    if !conflicts.is_empty() {
+        return Ok(MergeOutcome::Conflicts(conflicts));
+    }
+    let tree = repo.write_manifest(&merged)?;
+    let commit = repo.create_commit(
+        &tree,
+        vec![ours.to_string(), theirs.to_string()],
+        message,
+        author,
+        time,
+    )?;
+    Ok(MergeOutcome::Merged(commit))
+}
+
+/// Combine three manifests by 3-way per chunk/file. Returns the merged manifest
+/// and the list of conflicting paths. Shared by merge, cherry-pick, and revert.
+pub(crate) fn three_way_manifest(
+    mb: &Manifest,
+    mo: &Manifest,
+    mt: &Manifest,
+) -> (Manifest, Vec<String>) {
     let mut merged = Manifest::default();
     let mut conflicts = Vec::new();
 
-    // Regions: 3-way per chunk position.
     let region_rels: BTreeSet<&String> = mb
         .regions
         .keys()
@@ -138,18 +159,7 @@ pub fn merge(
         .collect();
     merged.empty_dirs = dirs.into_iter().collect();
 
-    if !conflicts.is_empty() {
-        return Ok(MergeOutcome::Conflicts(conflicts));
-    }
-    let tree = repo.write_manifest(&merged)?;
-    let commit = repo.create_commit(
-        &tree,
-        vec![ours.to_string(), theirs.to_string()],
-        message,
-        author,
-        time,
-    )?;
-    Ok(MergeOutcome::Merged(commit))
+    (merged, conflicts)
 }
 
 /// 3-way of one entry: `Ok(Some)` = keep id, `Ok(None)` = deleted, `Err` = conflict.
