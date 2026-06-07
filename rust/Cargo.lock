@@ -396,6 +396,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "mca-diff"
+version = "0.1.0"
+dependencies = [
+ "mca-anvil",
+ "mca-nbt",
+ "rayon",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "mca-nbt"
 version = "0.1.0"
 dependencies = [
