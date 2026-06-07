@@ -53,4 +53,36 @@ public class PackfileTests
         Assert.NotNull(id);
         AssertPackRoundTrips(dir, id!, byHash);
     }
+
+    [Fact]
+    public void WriteParallel_RoundTripsEveryObject()
+    {
+        (List<string> ordered, Dictionary<string, byte[]> byHash) = MakeObjects(500);
+        string dir = TestAnvil.TempDir("pf-par");
+        string? id = Packfile.WriteParallel(dir, ordered, h => byHash[h], 4, h => byHash[h].Length, null);
+        Assert.NotNull(id);
+        AssertPackRoundTrips(dir, id!, byHash);
+    }
+
+    [Fact]
+    public void WriteParallel_SamePackId_AndValidPack_AsSerial()
+    {
+        (List<string> ordered, Dictionary<string, byte[]> byHash) = MakeObjects(500);
+        string ds = TestAnvil.TempDir("pf-s");
+        string dp = TestAnvil.TempDir("pf-p");
+        string? serial = Packfile.Write(ds, ordered, h => byHash[h]);
+        string? parallel = Packfile.WriteParallel(dp, ordered, h => byHash[h], 4, h => byHash[h].Length, null);
+        Assert.Equal(serial, parallel);              // pack id hashes the object SET, not the byte layout
+        AssertPackRoundTrips(dp, parallel!, byHash); // and the parallel pack reconstructs every object
+    }
+
+    [Fact]
+    public void WriteParallel_FewerObjectsThanThreads_FallsBackAndRoundTrips()
+    {
+        (List<string> ordered, Dictionary<string, byte[]> byHash) = MakeObjects(3);
+        string dir = TestAnvil.TempDir("pf-few");
+        string? id = Packfile.WriteParallel(dir, ordered, h => byHash[h], 8, h => byHash[h].Length, null);
+        Assert.NotNull(id);
+        AssertPackRoundTrips(dir, id!, byHash);
+    }
 }
