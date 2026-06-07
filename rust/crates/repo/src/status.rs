@@ -38,7 +38,10 @@ fn flatten(m: &Manifest) -> BTreeMap<String, String> {
             s.push_str(v);
             s.push(';');
         }
-        out.insert(rel.clone(), format!("r:{}", blake3::hash(s.as_bytes()).to_hex()));
+        out.insert(
+            rel.clone(),
+            format!("r:{}", blake3::hash(s.as_bytes()).to_hex()),
+        );
     }
     for (rel, h) in &m.nbt {
         out.insert(rel.clone(), format!("n:{h}"));

@@ -33,13 +33,20 @@ struct Entry {
     kind: Kind,
 }
 
-fn build(world_dir: &Path, store: Option<&ObjectStore>, repo_dir: Option<&Path>) -> Result<Manifest> {
+fn build(
+    world_dir: &Path,
+    store: Option<&ObjectStore>,
+    repo_dir: Option<&Path>,
+) -> Result<Manifest> {
     let root = std::fs::canonicalize(world_dir).unwrap_or_else(|_| world_dir.to_path_buf());
     let repo_prefix = repo_dir.and_then(|d| std::fs::canonicalize(d).ok());
 
     let mut files: Vec<PathBuf> = Vec::new();
     let mut dirs: Vec<PathBuf> = Vec::new();
-    for entry in walkdir::WalkDir::new(&root).into_iter().filter_map(|e| e.ok()) {
+    for entry in walkdir::WalkDir::new(&root)
+        .into_iter()
+        .filter_map(|e| e.ok())
+    {
         let p = entry.path();
         if let Some(rp) = &repo_prefix {
             if p.starts_with(rp) {
@@ -143,7 +150,10 @@ fn classify(path: &Path, root: &Path, store: Option<&ObjectStore>) -> Result<Ent
 
 /// Parse a region into per-chunk canonical objects. `Ok(None)` means "not a
 /// decodable region" → caller stores it as a raw blob.
-fn try_chunks(path: &Path, store: Option<&ObjectStore>) -> Result<Option<BTreeMap<String, String>>> {
+fn try_chunks(
+    path: &Path,
+    store: Option<&ObjectStore>,
+) -> Result<Option<BTreeMap<String, String>>> {
     let region = match RegionFile::open(path) {
         Ok(r) => r,
         Err(_) => return Ok(None),
@@ -178,8 +188,7 @@ mod tests {
         std::fs::create_dir_all(world.join("region")).unwrap();
         let mut c = Compound::new();
         c.insert("Status".into(), NbtValue::String("full".into()));
-        let payload =
-            codec::encode(&NbtValue::Compound(c), ChunkCompression::ZLib).unwrap();
+        let payload = codec::encode(&NbtValue::Compound(c), ChunkCompression::ZLib).unwrap();
         let chunk = RawChunk {
             pos: ChunkPos::new(0, 0),
             compression: ChunkCompression::ZLib,

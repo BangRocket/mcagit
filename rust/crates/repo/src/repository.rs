@@ -81,7 +81,11 @@ impl Repository {
         let mut lines: Vec<String> = std::fs::read_to_string(self.config_path())
             .unwrap_or_default()
             .lines()
-            .filter(|l| l.split_once('=').map(|(k, _)| k.trim() != key).unwrap_or(true))
+            .filter(|l| {
+                l.split_once('=')
+                    .map(|(k, _)| k.trim() != key)
+                    .unwrap_or(true)
+            })
             .map(|l| l.to_string())
             .collect();
         lines.push(format!("{key} = {value}"));
@@ -307,7 +311,9 @@ mod tests {
         let repo = Repository::init(d.path()).unwrap();
         let tree = repo.write_manifest(&Manifest::default()).unwrap();
 
-        let c1 = repo.create_commit(&tree, vec![], "first", "me", "t1").unwrap();
+        let c1 = repo
+            .create_commit(&tree, vec![], "first", "me", "t1")
+            .unwrap();
         repo.write_branch("main", &c1).unwrap();
         assert_eq!(repo.head_commit().as_deref(), Some(c1.as_str()));
         assert_eq!(repo.current_branch().as_deref(), Some("main"));
