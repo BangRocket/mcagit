@@ -19,13 +19,14 @@ mca-repo = { path = "crates/repo" }
 mca-diff = { path = "crates/diff" }
 mca-patch = { path = "crates/patch" }
 base64 = "0.22"
-flate2 = "1"
+flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
 lz4_flex = "0.11"
 tempfile = "3"
 blake3 = "1"
 zstd = "0.13"
 rayon = "1"
 memmap2 = "0.9"
+arc-swap = "1"
 walkdir = "2"
 clap = { version = "4", features = ["derive"] }
 anyhow = "1"

@@ -27,19 +27,23 @@ pub fn checkout(repo: &Repository, manifest: &Manifest, out_dir: &Path, prune: b
             if let Some(parent) = path.parent() {
                 std::fs::create_dir_all(parent)?;
             }
-            let mut raws = Vec::with_capacity(chunks.len());
-            for (pos_key, id) in chunks {
-                let canon = store.read(id)?;
-                let (_n, value) = mca_nbt::read(&canon)?;
-                let payload = codec::encode(&value, ChunkCompression::ZLib)?;
-                raws.push(RawChunk {
-                    pos: parse_pos(pos_key)?,
-                    compression: ChunkCompression::ZLib,
-                    payload,
-                    external: false,
-                    timestamp: 0,
-                });
-            }
+            // Chunk work runs in parallel too (not just region-level). The stored
+            // object IS the chunk's canonical NBT bytes, so we re-compress it
+            // directly at a fast zlib level — no NBT parse/reserialize round-trip.
+            let raws: Vec<RawChunk> = chunks
+                .par_iter()
+                .map(|(pos_key, id)| {
+                    let canon = store.read(id)?;
+                    let payload = mca_anvil::compression::compress(ChunkCompression::ZLib, &canon)?;
+                    Ok::<RawChunk, RepoError>(RawChunk {
+                        pos: parse_pos(pos_key)?,
+                        compression: ChunkCompression::ZLib,
+                        payload,
+                        external: false,
+                        timestamp: 0,
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
             RegionWriter::write(&path, &raws)?;
             Ok(())
         })?;

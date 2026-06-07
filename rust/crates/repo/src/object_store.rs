@@ -4,24 +4,28 @@
 //! was compressed on disk.
 
 use crate::Result;
+use arc_swap::ArcSwap;
 use std::path::{Path, PathBuf};
-use std::sync::RwLock;
+use std::sync::Arc;
 
 pub struct ObjectStore {
     dir: PathBuf,
-    packs: RwLock<Vec<crate::pack::Packfile>>,
+    // Lock-free reads: checkout/diff read objects hundreds of thousands of times
+    // across threads; an RwLock here ping-pongs a cache line and serializes. An
+    // atomic Arc load has no such contention.
+    packs: ArcSwap<Vec<crate::pack::Packfile>>,
 }
 
 impl ObjectStore {
     /// `dir` is the `objects/` directory inside the repo.
     pub fn new(dir: PathBuf) -> Self {
-        let packs = RwLock::new(Self::load_packs(&dir));
+        let packs = ArcSwap::from_pointee(Self::load_packs(&dir));
         Self { dir, packs }
     }
 
     /// Re-scan `objects/pack/` (e.g. after writing a new pack mid-process).
     pub fn reload_packs(&self) {
-        *self.packs.write().unwrap() = Self::load_packs(&self.dir);
+        self.packs.store(Arc::new(Self::load_packs(&self.dir)));
     }
 
     fn load_packs(dir: &Path) -> Vec<crate::pack::Packfile> {
@@ -68,7 +72,7 @@ impl ObjectStore {
                 }
             }
         }
-        for pack in self.packs.read().unwrap().iter() {
+        for pack in self.packs.load().iter() {
             for id in pack.ids() {
                 ids.insert(id.clone());
             }
@@ -120,7 +124,7 @@ impl ObjectStore {
     /// Read and decompress the object with id `id`.
     pub fn read(&self, id: &str) -> Result<Vec<u8>> {
         {
-            let packs = self.packs.read().unwrap();
+            let packs = self.packs.load();
             for pack in packs.iter() {
                 if let Some(v) = pack.read(id)? {
                     return Ok(v);
@@ -137,7 +141,7 @@ impl ObjectStore {
         if id.len() < 3 {
             return false;
         }
-        if self.packs.read().unwrap().iter().any(|p| p.contains(id)) {
+        if self.packs.load().iter().any(|p| p.contains(id)) {
             return true;
         }
         let (sub, rest) = id.split_at(2);

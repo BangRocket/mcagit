@@ -75,17 +75,26 @@ pub fn decompress(scheme: ChunkCompression, payload: &[u8]) -> Result<Vec<u8>> {
     }
 }
 
-/// Compress uncompressed NBT bytes into a chunk payload under `scheme`.
+/// Compress uncompressed NBT bytes into a chunk payload under `scheme`
+/// (default zlib level 6).
 pub fn compress(scheme: ChunkCompression, raw: &[u8]) -> Result<Vec<u8>> {
+    compress_level(scheme, raw, 6)
+}
+
+/// Like [`compress`] but with an explicit zlib/gzip `level` (1 = fast … 9 =
+/// best). Checkout uses a fast level since its output is a working copy that
+/// Minecraft reads, not an archive. LZ4 ignores `level`.
+pub fn compress_level(scheme: ChunkCompression, raw: &[u8], level: u32) -> Result<Vec<u8>> {
+    let comp = Compression::new(level);
     match scheme {
         ChunkCompression::None => Ok(raw.to_vec()),
         ChunkCompression::ZLib => {
-            let mut e = ZlibEncoder::new(Vec::new(), Compression::default());
+            let mut e = ZlibEncoder::new(Vec::new(), comp);
             e.write_all(raw)?;
             Ok(e.finish()?)
         }
         ChunkCompression::GZip => {
-            let mut e = GzEncoder::new(Vec::new(), Compression::default());
+            let mut e = GzEncoder::new(Vec::new(), comp);
             e.write_all(raw)?;
             Ok(e.finish()?)
         }
