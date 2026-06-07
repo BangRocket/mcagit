@@ -1,0 +1,11 @@
+[package]
+name = "mca-nbt"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+indexmap = { workspace = true }
+cesu8 = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
