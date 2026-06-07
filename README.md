@@ -360,8 +360,13 @@ mcagit push  [<remote>] --all                # push every branch
 mcagit ls-remote [<remote>]                  # list a remote's refs
 mcagit verify-remote [<remote>] [--deep]     # check offsite integrity (--deep: hash every object)
 mcagit reflog                                # HEAD movement history
-mcagit gc                                    # repack reachable objects + prune the rest
+mcagit gc [--threads N] [--prune-only]       # repack reachable objects + prune the rest
 ```
+
+**`gc`** delta-packs reachable objects across all CPU cores by default and prints live
+progress on a terminal (silent when piped or when `NO_PROGRESS` is set). `--threads N`
+caps parallelism (`--threads 1` forces the serial writer); `--prune-only` deletes
+unreachable loose objects without repacking.
 
 **`--depth N`** makes a *shallow* clone — only the last N commits, with their worlds
 fully intact. History is grafted at the boundary (older commits look like roots), so
