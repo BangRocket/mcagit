@@ -21,3 +21,5 @@ pub enum NbtError {
 
 /// Crate result alias.
 pub type Result<T> = std::result::Result<T, NbtError>;
+
+pub mod mutf8;
