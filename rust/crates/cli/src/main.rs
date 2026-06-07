@@ -68,6 +68,18 @@ enum Cmd {
         #[arg(long)]
         force: bool,
     },
+    /// List, create, or delete branches.
+    Branch {
+        name: Option<String>,
+        #[arg(short = 'd', long)]
+        delete: bool,
+    },
+    /// Merge a ref into the current branch (3-way).
+    Merge { branch: String },
+    /// Verify object integrity + reachability.
+    Fsck,
+    /// Consolidate objects into one pack and prune unreachable.
+    Gc,
 }
 
 fn main() -> ExitCode {
@@ -247,6 +259,97 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                 }
                 Ok(ExitCode::from(1))
             }
+        }
+
+        Cmd::Branch { name, delete } => {
+            let repo = open_repo(&cli)?;
+            match (name, *delete) {
+                (Some(n), true) => {
+                    repo.delete_branch(n)?;
+                    eprintln!("Deleted branch {n}.");
+                }
+                (Some(n), false) => {
+                    let head = repo
+                        .head_commit()
+                        .ok_or_else(|| anyhow!("no commit to branch from"))?;
+                    repo.write_branch(n, &head)?;
+                    eprintln!("Created branch {n} at {}", &head[..10]);
+                }
+                (None, _) => {
+                    let cur = repo.current_branch();
+                    for b in repo.branches() {
+                        let mark = if Some(&b) == cur.as_ref() { "*" } else { " " };
+                        println!("{mark} {b}");
+                    }
+                }
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+
+        Cmd::Merge { branch } => {
+            let repo = open_repo(&cli)?;
+            let ours = repo
+                .head_commit()
+                .ok_or_else(|| anyhow!("no HEAD to merge into"))?;
+            let theirs = repo.resolve_ref(branch)?;
+            let outcome = mca_repo::merge(
+                &repo,
+                &ours,
+                &theirs,
+                &format!("Merge {branch}"),
+                &author(&repo),
+                &now_secs(),
+            )?;
+            use mca_repo::MergeOutcome::*;
+            match outcome {
+                UpToDate => {
+                    eprintln!("Already up to date.");
+                    Ok(ExitCode::SUCCESS)
+                }
+                FastForward(t) | Merged(t) => {
+                    match repo.current_branch() {
+                        Some(b) => repo.write_branch(&b, &t)?,
+                        None => repo.set_head_detached(&t)?,
+                    }
+                    if let Some(wt) = repo.worktree() {
+                        let m = repo.read_manifest(&repo.read_commit(&t)?.tree)?;
+                        mca_repo::checkout(&repo, &m, std::path::Path::new(&wt), true)?;
+                    }
+                    eprintln!("Merge complete -> {}", &t[..10]);
+                    Ok(ExitCode::SUCCESS)
+                }
+                Conflicts(c) => {
+                    eprintln!("CONFLICT ({} paths):", c.len());
+                    for p in &c {
+                        eprintln!("  {p}");
+                    }
+                    Ok(ExitCode::from(1))
+                }
+            }
+        }
+
+        Cmd::Fsck => {
+            let repo = open_repo(&cli)?;
+            let r = mca_repo::fsck(&repo)?;
+            eprintln!(
+                "checked {} objects — {} corrupt, {} missing, {} unreachable",
+                r.checked,
+                r.corrupt.len(),
+                r.missing.len(),
+                r.unreachable
+            );
+            Ok(if r.is_clean() {
+                ExitCode::SUCCESS
+            } else {
+                ExitCode::from(1)
+            })
+        }
+
+        Cmd::Gc => {
+            let repo = open_repo(&cli)?;
+            let r = mca_repo::gc(&repo)?;
+            eprintln!("gc: kept {} objects, pruned {}", r.kept, r.pruned);
+            Ok(ExitCode::SUCCESS)
         }
     }
 }

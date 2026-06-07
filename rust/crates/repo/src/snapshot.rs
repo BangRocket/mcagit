@@ -174,10 +174,7 @@ fn classify(path: &Path, root: &Path, sink: Sink) -> Result<Entry> {
 
 /// Parse a region into per-chunk canonical objects. `Ok(None)` means "not a
 /// decodable region" → caller stores it as a raw blob.
-fn try_chunks(
-    path: &Path,
-    sink: Sink,
-) -> Result<Option<BTreeMap<String, String>>> {
+fn try_chunks(path: &Path, sink: Sink) -> Result<Option<BTreeMap<String, String>>> {
     let region = match RegionFile::open(path) {
         Ok(r) => r,
         Err(_) => return Ok(None),

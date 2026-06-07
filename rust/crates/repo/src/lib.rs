@@ -26,7 +26,7 @@ pub enum RepoError {
 pub type Result<T> = std::result::Result<T, RepoError>;
 
 pub mod pack;
-pub use pack::{Packfile, PackWriter};
+pub use pack::{PackWriter, Packfile};
 pub mod object_store;
 pub use object_store::ObjectStore;
 pub mod manifest;

@@ -105,8 +105,7 @@ pub fn merge(
         let bcm = mb.regions.get(rel).unwrap_or(&empty);
         let ocm = mo.regions.get(rel).unwrap_or(&empty);
         let tcm = mt.regions.get(rel).unwrap_or(&empty);
-        let positions: BTreeSet<&String> =
-            bcm.keys().chain(ocm.keys()).chain(tcm.keys()).collect();
+        let positions: BTreeSet<&String> = bcm.keys().chain(ocm.keys()).chain(tcm.keys()).collect();
         let mut merged_chunks = BTreeMap::new();
         for pos in positions {
             match three_way(bcm.get(pos), ocm.get(pos), tcm.get(pos)) {
@@ -123,7 +122,13 @@ pub fn merge(
     }
 
     merge_map(&mb.nbt, &mo.nbt, &mt.nbt, &mut merged.nbt, &mut conflicts);
-    merge_map(&mb.blobs, &mo.blobs, &mt.blobs, &mut merged.blobs, &mut conflicts);
+    merge_map(
+        &mb.blobs,
+        &mo.blobs,
+        &mt.blobs,
+        &mut merged.blobs,
+        &mut conflicts,
+    );
 
     let dirs: BTreeSet<String> = mo
         .empty_dirs
@@ -171,7 +176,11 @@ fn merge_map(
     out: &mut BTreeMap<String, String>,
     conflicts: &mut Vec<String>,
 ) {
-    let keys: BTreeSet<&String> = base.keys().chain(ours.keys()).chain(theirs.keys()).collect();
+    let keys: BTreeSet<&String> = base
+        .keys()
+        .chain(ours.keys())
+        .chain(theirs.keys())
+        .collect();
     for k in keys {
         match three_way(base.get(k), ours.get(k), theirs.get(k)) {
             Ok(Some(h)) => {
@@ -187,11 +196,7 @@ fn merge_map(
 mod tests {
     use super::*;
 
-    fn commit_with(
-        repo: &Repository,
-        chunks: &[(&str, &str)],
-        parents: Vec<String>,
-    ) -> String {
+    fn commit_with(repo: &Repository, chunks: &[(&str, &str)], parents: Vec<String>) -> String {
         let mut m = Manifest::default();
         let mut cm = BTreeMap::new();
         for (pos, h) in chunks {
@@ -203,8 +208,13 @@ mod tests {
     }
 
     fn merged_chunks(repo: &Repository, commit: &str) -> BTreeMap<String, String> {
-        let m = repo.read_manifest(&repo.read_commit(commit).unwrap().tree).unwrap();
-        m.regions.get("region/r.0.0.mca").cloned().unwrap_or_default()
+        let m = repo
+            .read_manifest(&repo.read_commit(commit).unwrap().tree)
+            .unwrap();
+        m.regions
+            .get("region/r.0.0.mca")
+            .cloned()
+            .unwrap_or_default()
     }
 
     #[test]
@@ -213,11 +223,17 @@ mod tests {
         let repo = Repository::init(d.path()).unwrap();
         let a = commit_with(&repo, &[("0,0", "h0")], vec![]);
         let b = commit_with(&repo, &[("0,0", "h0"), ("1,0", "h1")], vec![a.clone()]);
-        assert_eq!(merge_base(&repo, &b, &a).unwrap().as_deref(), Some(a.as_str()));
+        assert_eq!(
+            merge_base(&repo, &b, &a).unwrap().as_deref(),
+            Some(a.as_str())
+        );
 
         let o = commit_with(&repo, &[("0,0", "h0"), ("2,0", "ho")], vec![a.clone()]);
         let t = commit_with(&repo, &[("0,0", "h0"), ("3,0", "ht")], vec![a.clone()]);
-        assert_eq!(merge_base(&repo, &o, &t).unwrap().as_deref(), Some(a.as_str()));
+        assert_eq!(
+            merge_base(&repo, &o, &t).unwrap().as_deref(),
+            Some(a.as_str())
+        );
     }
 
     #[test]

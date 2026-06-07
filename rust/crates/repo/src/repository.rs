@@ -125,6 +125,11 @@ impl Repository {
         Ok(())
     }
 
+    pub fn delete_branch(&self, name: &str) -> Result<()> {
+        let _ = std::fs::remove_file(self.branch_path(name));
+        Ok(())
+    }
+
     pub fn branches(&self) -> Vec<String> {
         let mut out = Vec::new();
         if let Ok(entries) = std::fs::read_dir(self.dir.join("refs").join("heads")) {

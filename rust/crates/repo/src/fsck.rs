@@ -120,7 +120,12 @@ mod tests {
         repo.write_branch("main", &c).unwrap();
 
         let r = fsck(&repo).unwrap();
-        assert!(r.is_clean(), "corrupt={:?} missing={:?}", r.corrupt, r.missing);
+        assert!(
+            r.is_clean(),
+            "corrupt={:?} missing={:?}",
+            r.corrupt,
+            r.missing
+        );
         assert!(r.checked > 0);
         assert_eq!(r.unreachable, 0);
     }
