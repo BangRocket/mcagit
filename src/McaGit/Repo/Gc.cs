@@ -1,3 +1,5 @@
+using McaGit.Output;
+
 namespace McaGit.Repo;
 
 /// <summary>
@@ -30,7 +32,10 @@ public static class Gc
     /// Packs every reachable object into one new pack, then removes the old packs and all
     /// loose objects (reachable ones now live in the pack; unreachable ones are dropped).
     /// </summary>
-    public static RepackResult Repack(Repository repo)
+    /// <summary>Repack using all CPU cores and no progress reporter.</summary>
+    public static RepackResult Repack(Repository repo) => Repack(repo, Environment.ProcessorCount, null);
+
+    public static RepackResult Repack(Repository repo, int threads, Progress? progress = null)
     {
         ObjectStore store = repo.Objects;
 
@@ -49,7 +54,8 @@ public static class Gc
             .ToList();
 
         List<string> oldPacks = store.PackFilePaths().ToList();
-        string? packId = Packfile.Write(store.ObjectsDir, ordered, store.Read);
+        store.PreloadPacks(); // load packs now so concurrent store.Read in WriteParallel can't race the lazy init
+        string? packId = Packfile.WriteParallel(store.ObjectsDir, ordered, store.Read, threads, store.StoredSize, progress);
         store.ReloadPacks(); // the new pack is now visible
 
         long freed = 0;

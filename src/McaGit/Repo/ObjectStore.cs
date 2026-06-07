@@ -28,6 +28,10 @@ public sealed class ObjectStore
         if (_packs is not null) { foreach (Packfile p in _packs) p.Dispose(); _packs = null; }
     }
 
+    /// <summary>Forces the lazy pack list to load now, on the calling thread. gc calls this before its
+    /// parallel pack-write so concurrent <see cref="Read"/>s never race the lazy <c>_packs</c> init.</summary>
+    public void PreloadPacks() => _ = Packs;
+
     // ---- commit staging ----
     // During a commit we stream the commit's *new* objects straight into a single packfile instead of
     // writing one loose file per chunk. The per-loose-file cost (temp-create + rename, hammering the FS
