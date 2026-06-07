@@ -29,3 +29,5 @@ pub mod model;
 pub use model::{ChunkPatch, EntryKind, PatchFileEntry, PatchOp, Status, WorldPatch};
 pub mod op_sink;
 pub use op_sink::PatchOpSink;
+pub mod extract;
+pub use extract::extract;
