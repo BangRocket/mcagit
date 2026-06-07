@@ -27,3 +27,5 @@ pub type Result<T> = std::result::Result<T, RepoError>;
 
 pub mod object_store;
 pub use object_store::ObjectStore;
+pub mod manifest;
+pub use manifest::{CommitObject, Manifest};
