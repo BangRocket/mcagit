@@ -4,23 +4,44 @@
 //! canonical NBT object; everything else → raw blob. Parallel over files.
 
 use crate::object_store::ObjectStore;
+use crate::pack::PackWriter;
 use crate::repository::Repository;
-use crate::{Manifest, Result};
+use crate::{Manifest, RepoError, Result};
 use mca_anvil::{codec, RegionFile};
 use rayon::prelude::*;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 const SKIP_NAMES: &[&str] = &["session.lock"];
 
-/// Snapshot `world_dir`, writing objects into the repo's store.
+/// Where snapshot objects go: streamed into one pack, or just hashed (status).
+#[derive(Clone, Copy)]
+enum Sink<'a> {
+    Pack(&'a ObjectStore, &'a Mutex<PackWriter>),
+    HashOnly,
+}
+
+/// Snapshot `world_dir`, streaming all new objects into a single packfile.
 pub fn snapshot(repo: &Repository, world_dir: &Path) -> Result<Manifest> {
-    build(world_dir, Some(repo.objects()), Some(repo.dir()))
+    let pack_dir = repo.objects().pack_dir();
+    let writer = Mutex::new(PackWriter::new(&pack_dir)?);
+    let manifest = build(
+        world_dir,
+        Sink::Pack(repo.objects(), &writer),
+        Some(repo.dir()),
+    )?;
+    let writer = writer.into_inner().unwrap();
+    if !writer.is_empty() {
+        writer.finish(&pack_dir)?;
+        repo.objects().reload_packs(); // make the new pack visible in-process
+    }
+    Ok(manifest)
 }
 
 /// Compute the manifest (and object ids) WITHOUT writing — used by status.
 pub fn hash_only(repo: &Repository, world_dir: &Path) -> Result<Manifest> {
-    build(world_dir, None, Some(repo.dir()))
+    build(world_dir, Sink::HashOnly, Some(repo.dir()))
 }
 
 enum Kind {
@@ -33,11 +54,7 @@ struct Entry {
     kind: Kind,
 }
 
-fn build(
-    world_dir: &Path,
-    store: Option<&ObjectStore>,
-    repo_dir: Option<&Path>,
-) -> Result<Manifest> {
+fn build(world_dir: &Path, sink: Sink, repo_dir: Option<&Path>) -> Result<Manifest> {
     let root = std::fs::canonicalize(world_dir).unwrap_or_else(|_| world_dir.to_path_buf());
     let repo_prefix = repo_dir.and_then(|d| std::fs::canonicalize(d).ok());
 
@@ -66,7 +83,7 @@ fn build(
 
     let entries: Vec<Entry> = files
         .par_iter()
-        .map(|f| classify(f, &root, store))
+        .map(|f| classify(f, &root, sink))
         .collect::<Result<Vec<_>>>()?;
 
     let mut m = Manifest::default();
@@ -106,11 +123,18 @@ fn rel_path(root: &Path, p: &Path) -> String {
         .replace('\\', "/")
 }
 
-fn put(content: &[u8], store: Option<&ObjectStore>) -> Result<String> {
-    match store {
-        Some(s) => s.write(content),
-        None => Ok(blake3::hash(content).to_hex().to_string()),
+fn put(content: &[u8], sink: Sink) -> Result<String> {
+    let id = blake3::hash(content).to_hex().to_string();
+    if let Sink::Pack(store, writer) = sink {
+        if !store.exists(&id) {
+            let packed = zstd::encode_all(content, 0)?;
+            writer
+                .lock()
+                .map_err(|_| RepoError::Other("pack writer poisoned".into()))?
+                .push_packed(&id, &packed)?;
+        }
     }
+    Ok(id)
 }
 
 fn is_region(rel: &str) -> bool {
@@ -121,11 +145,11 @@ fn is_region(rel: &str) -> bool {
     p.contains("/region/") || p.contains("/entities/") || p.contains("/poi/")
 }
 
-fn classify(path: &Path, root: &Path, store: Option<&ObjectStore>) -> Result<Entry> {
+fn classify(path: &Path, root: &Path, sink: Sink) -> Result<Entry> {
     let rel = rel_path(root, path);
 
     if is_region(&rel) {
-        if let Some(map) = try_chunks(path, store)? {
+        if let Some(map) = try_chunks(path, sink)? {
             return Ok(Entry {
                 rel,
                 kind: Kind::Region(map),
@@ -133,7 +157,7 @@ fn classify(path: &Path, root: &Path, store: Option<&ObjectStore>) -> Result<Ent
         }
     }
     if rel.to_ascii_lowercase().ends_with(".dat") {
-        if let Some(h) = try_nbt(path, store)? {
+        if let Some(h) = try_nbt(path, sink)? {
             return Ok(Entry {
                 rel,
                 kind: Kind::Nbt(h),
@@ -141,7 +165,7 @@ fn classify(path: &Path, root: &Path, store: Option<&ObjectStore>) -> Result<Ent
         }
     }
     let bytes = std::fs::read(path)?;
-    let h = put(&bytes, store)?;
+    let h = put(&bytes, sink)?;
     Ok(Entry {
         rel,
         kind: Kind::Blob(h),
@@ -152,7 +176,7 @@ fn classify(path: &Path, root: &Path, store: Option<&ObjectStore>) -> Result<Ent
 /// decodable region" → caller stores it as a raw blob.
 fn try_chunks(
     path: &Path,
-    store: Option<&ObjectStore>,
+    sink: Sink,
 ) -> Result<Option<BTreeMap<String, String>>> {
     let region = match RegionFile::open(path) {
         Ok(r) => r,
@@ -165,15 +189,15 @@ fn try_chunks(
             Err(_) => return Ok(None), // undecodable chunk (e.g. Custom) → blob fallback
         };
         let canon = mca_nbt::canonical_bytes(&value);
-        let id = put(&canon, store)?;
+        let id = put(&canon, sink)?;
         map.insert(format!("{},{}", rc.pos.x, rc.pos.z), id);
     }
     Ok(Some(map))
 }
 
-fn try_nbt(path: &Path, store: Option<&ObjectStore>) -> Result<Option<String>> {
+fn try_nbt(path: &Path, sink: Sink) -> Result<Option<String>> {
     match codec::load_nbt_file(path) {
-        Ok(v) => Ok(Some(put(&mca_nbt::canonical_bytes(&v), store)?)),
+        Ok(v) => Ok(Some(put(&mca_nbt::canonical_bytes(&v), sink)?)),
         Err(_) => Ok(None),
     }
 }

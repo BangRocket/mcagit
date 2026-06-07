@@ -5,17 +5,23 @@
 
 use crate::Result;
 use std::path::{Path, PathBuf};
+use std::sync::RwLock;
 
 pub struct ObjectStore {
     dir: PathBuf,
-    packs: Vec<crate::pack::Packfile>,
+    packs: RwLock<Vec<crate::pack::Packfile>>,
 }
 
 impl ObjectStore {
     /// `dir` is the `objects/` directory inside the repo.
     pub fn new(dir: PathBuf) -> Self {
-        let packs = Self::load_packs(&dir);
+        let packs = RwLock::new(Self::load_packs(&dir));
         Self { dir, packs }
+    }
+
+    /// Re-scan `objects/pack/` (e.g. after writing a new pack mid-process).
+    pub fn reload_packs(&self) {
+        *self.packs.write().unwrap() = Self::load_packs(&self.dir);
     }
 
     fn load_packs(dir: &Path) -> Vec<crate::pack::Packfile> {
@@ -82,9 +88,12 @@ impl ObjectStore {
 
     /// Read and decompress the object with id `id`.
     pub fn read(&self, id: &str) -> Result<Vec<u8>> {
-        for pack in &self.packs {
-            if let Some(v) = pack.read(id)? {
-                return Ok(v);
+        {
+            let packs = self.packs.read().unwrap();
+            for pack in packs.iter() {
+                if let Some(v) = pack.read(id)? {
+                    return Ok(v);
+                }
             }
         }
         let (sub, rest) = id.split_at(2);
@@ -97,7 +106,7 @@ impl ObjectStore {
         if id.len() < 3 {
             return false;
         }
-        if self.packs.iter().any(|p| p.contains(id)) {
+        if self.packs.read().unwrap().iter().any(|p| p.contains(id)) {
             return true;
         }
         let (sub, rest) = id.split_at(2);

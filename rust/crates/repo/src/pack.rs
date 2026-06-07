@@ -65,11 +65,17 @@ impl PackWriter {
 
     /// Append `content` (raw) under `id`; no-op if already present in this pack.
     pub fn add(&mut self, id: &str, content: &[u8]) -> Result<()> {
+        let packed = zstd::encode_all(content, 0)?;
+        self.push_packed(id, &packed)
+    }
+
+    /// Append an already-zstd-compressed body under `id`; no-op if already
+    /// present. Lets callers compress in parallel and only serialize the write.
+    pub fn push_packed(&mut self, id: &str, packed: &[u8]) -> Result<()> {
         if self.index.contains_key(id) {
             return Ok(());
         }
-        let packed = zstd::encode_all(content, 0)?;
-        self.file.write_all(&packed)?;
+        self.file.write_all(packed)?;
         let len = packed.len() as u64;
         self.index.insert(id.to_string(), (self.offset, len));
         self.offset += len;
