@@ -27,3 +27,5 @@ pub use compression::ChunkCompression;
 pub mod chunk;
 pub use chunk::{ChunkPos, RawChunk};
 pub mod codec;
+pub mod region;
+pub use region::{RegionFile, RegionWriter};
