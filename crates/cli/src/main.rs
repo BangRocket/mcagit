@@ -200,6 +200,21 @@ enum Cmd {
         #[arg(long)]
         verbose: bool,
     },
+    /// Dump a region (.mca) file's per-chunk storage info.
+    Region {
+        file: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+    /// List points of interest (villager beds, job sites, …).
+    Poi {
+        #[arg(long)]
+        world: Option<PathBuf>,
+        #[arg(long)]
+        dim: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -969,6 +984,41 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                     eprintln!("... and {} more (use --verbose)", changes.len() - limit);
                 }
                 eprintln!("{} block change(s)", changes.len());
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+
+        Cmd::Region { file, json } => {
+            let chunks = mca_query::region_info(file)?;
+            if *json {
+                println!("{}", serde_json::to_string_pretty(&chunks)?);
+            } else {
+                for c in &chunks {
+                    println!(
+                        "chunk {},{}  comp={} {} bytes{}  ts={}",
+                        c.x,
+                        c.z,
+                        c.compression,
+                        c.bytes,
+                        if c.external { " (external)" } else { "" },
+                        c.timestamp
+                    );
+                }
+                eprintln!("{} chunk(s)", chunks.len());
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+
+        Cmd::Poi { world, dim, json } => {
+            let world = resolve_world(&cli, world)?;
+            let pois = mca_query::WorldQuery::new(&world).poi(dim.as_deref())?;
+            if *json {
+                println!("{}", serde_json::to_string_pretty(&pois)?);
+            } else {
+                for p in &pois {
+                    println!("{}  at ({}, {}, {})", p.kind, p.x, p.y, p.z);
+                }
+                eprintln!("{} point(s) of interest", pois.len());
             }
             Ok(ExitCode::SUCCESS)
         }

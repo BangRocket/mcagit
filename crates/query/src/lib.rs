@@ -60,6 +60,45 @@ pub struct InspectResult {
     pub block_entity: Option<String>,
 }
 
+/// A point of interest (villager bed, job site, …).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PoiHit {
+    pub kind: String,
+    pub x: i32,
+    pub y: i32,
+    pub z: i32,
+}
+
+/// A chunk's storage info within a region file.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct RegionChunkInfo {
+    pub x: i32,
+    pub z: i32,
+    pub compression: u8,
+    pub bytes: usize,
+    pub external: bool,
+    pub timestamp: i32,
+}
+
+/// Per-chunk storage info for a single region (`.mca`) file.
+pub fn region_info(path: &Path) -> Result<Vec<RegionChunkInfo>> {
+    let data = std::fs::read(path)?;
+    let rf = RegionFile::parse(path, &data)?;
+    let mut out: Vec<RegionChunkInfo> = rf
+        .chunks()
+        .map(|c| RegionChunkInfo {
+            x: c.pos.x,
+            z: c.pos.z,
+            compression: c.compression.to_byte(),
+            bytes: c.payload.len(),
+            external: c.external,
+            timestamp: c.timestamp,
+        })
+        .collect();
+    out.sort_by_key(|c| (c.x, c.z));
+    Ok(out)
+}
+
 /// Read-only queries over a world directory.
 pub struct WorldQuery {
     root: PathBuf,
@@ -202,6 +241,35 @@ impl WorldQuery {
     /// Find sign block-entities, extracting their text lines.
     pub fn find_signs(&self, dim: Option<&str>) -> Result<Vec<BlockEntityHit>> {
         self.scan_block_entities(dim, &|id| id.contains("sign"))
+    }
+
+    /// Points of interest (villager beds, job sites, etc.) from `poi/*.mca`.
+    pub fn poi(&self, dim: Option<&str>) -> Result<Vec<PoiHit>> {
+        let mut out = Vec::new();
+        for root in self.read_chunks(&self.dim_dir(dim).join("poi"))? {
+            let Some(NbtValue::Compound(sections)) = get(&root, "Sections") else {
+                continue;
+            };
+            for (_y, sec) in sections {
+                if let Some(NbtValue::List(records)) = get(sec, "Records") {
+                    for rec in records {
+                        if let (Some(kind), Some(NbtValue::IntArray(p))) =
+                            (get_str(rec, "type"), get(rec, "pos"))
+                        {
+                            if p.len() >= 3 {
+                                out.push(PoiHit {
+                                    kind: kind.to_string(),
+                                    x: p[0],
+                                    y: p[1],
+                                    z: p[2],
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Ok(out)
     }
 
     fn scan_block_entities(
@@ -658,5 +726,34 @@ mod tests {
         assert_eq!((changes[0].x, changes[0].y, changes[0].z), (0, 0, 0));
         assert_eq!(changes[0].old.as_deref(), Some("minecraft:air"));
         assert_eq!(changes[0].new.as_deref(), Some("minecraft:stone"));
+    }
+
+    #[test]
+    fn poi_and_region_info() {
+        let d = tempfile::tempdir().unwrap();
+        let w = d.path().join("World");
+        let record = comp(vec![
+            ("type", NbtValue::String("minecraft:home".into())),
+            ("pos", NbtValue::IntArray(vec![10, 64, -5])),
+        ]);
+        // poi chunk: Sections is a compound keyed by section-Y string.
+        let poi_root = comp(vec![(
+            "Sections",
+            comp(vec![(
+                "0",
+                comp(vec![("Records", NbtValue::List(vec![record]))]),
+            )]),
+        )]);
+        let poi_path = w.join("poi").join("r.0.0.mca");
+        write_chunk(&poi_path, poi_root);
+
+        let pois = WorldQuery::new(&w).poi(None).unwrap();
+        assert_eq!(pois.len(), 1);
+        assert_eq!(pois[0].kind, "minecraft:home");
+        assert_eq!((pois[0].x, pois[0].y, pois[0].z), (10, 64, -5));
+
+        let info = region_info(&poi_path).unwrap();
+        assert_eq!(info.len(), 1);
+        assert_eq!((info[0].x, info[0].z), (0, 0));
     }
 }
