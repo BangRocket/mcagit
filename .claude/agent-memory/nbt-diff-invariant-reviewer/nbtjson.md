@@ -38,7 +38,7 @@ NOT COVERED:
 
 In the Rust port, floats and doubles are NOW string-encoded via `x.to_string()` (like longs), matching the fix for B1/B4 above. `from_json` prefers the string form; accepts legacy JSON-number form for backward compatibility with patches written before the fix. Rust's `f32`/`f64` Display is exact (shortest round-trippable representation; NaN/Inf serialize as "NaN"/"inf"/"-inf"). Tests added: `double_survives_file_roundtrip`, `nonfinite_double_survives`.
 
-**WARN (Rust float/f32 test gap):** `nonfinite_double_survives` covers f64 only. f32 NaN/Inf are not tested in isolation. Rust f32::to_string() for NaN is "NaN", Inf is "inf" — both parseable by `s.parse::<f32>()`. Low risk but add `nonfinite_float_survives` for completeness.
+**OK (Rust float/f32 test):** Both `nonfinite_double_survives` and `nonfinite_float_survives` are present and pass as of feat/nbt-valence. NaN and ±Infinity are covered for both f32 and f64.
 
 **WARN (legacy float path):** The `None => val.as_f64()? as f32` legacy path for float can lose precision (f64→f32 narrowing). This only matters when reading old patch files with JSON-number floats — any float that was previously lossy stays lossy; the new path is exact. Acceptable one-way compat.
 
