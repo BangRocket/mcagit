@@ -71,6 +71,52 @@ fn palette_index(
     Some(((raw >> off) & mask) as usize)
 }
 
+/// The section `Y` indices present in a chunk.
+pub fn section_ys(chunk: &NbtValue) -> Vec<i32> {
+    let mut out = Vec::new();
+    let secs =
+        get(chunk, "sections").or_else(|| get(chunk, "Level").and_then(|l| get(l, "Sections")));
+    if let Some(NbtValue::List(secs)) = secs {
+        for s in secs {
+            if let Some(y) = section_y(s) {
+                out.push(y as i32);
+            }
+        }
+    }
+    out
+}
+
+/// Decode all 4096 block states of the section with index `sy` (YZX order:
+/// `idx = ly*256 + lz*16 + lx`). `None` if the section/palette is absent.
+pub fn section_blocks(chunk: &NbtValue, sy: i32) -> Option<Vec<BlockState>> {
+    let section = section_at(chunk, sy << 4)?;
+    let bs = get(section, "block_states")?;
+    let palette = as_list(get(bs, "palette")?)?;
+    if palette.is_empty() {
+        return None;
+    }
+    let states: Vec<BlockState> = palette.iter().filter_map(block_state).collect();
+    if states.len() != palette.len() {
+        return None;
+    }
+    let bits = bits_for(palette.len(), 4);
+    let mut out = Vec::with_capacity(4096);
+    match get(bs, "data") {
+        Some(NbtValue::LongArray(data)) if bits > 0 => {
+            let per_long = 64 / bits as usize;
+            let mask = (1u64 << bits) - 1;
+            for idx in 0..4096usize {
+                let li = idx / per_long;
+                let off = (idx % per_long) * bits as usize;
+                let pi = ((*data.get(li)? as u64) >> off) & mask;
+                out.push(states.get(pi as usize)?.clone());
+            }
+        }
+        _ => out.extend(std::iter::repeat_n(states[0].clone(), 4096)),
+    }
+    Some(out)
+}
+
 /// Bits per index: `max(min_bits, ceil(log2(palette_len)))`.
 fn bits_for(palette_len: usize, min_bits: u32) -> u32 {
     let needed = if palette_len <= 1 {

@@ -2,7 +2,9 @@
 //! entities, block-entities, and signs across a world's region files. Operates
 //! on a world directory (and an optional dimension); never mutates anything.
 
-use mca_anvil::{biome_at, block_at, codec, ChunkPos, RegionFile};
+use mca_anvil::{
+    biome_at, block_at, codec, section_blocks, section_ys, BlockState, ChunkPos, RegionFile,
+};
 use mca_nbt::{Compound, NbtValue};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
@@ -251,6 +253,116 @@ impl WorldQuery {
             }
         }
         Ok(out)
+    }
+}
+
+/// A block-level change between two worlds (grief detector output).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct BlockChange {
+    pub x: i32,
+    pub y: i32,
+    pub z: i32,
+    pub old: Option<String>,
+    pub new: Option<String>,
+}
+
+/// Block-level changes turning `old_world` into `new_world` for one dimension:
+/// compares chunks present in both worlds, decoding paletted block states and
+/// reporting each differing coordinate (the grief detector). Chunks present in
+/// only one world are not reported.
+pub fn where_changed(
+    old_world: &Path,
+    new_world: &Path,
+    dim: Option<&str>,
+) -> Result<Vec<BlockChange>> {
+    let old_dir = dim_region(old_world, dim);
+    let new_dir = dim_region(new_world, dim);
+    let new_files: std::collections::HashSet<String> = list_mca(&new_dir).into_iter().collect();
+    let mut out = Vec::new();
+    for name in list_mca(&old_dir) {
+        if !new_files.contains(&name) {
+            continue;
+        }
+        let ob = std::fs::read(old_dir.join(&name))?;
+        let nb = std::fs::read(new_dir.join(&name))?;
+        let orf = RegionFile::parse(&old_dir.join(&name), &ob)?;
+        let nrf = RegionFile::parse(&new_dir.join(&name), &nb)?;
+        let positions: Vec<ChunkPos> = orf.chunks().map(|c| c.pos).collect();
+        for cp in positions {
+            let (Some(oc_raw), Some(nc_raw)) = (orf.get(cp), nrf.get(cp)) else {
+                continue;
+            };
+            if oc_raw.payload_equals(nc_raw) {
+                continue;
+            }
+            let (Ok(oc), Ok(nc)) = (codec::decode(oc_raw), codec::decode(nc_raw)) else {
+                continue;
+            };
+            let mut ys = section_ys(&oc);
+            ys.extend(section_ys(&nc));
+            ys.sort_unstable();
+            ys.dedup();
+            for sy in ys {
+                let ob = section_blocks(&oc, sy);
+                let nb = section_blocks(&nc, sy);
+                if ob == nb {
+                    continue;
+                }
+                for idx in 0..4096usize {
+                    let o = ob.as_ref().and_then(|v| v.get(idx));
+                    let n = nb.as_ref().and_then(|v| v.get(idx));
+                    if o != n {
+                        let (ly, rem) = (idx / 256, idx % 256);
+                        out.push(BlockChange {
+                            x: cp.x * 16 + (rem % 16) as i32,
+                            y: sy * 16 + ly as i32,
+                            z: cp.z * 16 + (rem / 16) as i32,
+                            old: o.map(fmt_block),
+                            new: n.map(fmt_block),
+                        });
+                    }
+                }
+            }
+        }
+    }
+    out.sort_by_key(|c| (c.x, c.y, c.z));
+    Ok(out)
+}
+
+fn dim_region(world: &Path, dim: Option<&str>) -> PathBuf {
+    let base = match dim {
+        Some("nether" | "the_nether" | "-1") => world.join("DIM-1"),
+        Some("end" | "the_end" | "1") => world.join("DIM1"),
+        _ => world.to_path_buf(),
+    };
+    base.join("region")
+}
+
+fn list_mca(dir: &Path) -> Vec<String> {
+    let mut v = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(dir) {
+        for e in entries.flatten() {
+            let p = e.path();
+            if p.extension().and_then(|s| s.to_str()) == Some("mca") {
+                if let Some(n) = p.file_name().and_then(|s| s.to_str()) {
+                    v.push(n.to_string());
+                }
+            }
+        }
+    }
+    v
+}
+
+fn fmt_block(bs: &BlockState) -> String {
+    if bs.properties.is_empty() {
+        bs.name.clone()
+    } else {
+        let p: Vec<String> = bs
+            .properties
+            .iter()
+            .map(|(k, v)| format!("{k}={v}"))
+            .collect();
+        format!("{}[{}]", bs.name, p.join(","))
     }
 }
 
@@ -507,5 +619,44 @@ mod tests {
         let n = WorldQuery::new(&w).inspect(None, 1, 0, 0).unwrap();
         assert_eq!(n.block.as_deref(), Some("minecraft:air"));
         assert_eq!(n.block_entity, None);
+    }
+
+    #[test]
+    fn where_changed_reports_block_changes() {
+        let d = tempfile::tempdir().unwrap();
+        let old = d.path().join("old");
+        let new = d.path().join("new");
+        let section = |bs: NbtValue| {
+            comp(vec![(
+                "sections",
+                NbtValue::List(vec![comp(vec![
+                    ("Y", NbtValue::Byte(0)),
+                    ("block_states", bs),
+                ])]),
+            )])
+        };
+        let air = comp(vec![("Name", NbtValue::String("minecraft:air".into()))]);
+        let stone = comp(vec![("Name", NbtValue::String("minecraft:stone".into()))]);
+        // old: all air
+        write_chunk(
+            &old.join("region").join("r.0.0.mca"),
+            section(comp(vec![("palette", NbtValue::List(vec![air.clone()]))])),
+        );
+        // new: stone at local (0,0,0)
+        let mut data = vec![0i64; 256];
+        data[0] = 1;
+        write_chunk(
+            &new.join("region").join("r.0.0.mca"),
+            section(comp(vec![
+                ("palette", NbtValue::List(vec![air, stone])),
+                ("data", NbtValue::LongArray(data)),
+            ])),
+        );
+
+        let changes = where_changed(&old, &new, None).unwrap();
+        assert_eq!(changes.len(), 1);
+        assert_eq!((changes[0].x, changes[0].y, changes[0].z), (0, 0, 0));
+        assert_eq!(changes[0].old.as_deref(), Some("minecraft:air"));
+        assert_eq!(changes[0].new.as_deref(), Some("minecraft:stone"));
     }
 }

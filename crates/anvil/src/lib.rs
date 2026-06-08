@@ -30,4 +30,4 @@ pub mod codec;
 pub mod region;
 pub use region::{RegionFile, RegionWriter};
 pub mod blockstate;
-pub use blockstate::{biome_at, block_at, BlockState};
+pub use blockstate::{biome_at, block_at, section_blocks, section_ys, BlockState};

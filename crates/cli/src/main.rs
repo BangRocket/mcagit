@@ -189,6 +189,17 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// Report block-level changes between two worlds (the grief detector).
+    WhereChanged {
+        old: PathBuf,
+        new: PathBuf,
+        #[arg(long)]
+        dim: Option<String>,
+        #[arg(long)]
+        json: bool,
+        #[arg(long)]
+        verbose: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -928,6 +939,36 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                 if let Some(be) = &r.block_entity {
                     println!("  block-entity: {be}");
                 }
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+
+        Cmd::WhereChanged {
+            old,
+            new,
+            dim,
+            json,
+            verbose,
+        } => {
+            let changes = mca_query::where_changed(old, new, dim.as_deref())?;
+            if *json {
+                println!("{}", serde_json::to_string_pretty(&changes)?);
+            } else {
+                let limit = if *verbose { changes.len() } else { 20 };
+                for c in changes.iter().take(limit) {
+                    println!(
+                        "({}, {}, {})  {} -> {}",
+                        c.x,
+                        c.y,
+                        c.z,
+                        c.old.as_deref().unwrap_or("-"),
+                        c.new.as_deref().unwrap_or("-")
+                    );
+                }
+                if changes.len() > limit {
+                    eprintln!("... and {} more (use --verbose)", changes.len() - limit);
+                }
+                eprintln!("{} block change(s)", changes.len());
             }
             Ok(ExitCode::SUCCESS)
         }
