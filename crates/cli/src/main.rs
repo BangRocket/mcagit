@@ -125,23 +125,51 @@ enum Cmd {
         #[arg(short = 'f')]
         force: bool,
     },
-    /// Clone a local repository into <dst>.
-    Clone { src: PathBuf, dst: PathBuf },
-    /// Push a branch to a local remote repository.
+    /// Clone a repository into <dst> (local path; http/ssh/cloud not yet implemented).
+    Clone { src: String, dst: PathBuf },
+    /// Push a branch to a remote (a configured remote name or a URL/path).
     Push {
-        remote: PathBuf,
+        remote: String,
         branch: Option<String>,
     },
-    /// Fetch a branch from a local remote repository.
+    /// Fetch a branch from a remote and fast-forward the worktree.
     Pull {
-        remote: PathBuf,
+        remote: String,
         branch: Option<String>,
+    },
+    /// Fetch a branch from a remote into a remote-tracking ref (no worktree change).
+    Fetch {
+        remote: String,
+        branch: Option<String>,
+    },
+    /// List the refs a remote advertises.
+    LsRemote { remote: String },
+    /// Manage named remotes (no subcommand lists them; -v shows URLs).
+    Remote {
+        #[arg(short = 'v', long)]
+        verbose: bool,
+        #[command(subcommand)]
+        action: Option<RemoteCmd>,
     },
     /// Verify a world reproduces a commit (fast single-sided tree-hash check).
     Verify {
         reff: String,
         world: Option<PathBuf>,
     },
+}
+
+#[derive(Subcommand)]
+enum RemoteCmd {
+    /// Add a remote with a name and URL/path.
+    Add { name: String, url: String },
+    /// Remove a remote and its tracking refs.
+    Remove { name: String },
+    /// Rename a remote.
+    Rename { old: String, new: String },
+    /// Set an existing remote's URL.
+    SetUrl { name: String, url: String },
+    /// Print a remote's URL.
+    GetUrl { name: String },
 }
 
 fn main() -> ExitCode {
@@ -656,8 +684,8 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         }
 
         Cmd::Clone { src, dst } => {
-            mca_repo::clone_local(src, dst)?;
-            eprintln!("Cloned {} -> {}", src.display(), dst.display());
+            mca_repo::remote::clone(src, dst)?;
+            eprintln!("Cloned {src} -> {}", dst.display());
             Ok(ExitCode::SUCCESS)
         }
 
@@ -667,8 +695,26 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                 .clone()
                 .or_else(|| repo.current_branch())
                 .ok_or_else(|| anyhow!("no branch to push"))?;
-            let copied = mca_repo::push_local(&repo, remote, &branch)?;
-            eprintln!("pushed {branch} -> {} ({copied} objects)", remote.display());
+            let url = mca_repo::remote::resolve(&repo, remote);
+            let t = mca_repo::connect(&url)?;
+            let copied = mca_repo::remote::push(&repo, t.as_ref(), &branch)?;
+            eprintln!("pushed {branch} -> {remote} ({copied} objects)");
+            Ok(ExitCode::SUCCESS)
+        }
+
+        Cmd::Fetch { remote, branch } => {
+            let repo = open_repo(&cli)?;
+            let branch = branch
+                .clone()
+                .or_else(|| repo.current_branch())
+                .ok_or_else(|| anyhow!("no branch to fetch"))?;
+            let url = mca_repo::remote::resolve(&repo, remote);
+            let t = mca_repo::connect(&url)?;
+            let (tip, copied) = mca_repo::remote::fetch(&repo, t.as_ref(), &branch)?;
+            repo.write_remote_ref(remote, &branch, &tip)?;
+            eprintln!(
+                "fetched {branch} from {remote} -> refs/remotes/{remote}/{branch} ({copied} objects)"
+            );
             Ok(ExitCode::SUCCESS)
         }
 
@@ -678,18 +724,56 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                 .clone()
                 .or_else(|| repo.current_branch())
                 .ok_or_else(|| anyhow!("no branch to pull"))?;
-            let copied = mca_repo::fetch_local(&repo, remote, &branch)?;
-            // If we pulled the current branch, update the worktree.
+            let url = mca_repo::remote::resolve(&repo, remote);
+            let t = mca_repo::connect(&url)?;
+            let (tip, copied) = mca_repo::remote::fetch(&repo, t.as_ref(), &branch)?;
+            repo.write_remote_ref(remote, &branch, &tip)?;
+            // Fast-forward the local branch and, if it's current, the worktree.
+            repo.write_branch(&branch, &tip)?;
             if repo.current_branch().as_deref() == Some(branch.as_str()) {
-                if let (Some(wt), Some(tip)) = (repo.worktree(), repo.read_branch(&branch)) {
+                if let Some(wt) = repo.worktree() {
                     let m = repo.read_manifest(&repo.read_commit(&tip)?.tree)?;
                     mca_repo::checkout(&repo, &m, std::path::Path::new(&wt), true)?;
                 }
             }
-            eprintln!(
-                "pulled {branch} from {} ({copied} objects)",
-                remote.display()
-            );
+            eprintln!("pulled {branch} from {remote} ({copied} objects)");
+            Ok(ExitCode::SUCCESS)
+        }
+
+        Cmd::LsRemote { remote } => {
+            let repo = open_repo(&cli)?;
+            let url = mca_repo::remote::resolve(&repo, remote);
+            let t = mca_repo::connect(&url)?;
+            for (refname, hash) in t.list_refs()? {
+                println!("{hash}\t{refname}");
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+
+        Cmd::Remote { verbose, action } => {
+            let repo = open_repo(&cli)?;
+            match action {
+                None => {
+                    for name in repo.remotes() {
+                        if *verbose {
+                            let url = repo.remote_url(&name).unwrap_or_default();
+                            println!("{name}\t{url}");
+                        } else {
+                            println!("{name}");
+                        }
+                    }
+                }
+                Some(RemoteCmd::Add { name, url }) => repo.set_remote_url(name, url)?,
+                Some(RemoteCmd::Remove { name }) => repo.remove_remote(name)?,
+                Some(RemoteCmd::Rename { old, new }) => repo.rename_remote(old, new)?,
+                Some(RemoteCmd::SetUrl { name, url }) => repo.set_remote_url(name, url)?,
+                Some(RemoteCmd::GetUrl { name }) => {
+                    let url = repo
+                        .remote_url(name)
+                        .ok_or_else(|| anyhow!("no such remote: {name}"))?;
+                    println!("{url}");
+                }
+            }
             Ok(ExitCode::SUCCESS)
         }
 

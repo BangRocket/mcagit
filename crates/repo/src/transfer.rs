@@ -9,7 +9,7 @@ use std::collections::HashSet;
 use std::path::Path;
 
 /// All objects reachable from `tip` (commit + tree + manifest objects, recursively).
-fn reachable(repo: &Repository, tip: &str) -> Result<Vec<String>> {
+pub(crate) fn reachable(repo: &Repository, tip: &str) -> Result<Vec<String>> {
     let mut out = Vec::new();
     let mut seen = HashSet::new();
     let mut stack = vec![tip.to_string()];

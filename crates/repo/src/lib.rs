@@ -51,3 +51,5 @@ pub use replay::{cherry_pick, rebase, revert, ReplayOutcome};
 pub mod stash;
 pub mod transfer;
 pub use transfer::{clone_local, fetch_local, push_local};
+pub mod remote;
+pub use remote::{connect, Transport};

@@ -100,6 +100,95 @@ impl Repository {
         self.config_set("worktree", w)
     }
 
+    /// Remove a config key (if present).
+    pub fn config_unset(&self, key: &str) -> Result<()> {
+        let lines: Vec<String> = std::fs::read_to_string(self.config_path())
+            .unwrap_or_default()
+            .lines()
+            .filter(|l| {
+                l.split_once('=')
+                    .map(|(k, _)| k.trim() != key)
+                    .unwrap_or(true)
+            })
+            .map(|l| l.to_string())
+            .collect();
+        std::fs::write(self.config_path(), lines.join("\n") + "\n")?;
+        Ok(())
+    }
+
+    // ---- remotes (stored as `remote.<name>.url` config; tracking refs under
+    // refs/remotes/<name>/<branch>) ----
+
+    pub fn remote_url(&self, name: &str) -> Option<String> {
+        self.config_get(&format!("remote.{name}.url"))
+    }
+    pub fn set_remote_url(&self, name: &str, url: &str) -> Result<()> {
+        self.config_set(&format!("remote.{name}.url"), url)
+    }
+    pub fn remove_remote(&self, name: &str) -> Result<()> {
+        self.config_unset(&format!("remote.{name}.url"))?;
+        let _ = std::fs::remove_dir_all(self.dir.join("refs").join("remotes").join(name));
+        Ok(())
+    }
+    pub fn rename_remote(&self, old: &str, new: &str) -> Result<()> {
+        let url = self
+            .remote_url(old)
+            .ok_or_else(|| crate::RepoError::Other(format!("no such remote: {old}")))?;
+        self.set_remote_url(new, &url)?;
+        self.config_unset(&format!("remote.{old}.url"))?;
+        let from = self.dir.join("refs").join("remotes").join(old);
+        let to = self.dir.join("refs").join("remotes").join(new);
+        if from.exists() {
+            if let Some(p) = to.parent() {
+                std::fs::create_dir_all(p)?;
+            }
+            let _ = std::fs::rename(&from, &to);
+        }
+        Ok(())
+    }
+    /// Configured remote names, sorted.
+    pub fn remotes(&self) -> Vec<String> {
+        let mut out = Vec::new();
+        if let Ok(text) = std::fs::read_to_string(self.config_path()) {
+            for line in text.lines() {
+                if let Some((k, _)) = line.split_once('=') {
+                    if let Some(name) = k
+                        .trim()
+                        .strip_prefix("remote.")
+                        .and_then(|r| r.strip_suffix(".url"))
+                    {
+                        out.push(name.to_string());
+                    }
+                }
+            }
+        }
+        out.sort();
+        out.dedup();
+        out
+    }
+
+    fn remote_ref_path(&self, name: &str, branch: &str) -> PathBuf {
+        self.dir
+            .join("refs")
+            .join("remotes")
+            .join(name)
+            .join(branch)
+    }
+    pub fn read_remote_ref(&self, name: &str, branch: &str) -> Option<String> {
+        std::fs::read_to_string(self.remote_ref_path(name, branch))
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    }
+    pub fn write_remote_ref(&self, name: &str, branch: &str, hash: &str) -> Result<()> {
+        let p = self.remote_ref_path(name, branch);
+        if let Some(parent) = p.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(p, format!("{hash}\n"))?;
+        Ok(())
+    }
+
     // ---- refs / HEAD ----
 
     fn head_path(&self) -> PathBuf {
