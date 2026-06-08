@@ -1,0 +1,21 @@
+[package]
+name = "mca-repo"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+mca-nbt = { workspace = true }
+mca-anvil = { workspace = true }
+blake3 = { workspace = true }
+zstd = { workspace = true }
+rayon = { workspace = true }
+memmap2 = { workspace = true }
+arc-swap = { workspace = true }
+walkdir = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
