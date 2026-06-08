@@ -44,10 +44,24 @@ enum Cmd {
     },
     /// Show changes in the worktree vs HEAD.
     Status,
-    /// Show commit history.
+    /// Get a repo config value, or set it: `config <key> [value]`.
+    Config { key: String, value: Option<String> },
+    /// Show commit history (filterable).
     Log {
         #[arg(long)]
         oneline: bool,
+        /// Only commits whose author contains this substring.
+        #[arg(long)]
+        author: Option<String>,
+        /// Only commits whose message contains this substring.
+        #[arg(long)]
+        grep: Option<String>,
+        /// Only commits at or after this unix timestamp.
+        #[arg(long)]
+        since: Option<i64>,
+        /// Only commits at or before this unix timestamp.
+        #[arg(long)]
+        until: Option<i64>,
     },
     /// Diff two worlds (semantic). Exits 1 if they differ.
     Diff {
@@ -350,20 +364,45 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             Ok(ExitCode::from(1))
         }
 
-        Cmd::Log { oneline } => {
+        Cmd::Log {
+            oneline,
+            author,
+            grep,
+            since,
+            until,
+        } => {
             let repo = open_repo(&cli)?;
             let mut cur = repo.head_commit();
             while let Some(h) = cur {
                 let c = repo.read_commit(&h)?;
-                if *oneline {
-                    println!("{} {}", &h[..10], c.message.lines().next().unwrap_or(""));
-                } else {
-                    println!(
-                        "commit {h}\nAuthor: {}\nDate:   {}\n\n    {}\n",
-                        c.author, c.time, c.message
-                    );
+                let ts = c.time.parse::<i64>().ok();
+                let keep = author.as_deref().is_none_or(|a| c.author.contains(a))
+                    && grep.as_deref().is_none_or(|g| c.message.contains(g))
+                    && since.is_none_or(|s| ts.is_none_or(|t| t >= s))
+                    && until.is_none_or(|u| ts.is_none_or(|t| t <= u));
+                if keep {
+                    if *oneline {
+                        println!("{} {}", &h[..10], c.message.lines().next().unwrap_or(""));
+                    } else {
+                        println!(
+                            "commit {h}\nAuthor: {}\nDate:   {}\n\n    {}\n",
+                            c.author, c.time, c.message
+                        );
+                    }
                 }
                 cur = c.parents.into_iter().next();
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+
+        Cmd::Config { key, value } => {
+            let repo = open_repo(&cli)?;
+            match value {
+                Some(v) => repo.config_set(key, v)?,
+                None => match repo.config_get(key) {
+                    Some(v) => println!("{v}"),
+                    None => return Ok(ExitCode::from(1)),
+                },
             }
             Ok(ExitCode::SUCCESS)
         }
