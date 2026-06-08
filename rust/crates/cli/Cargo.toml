@@ -1,0 +1,22 @@
+[package]
+name = "mcagit"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "mcagit"
+path = "src/main.rs"
+
+[dependencies]
+mca-repo = { workspace = true }
+mca-diff = { workspace = true }
+mca-patch = { workspace = true }
+clap = { workspace = true }
+anyhow = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+mca-anvil = { workspace = true }
+mca-nbt = { workspace = true }
