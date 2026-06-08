@@ -176,6 +176,19 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// Inspect the block / biome / block-entity at world coords.
+    #[command(allow_negative_numbers = true)]
+    Inspect {
+        x: i32,
+        y: i32,
+        z: i32,
+        #[arg(long)]
+        world: Option<PathBuf>,
+        #[arg(long)]
+        dim: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -883,6 +896,37 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                     return Err(anyhow!(
                         "unknown find kind '{other}' (use: entity | block-entity | sign)"
                     ))
+                }
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+
+        Cmd::Inspect {
+            x,
+            y,
+            z,
+            world,
+            dim,
+            json,
+        } => {
+            let world = resolve_world(&cli, world)?;
+            let r = mca_query::WorldQuery::new(&world).inspect(dim.as_deref(), *x, *y, *z)?;
+            if *json {
+                println!("{}", serde_json::to_string_pretty(&r)?);
+            } else {
+                println!("({}, {}, {})", r.x, r.y, r.z);
+                println!("  block: {}", r.block.as_deref().unwrap_or("(unknown)"));
+                if !r.properties.is_empty() {
+                    let p: Vec<String> = r
+                        .properties
+                        .iter()
+                        .map(|(k, v)| format!("{k}={v}"))
+                        .collect();
+                    println!("  props: {}", p.join(", "));
+                }
+                println!("  biome: {}", r.biome.as_deref().unwrap_or("(unknown)"));
+                if let Some(be) = &r.block_entity {
+                    println!("  block-entity: {be}");
                 }
             }
             Ok(ExitCode::SUCCESS)

@@ -29,3 +29,5 @@ pub use chunk::{ChunkPos, RawChunk};
 pub mod codec;
 pub mod region;
 pub use region::{RegionFile, RegionWriter};
+pub mod blockstate;
+pub use blockstate::{biome_at, block_at, BlockState};

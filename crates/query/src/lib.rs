@@ -2,7 +2,7 @@
 //! entities, block-entities, and signs across a world's region files. Operates
 //! on a world directory (and an optional dimension); never mutates anything.
 
-use mca_anvil::{codec, RegionFile};
+use mca_anvil::{biome_at, block_at, codec, ChunkPos, RegionFile};
 use mca_nbt::{Compound, NbtValue};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
@@ -43,6 +43,19 @@ pub struct BlockEntityHit {
     pub z: i32,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub text: Vec<String>,
+}
+
+/// What's at a coordinate.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct InspectResult {
+    pub x: i32,
+    pub y: i32,
+    pub z: i32,
+    pub block: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub properties: Vec<(String, String)>,
+    pub biome: Option<String>,
+    pub block_entity: Option<String>,
 }
 
 /// Read-only queries over a world directory.
@@ -97,6 +110,54 @@ impl WorldQuery {
             }
         }
         Ok(out)
+    }
+
+    /// Inspect the block, biome, and any block-entity at world coords `(x,y,z)`.
+    pub fn inspect(&self, dim: Option<&str>, x: i32, y: i32, z: i32) -> Result<InspectResult> {
+        let (cx, cz) = (x >> 4, z >> 4);
+        let (rx, rz) = (cx >> 5, cz >> 5);
+        let path = self
+            .dim_dir(dim)
+            .join("region")
+            .join(format!("r.{rx}.{rz}.mca"));
+        let mut r = InspectResult {
+            x,
+            y,
+            z,
+            block: None,
+            properties: Vec::new(),
+            biome: None,
+            block_entity: None,
+        };
+        if !path.is_file() {
+            return Ok(r);
+        }
+        let bytes = std::fs::read(&path)?;
+        let rf = RegionFile::parse(&path, &bytes)?;
+        let Some(raw) = rf.get(ChunkPos::new(cx, cz)) else {
+            return Ok(r);
+        };
+        let Ok(chunk) = codec::decode(raw) else {
+            return Ok(r);
+        };
+        if let Some(bs) = block_at(&chunk, x, y, z) {
+            r.block = Some(bs.name);
+            r.properties = bs.properties;
+        }
+        r.biome = biome_at(&chunk, x, y, z);
+        let list =
+            chunk_get(&chunk, "block_entities").or_else(|| chunk_get(&chunk, "TileEntities"));
+        if let Some(NbtValue::List(items)) = list {
+            for be in items {
+                if get_int(be, "x") == Some(x)
+                    && get_int(be, "y") == Some(y)
+                    && get_int(be, "z") == Some(z)
+                {
+                    r.block_entity = get_str(be, "id").map(str::to_string);
+                }
+            }
+        }
+        Ok(r)
     }
 
     /// Find entities whose `id` matches `id_filter` (all entities if `None`).
@@ -394,5 +455,57 @@ mod tests {
 
         let all_be = q.find_block_entities(None, None).unwrap();
         assert_eq!(all_be.len(), 1);
+    }
+
+    #[test]
+    fn inspect_resolves_block_biome_and_block_entity() {
+        let d = tempfile::tempdir().unwrap();
+        let w = d.path().join("World");
+        let mut data = vec![0i64; 256];
+        data[0] = 1; // local (0,0,0) -> palette[1] = stone
+        let section = comp(vec![
+            ("Y", NbtValue::Byte(0)),
+            (
+                "block_states",
+                comp(vec![
+                    (
+                        "palette",
+                        NbtValue::List(vec![
+                            comp(vec![("Name", NbtValue::String("minecraft:air".into()))]),
+                            comp(vec![("Name", NbtValue::String("minecraft:stone".into()))]),
+                        ]),
+                    ),
+                    ("data", NbtValue::LongArray(data)),
+                ]),
+            ),
+            (
+                "biomes",
+                comp(vec![(
+                    "palette",
+                    NbtValue::List(vec![NbtValue::String("minecraft:plains".into())]),
+                )]),
+            ),
+        ]);
+        let be = comp(vec![
+            ("id", NbtValue::String("minecraft:chest".into())),
+            ("x", NbtValue::Int(0)),
+            ("y", NbtValue::Int(0)),
+            ("z", NbtValue::Int(0)),
+        ]);
+        write_chunk(
+            &w.join("region").join("r.0.0.mca"),
+            comp(vec![
+                ("sections", NbtValue::List(vec![section])),
+                ("block_entities", NbtValue::List(vec![be])),
+            ]),
+        );
+        let r = WorldQuery::new(&w).inspect(None, 0, 0, 0).unwrap();
+        assert_eq!(r.block.as_deref(), Some("minecraft:stone"));
+        assert_eq!(r.biome.as_deref(), Some("minecraft:plains"));
+        assert_eq!(r.block_entity.as_deref(), Some("minecraft:chest"));
+        // air at a neighbor, no block-entity there
+        let n = WorldQuery::new(&w).inspect(None, 1, 0, 0).unwrap();
+        assert_eq!(n.block.as_deref(), Some("minecraft:air"));
+        assert_eq!(n.block_entity, None);
     }
 }
