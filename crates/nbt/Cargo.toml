@@ -6,6 +6,6 @@ license.workspace = true
 
 [dependencies]
 indexmap = { workspace = true }
-cesu8 = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+valence_nbt = { version = "0.8.0", features = ["preserve_order", "binary"] }

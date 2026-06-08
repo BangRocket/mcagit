@@ -17,12 +17,14 @@ pub enum NbtError {
     InvalidPath(String),
     #[error("invalid JSON shape: {0}")]
     InvalidJson(String),
+    #[error("binary nbt: {0}")]
+    Binary(String),
 }
 
 /// Crate result alias.
 pub type Result<T> = std::result::Result<T, NbtError>;
 
-pub mod mutf8;
+mod conv;
 pub mod value;
 pub use value::{tag_id, Compound, NbtValue};
 pub mod read;

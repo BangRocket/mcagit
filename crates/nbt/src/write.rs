@@ -1,76 +1,21 @@
-//! Big-endian NBT binary writer.
+//! NBT binary writer — converts our [`NbtValue`] into valence_nbt's model and
+//! serializes via its Java-edition encoder. When `sort` is true, compound keys
+//! are emitted in sorted order at every level (canonical form).
 
-use crate::mutf8;
-use crate::value::{tag_id, NbtValue};
+use crate::conv::to_value;
+use crate::value::NbtValue;
+use valence_nbt::{Compound as VCompound, Value as VValue};
 
-fn write_string(out: &mut Vec<u8>, s: &str) {
-    let enc = mutf8::encode(s);
-    out.extend_from_slice(&(enc.len() as u16).to_be_bytes());
-    out.extend_from_slice(&enc);
-}
-
-fn write_payload(out: &mut Vec<u8>, v: &NbtValue, sort: bool) {
-    match v {
-        NbtValue::Byte(x) => out.push(*x as u8),
-        NbtValue::Short(x) => out.extend_from_slice(&x.to_be_bytes()),
-        NbtValue::Int(x) => out.extend_from_slice(&x.to_be_bytes()),
-        NbtValue::Long(x) => out.extend_from_slice(&x.to_be_bytes()),
-        NbtValue::Float(x) => out.extend_from_slice(&x.to_be_bytes()),
-        NbtValue::Double(x) => out.extend_from_slice(&x.to_be_bytes()),
-        NbtValue::ByteArray(b) => {
-            out.extend_from_slice(&(b.len() as i32).to_be_bytes());
-            out.extend_from_slice(b);
-        }
-        NbtValue::String(s) => write_string(out, s),
-        NbtValue::List(items) => {
-            let elem = items.first().map(tag_id).unwrap_or(0);
-            out.push(elem);
-            out.extend_from_slice(&(items.len() as i32).to_be_bytes());
-            for it in items {
-                write_payload(out, it, sort);
-            }
-        }
-        NbtValue::Compound(m) => {
-            if sort {
-                let mut keys: Vec<&String> = m.keys().collect();
-                keys.sort();
-                for k in keys {
-                    let val = &m[k];
-                    out.push(tag_id(val));
-                    write_string(out, k);
-                    write_payload(out, val, sort);
-                }
-            } else {
-                for (k, val) in m {
-                    out.push(tag_id(val));
-                    write_string(out, k);
-                    write_payload(out, val, sort);
-                }
-            }
-            out.push(0); // TAG_End
-        }
-        NbtValue::IntArray(a) => {
-            out.extend_from_slice(&(a.len() as i32).to_be_bytes());
-            for x in a {
-                out.extend_from_slice(&x.to_be_bytes());
-            }
-        }
-        NbtValue::LongArray(a) => {
-            out.extend_from_slice(&(a.len() as i32).to_be_bytes());
-            for x in a {
-                out.extend_from_slice(&x.to_be_bytes());
-            }
-        }
-    }
-}
-
-/// Write a complete NBT document with the given root `name`. When `sort` is
-/// true, compound keys are emitted in sorted order (used for canonical form).
+/// Write a complete NBT document with the given root `name`. The NBT root is a
+/// compound; a non-compound root (not produced by any real world) is written as
+/// an empty document.
 pub fn write_named(name: &str, v: &NbtValue, sort: bool) -> Vec<u8> {
+    let compound = match to_value(v, sort) {
+        VValue::Compound(c) => c,
+        _ => VCompound::new(),
+    };
     let mut out = Vec::new();
-    out.push(tag_id(v));
-    write_string(&mut out, name);
-    write_payload(&mut out, v, sort);
+    valence_nbt::to_binary(&compound, &mut out, name).expect("writing NBT to a Vec cannot fail");
     out
 }
 
@@ -90,6 +35,7 @@ mod tests {
         inner.insert("Name".into(), NbtValue::String("Steve".into()));
         inner.insert("Inv".into(), NbtValue::ByteArray(vec![1, 2, 3]));
         inner.insert("Cells".into(), NbtValue::LongArray(vec![1, -2, 3]));
+        inner.insert("Empty".into(), NbtValue::List(vec![]));
         NbtValue::Compound(inner)
     }
 
@@ -103,10 +49,14 @@ mod tests {
     }
 
     #[test]
-    fn empty_list_writes_end_element_type() {
-        let v = NbtValue::List(vec![]);
-        let bytes = write_named("", &v, false);
-        // tag(9), name-len(0,0), elem-type(0), len(0,0,0,0)
-        assert_eq!(bytes, vec![9, 0, 0, 0, 0, 0, 0, 0]);
+    fn empty_list_roundtrips_as_empty() {
+        let mut c = Compound::new();
+        c.insert("e".into(), NbtValue::List(vec![]));
+        let v = NbtValue::Compound(c);
+        let (_n, back) = read(&write_named("", &v, false)).unwrap();
+        let NbtValue::Compound(m) = back else {
+            panic!("compound")
+        };
+        assert_eq!(m.get("e"), Some(&NbtValue::List(vec![])));
     }
 }
