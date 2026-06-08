@@ -6,15 +6,15 @@ metadata:
 ---
 
 ## Fully Untested Production Files
-- `src/McaDiff/Repo/StatusCalc.cs` — no test at all
-- `src/McaDiff/Nbt/NbtJson.cs` — tested only indirectly via NbtCodecTests; `ToJson`/`FromJson` edge cases (null, empty compound, etc.) not directly tested
-- `src/McaDiff/Output/Ansi.cs` — zero tests
-- `src/McaDiff/Output/JsonDiffFormatter.cs` — zero tests
-- `src/McaDiff/Output/TextDiffFormatter.cs` — zero tests
-- `src/McaDiff/Cli/CliCommon.cs` — zero tests
-- `src/McaDiff/Cli/RepoCommands.cs` — tested only via `RepoCommands.Commit` and `RepoCommands.Clean` in Tier4/Tier5; most commands untested
-- `src/McaDiff/Repo/SshTransport.cs` — zero tests (SSH transport, distinct from signing)
-- `src/McaDiff/Repo/RepoDiffer.cs` — tested in RepoTests but only the happy path
+- `src/McaGit/Repo/StatusCalc.cs` — no test at all
+- `src/McaGit/Nbt/NbtJson.cs` — tested only indirectly via NbtCodecTests; `ToJson`/`FromJson` edge cases (null, empty compound, etc.) not directly tested
+- `src/McaGit/Output/Ansi.cs` — zero tests
+- `src/McaGit/Output/JsonDiffFormatter.cs` — zero tests
+- `src/McaGit/Output/TextDiffFormatter.cs` — zero tests
+- `src/McaGit/Cli/CliCommon.cs` — zero tests
+- `src/McaGit/Cli/RepoCommands.cs` — tested only via `RepoCommands.Commit` and `RepoCommands.Clean` in Tier4/Tier5; most commands untested
+- `src/McaGit/Repo/SshTransport.cs` — zero tests (SSH transport, distinct from signing)
+- `src/McaGit/Repo/RepoDiffer.cs` — tested in RepoTests but only the happy path
 
 ## Major Untested Code Paths (Within Otherwise-Tested Files)
 

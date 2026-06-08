@@ -10,9 +10,9 @@ Implement a new git-style subcommand following the pattern established by tiers 
 1. **Research real git first.** Launch `git-fidelity-researcher` with the command name. Required output: exact flag set worth supporting, exit-code conventions, edge cases (empty repo, detached HEAD, mid-merge state), and where mcagit's chunk-based model forces a deliberate divergence. Do not start coding before this comes back — retrofitting semantics is how subtle git-incompatibilities happen.
 
 2. **Survey the wiring points** (read, don't guess):
-   - `src/McaDiff/Program.cs` — the subcommand switch and `TopUsage` help text
-   - `src/McaDiff/Cli/RepoCommands.cs` — argument parsing + dispatch style for repo commands
-   - `src/McaDiff/Repo/` — one file per feature (`Stash.cs`, `Rebase.cs`, `Bisect.cs` are good templates); note how they use `Repository`, `ObjectStore`, `Snapshotter`, and the reflog
+   - `src/McaGit/Program.cs` — the subcommand switch and `TopUsage` help text
+   - `src/McaGit/Cli/RepoCommands.cs` — argument parsing + dispatch style for repo commands
+   - `src/McaGit/Repo/` — one file per feature (`Stash.cs`, `Rebase.cs`, `Bisect.cs` are good templates); note how they use `Repository`, `ObjectStore`, `Snapshotter`, and the reflog
    - Revision syntax lives in rev-parse handling — if the command takes refs, reuse it (`HEAD~n`, `HEAD@{n}`, abbreviated hashes), never re-parse
 
 3. **Implement**: new `Repo/<Feature>.cs` + a `RepoCommands` entry + the `Program.cs` switch arm + help text. Match the surrounding style (expression-bodied members, doc comments explaining the git parallel). Worktree-mutating commands must honor the bound-worktree model and write reflog entries where git would.

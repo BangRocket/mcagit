@@ -91,7 +91,7 @@ jobs:
       - name: Build
         # Publish once and invoke the binary directly — the gauntlet calls the
         # CLI ~20 times, and `dotnet run` would pay MSBuild evaluation on each.
-        run: dotnet publish src/McaDiff -c Release -o gauntlet-bin
+        run: dotnet publish src/McaGit -c Release -o gauntlet-bin
       - name: Round-trip gauntlet
         shell: bash
         run: |

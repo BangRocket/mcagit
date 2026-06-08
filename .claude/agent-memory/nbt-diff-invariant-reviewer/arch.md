@@ -1,6 +1,6 @@
 ---
 name: codebase-architecture
-description: End-to-end walk of the one-walk-two-sinks invariant, all key file locations, and the IDiffSink event contract
+description: End-to-end walk of the one-walk-two-sinks invariant, all key file locations, and the IDiffSink event contract (namespace is McaGit as of 2026-06-06 rename from McaDiff)
 metadata:
   type: project
 ---
@@ -17,6 +17,10 @@ metadata:
 Two sinks consume these events:
 1. `NbtChangeSink` (display) — flattens Added/Removed subtrees to one row per leaf, summarizes arrays
 2. `PatchOpSink` (patch) — emits one PatchOp per event; added/removed store whole subtree via NbtJson
+
+## Namespace Note (updated 2026-06-06)
+
+All source files were renamed from `McaDiff.*` to `McaGit.*` (namespace + directory) in the `chore/namespace-mcagit` branch. The move was a mechanical 1:1 token swap — zero semantic changes. AssemblyName remains `mcagit`. All paths below reference the new `src/McaGit/` tree.
 
 ## Key File Locations
 

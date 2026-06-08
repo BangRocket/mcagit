@@ -10,7 +10,7 @@ Execute the CLAUDE.md pre-PR checklist mechanically. Do not skip steps; do not s
 1. **Tests first.** Run `dotnet test -c Release`. On machines without the .NET 9 runtime (SDK 10 only), prefix with `DOTNET_ROLL_FORWARD=LatestMajor`. If anything fails, stop — fix before continuing. Set `MCAGIT_TEST_REGION` to `compare-worlds/New_World_Older/region/r.0.0.mca` so the real-region test runs.
 
 2. **Map the diff to agents.** Run `git diff main...HEAD --stat` (or `--name-only`) and match touched paths against the delegation rules:
-   - `src/McaDiff/Diff/`, `Nbt/`, or `Patch/` → launch `nbt-diff-invariant-reviewer`
+   - `src/McaGit/Diff/`, `Nbt/`, or `Patch/` → launch `nbt-diff-invariant-reviewer`
    - substantive changes under `Anvil/`, `Patch/`, or `Repo/` → launch `world-roundtrip-gauntlet`
    - anything reachable from untrusted input — `RepoServer`, transports, `PatchApplier` path handling, `Hooks`, region/packfile parsing → launch `trust-boundary-exploit-hunter`
 

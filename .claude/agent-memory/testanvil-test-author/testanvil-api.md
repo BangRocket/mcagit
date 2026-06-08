@@ -5,7 +5,7 @@ metadata:
   type: reference
 ---
 
-## TestAnvil Static Methods (C:\Users\steven.cady\repos\personal\mcagit\tests\McaDiff.Tests\TestAnvil.cs)
+## TestAnvil Static Methods (C:\Users\steven.cady\repos\personal\mcagit\tests\McaGit.Tests\TestAnvil.cs)
 
 | Method | Signature | Notes |
 |--------|-----------|-------|

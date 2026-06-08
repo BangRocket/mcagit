@@ -72,7 +72,7 @@ Requires the **.NET 10 SDK** (LTS); the only NuGet dependencies (`fNbt`, `K4os.C
 
 ```sh
 dotnet build -c Release
-dotnet run --project src/McaDiff -- <A> <B>     # or run the built mcagit binary
+dotnet run --project src/McaGit -- <A> <B>     # or run the built mcagit binary
 ```
 
 mcagit targets **.NET 10 (LTS)**. The published release binaries are self-contained, so end users need no .NET runtime at all.
@@ -456,7 +456,7 @@ in a couple of seconds.
 ## Architecture
 
 ```text
-src/McaDiff/
+src/McaGit/
   Anvil/     RegionFile, RegionWriter, RawChunk, ChunkPos, — region container
              ChunkCodec                                      read + write
   Nbt/       NbtIdentity, NbtEquality, NbtJson, NbtPath,    — NBT identity, equality,
@@ -474,7 +474,7 @@ src/McaDiff/
   Output/    TextDiffFormatter, JsonDiffFormatter, Ansi     — rendering
   Cli/       Diff/Extract/ApplyOptions, RepoCommands,       — subcommand dispatch
              + Program.cs
-tests/McaDiff.Tests/  xUnit suite (synthetic + real-region parse)
+tests/McaGit.Tests/  xUnit suite (synthetic + real-region parse)
 ```
 
 The Anvil region container (8 KiB sector header + per-chunk compression) is parsed

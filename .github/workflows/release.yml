@@ -59,7 +59,7 @@ jobs:
           set -euo pipefail
           mkdir -p artifacts
           for RID in win-x64 linux-x64 linux-arm64 osx-x64 osx-arm64; do
-            dotnet publish src/McaDiff -c Release -r "$RID" --self-contained \
+            dotnet publish src/McaGit -c Release -r "$RID" --self-contained \
               -p:PublishSingleFile=true -o "publish/$RID"
             case "$RID" in
               win-*) (cd "publish/$RID" && zip -q "../../artifacts/mcagit-${TAG}-${RID}.zip" mcagit.exe) ;;
