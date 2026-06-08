@@ -12,6 +12,7 @@ path = "src/main.rs"
 mca-repo = { workspace = true }
 mca-diff = { workspace = true }
 mca-patch = { workspace = true }
+mca-query = { workspace = true }
 clap = { workspace = true }
 anyhow = { workspace = true }
 serde_json = { workspace = true }

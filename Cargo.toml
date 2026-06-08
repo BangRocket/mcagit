@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = ["crates/nbt", "crates/anvil", "crates/repo", "crates/diff", "crates/patch", "crates/cli"]
+members = ["crates/nbt", "crates/anvil", "crates/repo", "crates/diff", "crates/patch", "crates/query", "crates/cli"]
 
 [workspace.package]
 edition = "2021"
@@ -17,6 +17,7 @@ mca-anvil = { path = "crates/anvil" }
 mca-repo = { path = "crates/repo" }
 mca-diff = { path = "crates/diff" }
 mca-patch = { path = "crates/patch" }
+mca-query = { path = "crates/query" }
 base64 = "0.22"
 flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
 lz4_flex = "0.11"

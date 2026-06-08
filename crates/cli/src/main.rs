@@ -156,6 +156,26 @@ enum Cmd {
         reff: String,
         world: Option<PathBuf>,
     },
+    /// List players (level.dat host + playerdata): position, dimension, health.
+    Players {
+        #[arg(long)]
+        world: Option<PathBuf>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Find entities, block-entities, or signs in a world.
+    Find {
+        /// What to search for: entity | block-entity | sign
+        kind: String,
+        /// id to match (e.g. `zombie`, `chest`); omit to list all of that kind.
+        id: Option<String>,
+        #[arg(long)]
+        world: Option<PathBuf>,
+        #[arg(long)]
+        dim: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -803,7 +823,99 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                 Ok(ExitCode::from(1))
             }
         }
+
+        Cmd::Players { world, json } => {
+            let world = resolve_world(&cli, world)?;
+            let players = mca_query::WorldQuery::new(&world).players()?;
+            if *json {
+                println!("{}", serde_json::to_string_pretty(&players)?);
+            } else {
+                for p in &players {
+                    let pos = p
+                        .pos
+                        .map(|[x, y, z]| format!("({x:.1}, {y:.1}, {z:.1})"))
+                        .unwrap_or_else(|| "?".into());
+                    let dim = p.dimension.as_deref().unwrap_or("?");
+                    let hp = p
+                        .health
+                        .map(|h| format!("{h:.0}"))
+                        .unwrap_or_else(|| "?".into());
+                    println!("{}  {pos}  {dim}  hp={hp}", p.id);
+                }
+                eprintln!("{} player(s)", players.len());
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+
+        Cmd::Find {
+            kind,
+            id,
+            world,
+            dim,
+            json,
+        } => {
+            let world = resolve_world(&cli, world)?;
+            let q = mca_query::WorldQuery::new(&world);
+            let dim = dim.as_deref();
+            match kind.as_str() {
+                "entity" | "e" => {
+                    let hits = q.find_entities(dim, id.as_deref())?;
+                    if *json {
+                        println!("{}", serde_json::to_string_pretty(&hits)?);
+                    } else {
+                        for h in &hits {
+                            let at = h
+                                .pos
+                                .map(|[x, y, z]| format!(" at ({x:.1}, {y:.1}, {z:.1})"))
+                                .unwrap_or_default();
+                            println!("{}{at}", h.id);
+                        }
+                        eprintln!("{} entity(ies)", hits.len());
+                    }
+                }
+                "block-entity" | "block_entity" | "be" => {
+                    print_block_entities(q.find_block_entities(dim, id.as_deref())?, *json)?;
+                }
+                "sign" | "signs" => {
+                    print_block_entities(q.find_signs(dim)?, *json)?;
+                }
+                other => {
+                    return Err(anyhow!(
+                        "unknown find kind '{other}' (use: entity | block-entity | sign)"
+                    ))
+                }
+            }
+            Ok(ExitCode::SUCCESS)
+        }
     }
+}
+
+/// Resolve the world to inspect: an explicit `--world`, else the bound worktree.
+fn resolve_world(cli: &Cli, world: &Option<PathBuf>) -> anyhow::Result<PathBuf> {
+    if let Some(w) = world {
+        return Ok(w.clone());
+    }
+    let repo = open_repo(cli)?;
+    repo.worktree()
+        .map(PathBuf::from)
+        .ok_or_else(|| anyhow!("no world given and no worktree bound; pass --world <path>"))
+}
+
+fn print_block_entities(hits: Vec<mca_query::BlockEntityHit>, json: bool) -> anyhow::Result<()> {
+    if json {
+        println!("{}", serde_json::to_string_pretty(&hits)?);
+    } else {
+        for h in &hits {
+            print!("{} at {},{},{}", h.id, h.x, h.y, h.z);
+            if h.text.is_empty() {
+                println!();
+            } else {
+                println!("  [{}]", h.text.join(" | "));
+            }
+        }
+        eprintln!("{} block-entity(ies)", hits.len());
+    }
+    Ok(())
 }
 
 fn advance(repo: &Repository, target: &str) -> anyhow::Result<()> {

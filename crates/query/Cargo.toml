@@ -1,0 +1,14 @@
+[package]
+name = "mca-query"
+edition.workspace = true
+version.workspace = true
+license.workspace = true
+
+[dependencies]
+mca-nbt = { workspace = true }
+mca-anvil = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

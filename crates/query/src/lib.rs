@@ -1,0 +1,398 @@
+//! `mca-query` — read-only world-state inspection: list players and find
+//! entities, block-entities, and signs across a world's region files. Operates
+//! on a world directory (and an optional dimension); never mutates anything.
+
+use mca_anvil::{codec, RegionFile};
+use mca_nbt::{Compound, NbtValue};
+use std::path::{Path, PathBuf};
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum QueryError {
+    #[error("io error: {0}")]
+    Io(#[from] std::io::Error),
+    #[error("anvil error: {0}")]
+    Anvil(#[from] mca_anvil::AnvilError),
+}
+pub type Result<T> = std::result::Result<T, QueryError>;
+
+/// A located player (from `level.dat` host or `playerdata/<uuid>.dat`).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct PlayerHit {
+    pub id: String,
+    pub source: String,
+    pub pos: Option<[f64; 3]>,
+    pub dimension: Option<String>,
+    pub health: Option<f32>,
+    pub xp_level: Option<i32>,
+}
+
+/// A matched entity.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct EntityHit {
+    pub id: String,
+    pub pos: Option<[f64; 3]>,
+}
+
+/// A matched block-entity (sign hits carry their text lines).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct BlockEntityHit {
+    pub id: String,
+    pub x: i32,
+    pub y: i32,
+    pub z: i32,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub text: Vec<String>,
+}
+
+/// Read-only queries over a world directory.
+pub struct WorldQuery {
+    root: PathBuf,
+}
+
+impl WorldQuery {
+    pub fn new(world: impl Into<PathBuf>) -> Self {
+        Self { root: world.into() }
+    }
+
+    /// Resolve the directory for a dimension (overworld default; `nether`/`-1` →
+    /// `DIM-1`, `end`/`1` → `DIM1`).
+    fn dim_dir(&self, dim: Option<&str>) -> PathBuf {
+        match dim {
+            Some("nether" | "the_nether" | "-1") => self.root.join("DIM-1"),
+            Some("end" | "the_end" | "1") => self.root.join("DIM1"),
+            _ => self.root.clone(),
+        }
+    }
+
+    /// All players: the `level.dat` host (`Data.Player`) plus every
+    /// `playerdata/<uuid>.dat`.
+    pub fn players(&self) -> Result<Vec<PlayerHit>> {
+        let mut out = Vec::new();
+        let level = self.root.join("level.dat");
+        if level.is_file() {
+            if let Ok(v) = codec::load_nbt_file(&level) {
+                if let Some(player) = get(&v, "Data").and_then(|d| get(d, "Player")) {
+                    out.push(player_hit("level.dat".into(), player));
+                }
+            }
+        }
+        let pd = self.root.join("playerdata");
+        if let Ok(entries) = std::fs::read_dir(&pd) {
+            let mut files: Vec<PathBuf> = entries
+                .flatten()
+                .map(|e| e.path())
+                .filter(|p| p.extension().and_then(|s| s.to_str()) == Some("dat"))
+                .collect();
+            files.sort();
+            for f in files {
+                if let Ok(v) = codec::load_nbt_file(&f) {
+                    let uuid = f
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or("?")
+                        .to_string();
+                    out.push(player_hit(uuid, &v));
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// Find entities whose `id` matches `id_filter` (all entities if `None`).
+    pub fn find_entities(
+        &self,
+        dim: Option<&str>,
+        id_filter: Option<&str>,
+    ) -> Result<Vec<EntityHit>> {
+        let mut out = Vec::new();
+        // 1.17+ stores entities in entities/*.mca; older worlds keep them in the
+        // region chunk under "Entities" (or "Level.Entities").
+        for sub in ["entities", "region"] {
+            for root in self.read_chunks(&self.dim_dir(dim).join(sub))? {
+                if let Some(NbtValue::List(items)) = chunk_get(&root, "Entities") {
+                    for e in items {
+                        if let Some(id) = get_str(e, "id") {
+                            if id_matches(id, id_filter) {
+                                out.push(EntityHit {
+                                    id: id.to_string(),
+                                    pos: get_pos(e, "Pos"),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// Find block-entities whose `id` matches `id_filter` (all if `None`).
+    pub fn find_block_entities(
+        &self,
+        dim: Option<&str>,
+        id_filter: Option<&str>,
+    ) -> Result<Vec<BlockEntityHit>> {
+        self.scan_block_entities(dim, &|id| id_matches(id, id_filter))
+    }
+
+    /// Find sign block-entities, extracting their text lines.
+    pub fn find_signs(&self, dim: Option<&str>) -> Result<Vec<BlockEntityHit>> {
+        self.scan_block_entities(dim, &|id| id.contains("sign"))
+    }
+
+    fn scan_block_entities(
+        &self,
+        dim: Option<&str>,
+        keep: &dyn Fn(&str) -> bool,
+    ) -> Result<Vec<BlockEntityHit>> {
+        let mut out = Vec::new();
+        for root in self.read_chunks(&self.dim_dir(dim).join("region"))? {
+            // 1.18+ "block_entities" at chunk root; older "Level.TileEntities".
+            let list =
+                chunk_get(&root, "block_entities").or_else(|| chunk_get(&root, "TileEntities"));
+            if let Some(NbtValue::List(items)) = list {
+                for be in items {
+                    if let Some(id) = get_str(be, "id") {
+                        if keep(id) {
+                            out.push(BlockEntityHit {
+                                id: id.to_string(),
+                                x: get_int(be, "x").unwrap_or(0),
+                                y: get_int(be, "y").unwrap_or(0),
+                                z: get_int(be, "z").unwrap_or(0),
+                                text: sign_text(be),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// Decode every chunk's root NBT from each `*.mca` in `dir`.
+    fn read_chunks(&self, dir: &Path) -> Result<Vec<NbtValue>> {
+        let mut out = Vec::new();
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return Ok(out);
+        };
+        for e in entries.flatten() {
+            let p = e.path();
+            if p.extension().and_then(|s| s.to_str()) != Some("mca") {
+                continue;
+            }
+            let bytes = std::fs::read(&p)?;
+            let rf = RegionFile::parse(&p, &bytes)?;
+            for c in rf.chunks() {
+                if let Ok(v) = codec::decode(c) {
+                    out.push(v);
+                }
+            }
+        }
+        Ok(out)
+    }
+}
+
+// ---- field accessors ----
+
+fn as_compound(v: &NbtValue) -> Option<&Compound> {
+    match v {
+        NbtValue::Compound(m) => Some(m),
+        _ => None,
+    }
+}
+fn get<'a>(v: &'a NbtValue, key: &str) -> Option<&'a NbtValue> {
+    as_compound(v)?.get(key)
+}
+/// Field lookup that tolerates the pre-1.18 `Level` wrapper.
+fn chunk_get<'a>(root: &'a NbtValue, key: &str) -> Option<&'a NbtValue> {
+    get(root, key).or_else(|| get(root, "Level").and_then(|l| get(l, key)))
+}
+fn get_str<'a>(v: &'a NbtValue, key: &str) -> Option<&'a str> {
+    match get(v, key) {
+        Some(NbtValue::String(s)) => Some(s),
+        _ => None,
+    }
+}
+fn get_int(v: &NbtValue, key: &str) -> Option<i32> {
+    match get(v, key)? {
+        NbtValue::Int(x) => Some(*x),
+        NbtValue::Long(x) => Some(*x as i32),
+        NbtValue::Short(x) => Some(*x as i32),
+        NbtValue::Byte(x) => Some(*x as i32),
+        _ => None,
+    }
+}
+fn get_float(v: &NbtValue, key: &str) -> Option<f32> {
+    match get(v, key)? {
+        NbtValue::Float(x) => Some(*x),
+        NbtValue::Double(x) => Some(*x as f32),
+        _ => None,
+    }
+}
+fn get_pos(v: &NbtValue, key: &str) -> Option<[f64; 3]> {
+    let NbtValue::List(l) = get(v, key)? else {
+        return None;
+    };
+    if l.len() < 3 {
+        return None;
+    }
+    let f = |i: usize| match &l[i] {
+        NbtValue::Double(d) => Some(*d),
+        NbtValue::Float(d) => Some(*d as f64),
+        _ => None,
+    };
+    Some([f(0)?, f(1)?, f(2)?])
+}
+
+fn player_hit(source: String, v: &NbtValue) -> PlayerHit {
+    PlayerHit {
+        id: source.clone(),
+        source,
+        pos: get_pos(v, "Pos"),
+        dimension: get_str(v, "Dimension").map(str::to_string),
+        health: get_float(v, "Health"),
+        xp_level: get_int(v, "XpLevel"),
+    }
+}
+
+/// `None` filter matches all; otherwise exact, `minecraft:`-namespaced, or
+/// suffix match (so `find entity zombie` matches `minecraft:zombie`).
+fn id_matches(id: &str, filter: Option<&str>) -> bool {
+    match filter {
+        None => true,
+        Some(f) => id == f || id == format!("minecraft:{f}") || id.ends_with(&format!(":{f}")),
+    }
+}
+
+/// Extract sign text: 1.20+ `front_text`/`back_text` `messages`, else legacy
+/// `Text1..Text4`.
+fn sign_text(be: &NbtValue) -> Vec<String> {
+    let mut out = Vec::new();
+    for side in ["front_text", "back_text"] {
+        if let Some(NbtValue::List(msgs)) = get(be, side).and_then(|s| get(s, "messages")) {
+            for m in msgs {
+                if let NbtValue::String(s) = m {
+                    out.push(s.clone());
+                }
+            }
+        }
+    }
+    if out.is_empty() {
+        for k in ["Text1", "Text2", "Text3", "Text4"] {
+            if let Some(s) = get_str(be, k) {
+                out.push(s.to_string());
+            }
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mca_anvil::{ChunkCompression, ChunkPos, RawChunk, RegionWriter};
+    use mca_nbt::Compound;
+
+    fn comp(pairs: Vec<(&str, NbtValue)>) -> NbtValue {
+        let mut m = Compound::new();
+        for (k, v) in pairs {
+            m.insert(k.into(), v);
+        }
+        NbtValue::Compound(m)
+    }
+    fn pos(x: f64, y: f64, z: f64) -> NbtValue {
+        NbtValue::List(vec![
+            NbtValue::Double(x),
+            NbtValue::Double(y),
+            NbtValue::Double(z),
+        ])
+    }
+    fn write_chunk(path: &Path, root: NbtValue) {
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let payload = codec::encode(&root, ChunkCompression::ZLib).unwrap();
+        let chunk = RawChunk {
+            pos: ChunkPos::new(0, 0),
+            compression: ChunkCompression::ZLib,
+            payload,
+            external: false,
+            timestamp: 0,
+        };
+        RegionWriter::write(path, std::slice::from_ref(&chunk)).unwrap();
+    }
+
+    #[test]
+    fn players_find_entities_and_signs() {
+        let d = tempfile::tempdir().unwrap();
+        let w = d.path().join("World");
+
+        // a player file
+        std::fs::create_dir_all(w.join("playerdata")).unwrap();
+        let player = comp(vec![
+            ("Pos", pos(1.0, 64.0, -3.0)),
+            ("Dimension", NbtValue::String("minecraft:overworld".into())),
+            ("Health", NbtValue::Float(18.0)),
+            ("XpLevel", NbtValue::Int(7)),
+        ]);
+        codec::save_nbt_file(
+            &w.join("playerdata")
+                .join("0bde0058-eef6-4855-b90d-470118f9a8c7.dat"),
+            &player,
+            ChunkCompression::GZip,
+        )
+        .unwrap();
+
+        // a region chunk with a block-entity sign
+        let sign = comp(vec![
+            ("id", NbtValue::String("minecraft:sign".into())),
+            ("x", NbtValue::Int(10)),
+            ("y", NbtValue::Int(70)),
+            ("z", NbtValue::Int(-2)),
+            (
+                "front_text",
+                comp(vec![(
+                    "messages",
+                    NbtValue::List(vec![
+                        NbtValue::String("hello".into()),
+                        NbtValue::String("world".into()),
+                    ]),
+                )]),
+            ),
+        ]);
+        write_chunk(
+            &w.join("region").join("r.0.0.mca"),
+            comp(vec![("block_entities", NbtValue::List(vec![sign]))]),
+        );
+
+        // an entity in entities/*.mca
+        let zombie = comp(vec![
+            ("id", NbtValue::String("minecraft:zombie".into())),
+            ("Pos", pos(5.0, 65.0, 5.0)),
+        ]);
+        write_chunk(
+            &w.join("entities").join("r.0.0.mca"),
+            comp(vec![("Entities", NbtValue::List(vec![zombie]))]),
+        );
+
+        let q = WorldQuery::new(&w);
+
+        let players = q.players().unwrap();
+        assert_eq!(players.len(), 1);
+        assert_eq!(players[0].pos, Some([1.0, 64.0, -3.0]));
+        assert_eq!(players[0].health, Some(18.0));
+
+        let zombies = q.find_entities(None, Some("zombie")).unwrap();
+        assert_eq!(zombies.len(), 1);
+        assert_eq!(zombies[0].id, "minecraft:zombie");
+        assert_eq!(zombies[0].pos, Some([5.0, 65.0, 5.0]));
+        assert!(q.find_entities(None, Some("creeper")).unwrap().is_empty());
+
+        let signs = q.find_signs(None).unwrap();
+        assert_eq!(signs.len(), 1);
+        assert_eq!(signs[0].x, 10);
+        assert_eq!(signs[0].text, vec!["hello", "world"]);
+
+        let all_be = q.find_block_entities(None, None).unwrap();
+        assert_eq!(all_be.len(), 1);
+    }
+}

@@ -444,6 +444,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "mca-query"
+version = "0.8.0"
+dependencies = [
+ "mca-anvil",
+ "mca-nbt",
+ "serde",
+ "tempfile",
+ "thiserror",
+]
+
+[[package]]
 name = "mca-repo"
 version = "0.8.0"
 dependencies = [
@@ -471,6 +482,7 @@ dependencies = [
  "mca-diff",
  "mca-nbt",
  "mca-patch",
+ "mca-query",
  "mca-repo",
  "serde_json",
  "tempfile",
