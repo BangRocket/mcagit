@@ -236,6 +236,13 @@ enum Cmd {
         #[arg(long)]
         json: bool,
     },
+    /// Serve a directory of repos over HTTP at /r/<name>/ (the hub transport).
+    Serve {
+        /// Directory holding bare repos (served + auto-created under /r/<name>).
+        root: PathBuf,
+        #[arg(long, default_value = "127.0.0.1:5080")]
+        addr: String,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1088,6 +1095,11 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                 }
                 eprintln!("{} point(s) of interest", pois.len());
             }
+            Ok(ExitCode::SUCCESS)
+        }
+
+        Cmd::Serve { root, addr } => {
+            mca_repo::serve(root, addr)?;
             Ok(ExitCode::SUCCESS)
         }
     }

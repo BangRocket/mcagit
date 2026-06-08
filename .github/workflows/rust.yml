@@ -46,3 +46,19 @@ jobs:
           "$BIN" -C repo verify "$H" co
           "$BIN" -C repo fsck
           echo "e2e OK"
+      - name: http transport round-trip (serve + push/clone/fetch)
+        run: |
+          set -u
+          BIN=target/release/mcagit
+          NEW=compare-worlds/New_World_Newer
+          "$BIN" serve hub --addr 127.0.0.1:5099 >serve.log 2>&1 &
+          SRV=$!; sleep 2
+          "$BIN" init local
+          H=$("$BIN" -C local commit -m w "$NEW")
+          "$BIN" -C local push http://127.0.0.1:5099/r/world main
+          "$BIN" -C local ls-remote http://127.0.0.1:5099/r/world | grep -q "$H" || { echo "FAIL: ls-remote"; kill $SRV; exit 1; }
+          "$BIN" clone http://127.0.0.1:5099/r/world cloned
+          "$BIN" -C cloned checkout "$H" out
+          "$BIN" -C cloned verify "$H" out || { echo "FAIL: cloned world does not verify"; kill $SRV; exit 1; }
+          kill $SRV 2>/dev/null || true
+          echo "http e2e OK"

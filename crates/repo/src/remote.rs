@@ -80,15 +80,114 @@ impl Transport for LocalTransport {
     }
 }
 
-const NET_SCHEMES: [&str; 5] = ["http://", "https://", "ssh://", "s3://", "azure://"];
+/// HTTP(S) transport speaking the mcagit hub protocol against a repo URL such as
+/// `http://host:5080/r/<name>`. Object bodies carry decompressed content (the
+/// server re-hashes with blake3 on store); a bearer PAT comes from `MCAGIT_TOKEN`.
+pub struct HttpTransport {
+    base: String,
+    token: Option<String>,
+}
 
-/// Dispatch a remote URL/path to a transport. Local filesystem paths work today;
-/// http/ssh and cloud backends are tracked but not yet implemented.
+impl HttpTransport {
+    pub fn new(url: &str) -> Self {
+        Self {
+            base: url.trim_end_matches('/').to_string(),
+            token: std::env::var("MCAGIT_TOKEN").ok().filter(|s| !s.is_empty()),
+        }
+    }
+
+    fn bearer<B>(&self, b: ureq::RequestBuilder<B>) -> ureq::RequestBuilder<B> {
+        match &self.token {
+            Some(t) => b.header("Authorization", format!("Bearer {t}")),
+            None => b,
+        }
+    }
+}
+
+fn http_err<E: std::fmt::Display>(e: E) -> RepoError {
+    RepoError::Other(format!("http transport: {e}"))
+}
+
+impl Transport for HttpTransport {
+    fn list_refs(&self) -> Result<Vec<(String, String)>> {
+        let url = format!("{}/info/refs", self.base);
+        let adv: serde_json::Value = self
+            .bearer(ureq::get(&url))
+            .call()
+            .map_err(http_err)?
+            .body_mut()
+            .read_json()
+            .map_err(http_err)?;
+        let mut out = Vec::new();
+        for (kind, prefix) in [("branches", "refs/heads/"), ("tags", "refs/tags/")] {
+            if let Some(map) = adv.get(kind).and_then(|v| v.as_object()) {
+                for (name, hash) in map {
+                    if let Some(h) = hash.as_str() {
+                        out.push((format!("{prefix}{name}"), h.to_string()));
+                    }
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    fn get_object(&self, id: &str) -> Result<Vec<u8>> {
+        let url = format!("{}/objects/{id}", self.base);
+        self.bearer(ureq::get(&url))
+            .call()
+            .map_err(http_err)?
+            .body_mut()
+            .read_to_vec()
+            .map_err(http_err)
+    }
+
+    fn missing(&self, ids: &[String]) -> Result<Vec<String>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let url = format!("{}/have", self.base);
+        let missing: Vec<String> = self
+            .bearer(ureq::post(&url))
+            .send_json(ids)
+            .map_err(http_err)?
+            .body_mut()
+            .read_json()
+            .map_err(http_err)?;
+        Ok(missing)
+    }
+
+    fn put_object(&self, content: &[u8]) -> Result<()> {
+        let id = blake3::hash(content).to_hex().to_string();
+        let url = format!("{}/objects/{id}", self.base);
+        self.bearer(ureq::post(&url))
+            .send(content)
+            .map_err(http_err)?;
+        Ok(())
+    }
+
+    fn set_branch(&self, branch: &str, hash: &str) -> Result<()> {
+        let url = format!("{}/refs/heads/{branch}", self.base);
+        let body =
+            serde_json::json!({ "old": serde_json::Value::Null, "new": hash, "force": true });
+        self.bearer(ureq::post(&url))
+            .send_json(&body)
+            .map_err(http_err)?;
+        Ok(())
+    }
+}
+
+const STUB_SCHEMES: [&str; 3] = ["ssh://", "s3://", "azure://"];
+
+/// Dispatch a remote URL/path to a transport: `http(s)://` → [`HttpTransport`],
+/// a local filesystem path → [`LocalTransport`]. ssh/cloud are not yet built.
 pub fn connect(url_or_path: &str) -> Result<Box<dyn Transport>> {
     let lower = url_or_path.to_ascii_lowercase();
-    if let Some(scheme) = NET_SCHEMES.iter().find(|s| lower.starts_with(**s)) {
+    if lower.starts_with("http://") || lower.starts_with("https://") {
+        return Ok(Box::new(HttpTransport::new(url_or_path)));
+    }
+    if let Some(scheme) = STUB_SCHEMES.iter().find(|s| lower.starts_with(**s)) {
         return Err(RepoError::Other(format!(
-            "remote transport not yet implemented: {scheme} — local-path remotes work today"
+            "remote transport not yet implemented: {scheme} — use http(s):// or a local path"
         )));
     }
     Ok(Box::new(LocalTransport::open(Path::new(url_or_path))?))
@@ -264,8 +363,11 @@ mod tests {
     }
 
     #[test]
-    fn network_schemes_are_stubbed() {
-        for url in ["http://x/y", "ssh://h/p", "s3://b/k", "azure://a/c"] {
+    fn scheme_dispatch() {
+        // http(s) construct a transport (no request made yet); ssh/cloud stubbed.
+        assert!(connect("http://x/y").is_ok());
+        assert!(connect("https://x/y").is_ok());
+        for url in ["ssh://h/p", "s3://b/k", "azure://a/c"] {
             assert!(connect(url).is_err(), "{url} should be unimplemented");
         }
     }
