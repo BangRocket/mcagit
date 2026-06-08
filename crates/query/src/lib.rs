@@ -18,6 +18,9 @@ pub enum QueryError {
 }
 pub type Result<T> = std::result::Result<T, QueryError>;
 
+pub mod render;
+pub use render::{render_map, MapInfo};
+
 /// A located player (from `level.dat` host or `playerdata/<uuid>.dat`).
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct PlayerHit {

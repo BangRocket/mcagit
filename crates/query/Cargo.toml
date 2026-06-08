@@ -9,6 +9,7 @@ mca-nbt = { workspace = true }
 mca-anvil = { workspace = true }
 serde = { workspace = true }
 thiserror = { workspace = true }
+flate2 = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

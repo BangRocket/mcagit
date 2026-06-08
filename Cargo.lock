@@ -669,6 +669,7 @@ dependencies = [
 name = "mca-query"
 version = "0.8.0"
 dependencies = [
+ "flate2",
  "mca-anvil",
  "mca-nbt",
  "serde",

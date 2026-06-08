@@ -243,6 +243,16 @@ enum Cmd {
         #[arg(long, default_value = "127.0.0.1:5080")]
         addr: String,
     },
+    /// Render a top-down surface map of a world to a PNG.
+    Render {
+        world: Option<PathBuf>,
+        #[arg(short = 'o', long, default_value = "map.png")]
+        out: PathBuf,
+        #[arg(long)]
+        dim: Option<String>,
+        #[arg(long, default_value_t = 10_000)]
+        max_chunks: usize,
+    },
 }
 
 #[derive(Subcommand)]
@@ -1100,6 +1110,26 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
 
         Cmd::Serve { root, addr } => {
             mca_repo::serve(root, addr)?;
+            Ok(ExitCode::SUCCESS)
+        }
+
+        Cmd::Render {
+            world,
+            out,
+            dim,
+            max_chunks,
+        } => {
+            let world = resolve_world(&cli, world)?;
+            let (png, info) = mca_query::render_map(&world, dim.as_deref(), *max_chunks)?;
+            std::fs::write(out, &png)?;
+            eprintln!(
+                "rendered {}x{} ({} chunks{}) -> {}",
+                info.width,
+                info.height,
+                info.chunks,
+                if info.truncated { ", truncated" } else { "" },
+                out.display()
+            );
             Ok(ExitCode::SUCCESS)
         }
     }
