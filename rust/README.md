@@ -8,7 +8,7 @@ See the design + plans under `../docs/superpowers/`.
 
 ## Workspace
 
-```
+```text
 crates/
   nbt/     mca-nbt    NBT model, big-endian read/write (modified-UTF8), canonical bytes,
                       list-element identity, the path language, lossless type-tagged JSON

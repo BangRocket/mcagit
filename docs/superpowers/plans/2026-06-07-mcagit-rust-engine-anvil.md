@@ -14,7 +14,7 @@
 
 ## File Structure
 
-```
+```text
 rust/
   Cargo.toml                    +member crates/anvil; +workspace deps flate2, lz4_flex, tempfile, mca-nbt(path)
   crates/anvil/
@@ -34,6 +34,7 @@ Responsibilities: `compression` is the only place raw (de)compression lives; `ch
 ## Task 1: Crate scaffold + workspace wiring
 
 **Files:**
+
 - Modify: `rust/Cargo.toml`
 - Create: `rust/crates/anvil/Cargo.toml`
 - Create: `rust/crates/anvil/src/lib.rs`
@@ -41,10 +42,13 @@ Responsibilities: `compression` is the only place raw (de)compression lives; `ch
 - [ ] **Step 1: Add the crate to the workspace and declare shared deps**
 
 In `rust/Cargo.toml`, change the `members` line to:
+
 ```toml
 members = ["crates/nbt", "crates/anvil"]
 ```
+
 and add these entries under `[workspace.dependencies]` (keep the existing ones):
+
 ```toml
 mca-nbt = { path = "crates/nbt" }
 flate2 = "1"
@@ -55,6 +59,7 @@ tempfile = "3"
 - [ ] **Step 2: Create the anvil crate manifest**
 
 `rust/crates/anvil/Cargo.toml`:
+
 ```toml
 [package]
 name = "mca-anvil"
@@ -75,6 +80,7 @@ tempfile = { workspace = true }
 - [ ] **Step 3: Create lib.rs with the crate error type**
 
 `rust/crates/anvil/src/lib.rs`:
+
 ```rust
 //! `mca-anvil` — Anvil region container read/write + chunk codec over `mca-nbt`.
 
@@ -118,12 +124,14 @@ git commit -m "feat(anvil): scaffold mca-anvil crate"
 ## Task 2: ChunkCompression
 
 **Files:**
+
 - Create: `rust/crates/anvil/src/compression.rs`
 - Modify: `rust/crates/anvil/src/lib.rs` (add `pub mod compression;` + re-export)
 
 - [ ] **Step 1: Write the enum + byte mapping with tests**
 
 `rust/crates/anvil/src/compression.rs` (the full codec is added in Task 4; start with the enum):
+
 ```rust
 //! Chunk payload compression schemes and their codecs.
 
@@ -190,6 +198,7 @@ mod tests {
 - [ ] **Step 2: Wire the module**
 
 In `rust/crates/anvil/src/lib.rs`, after the `Result` alias:
+
 ```rust
 pub mod compression;
 pub use compression::ChunkCompression;
@@ -212,12 +221,14 @@ git commit -m "feat(anvil): ChunkCompression scheme + byte mapping"
 ## Task 3: ChunkPos + RawChunk
 
 **Files:**
+
 - Create: `rust/crates/anvil/src/chunk.rs`
 - Modify: `rust/crates/anvil/src/lib.rs` (add `pub mod chunk;` + re-export)
 
 - [ ] **Step 1: Write coordinate math + raw record with tests**
 
 `rust/crates/anvil/src/chunk.rs`:
+
 ```rust
 //! Chunk coordinates and the raw (still-compressed) chunk record.
 
@@ -307,6 +318,7 @@ mod tests {
 - [ ] **Step 2: Wire the module**
 
 In `rust/crates/anvil/src/lib.rs`:
+
 ```rust
 pub mod chunk;
 pub use chunk::{ChunkPos, RawChunk};
@@ -329,6 +341,7 @@ git commit -m "feat(anvil): ChunkPos coordinate math + RawChunk"
 ## Task 4: Payload (de)compression codecs
 
 **Files:**
+
 - Modify: `rust/crates/anvil/src/compression.rs` (append codec functions + tests)
 
 - [ ] **Step 1: Append the codecs and a bounded inflate**
@@ -336,6 +349,7 @@ git commit -m "feat(anvil): ChunkPos coordinate math + RawChunk"
 Add to the top of `rust/crates/anvil/src/compression.rs` (imports), and append the functions after the `impl ChunkCompression` block (before the `#[cfg(test)]` module):
 
 Imports at the very top of the file:
+
 ```rust
 use crate::{AnvilError, Result};
 use flate2::read::{GzDecoder, ZlibDecoder};
@@ -346,6 +360,7 @@ use std::io::{Read, Write};
 ```
 
 Functions (append before `#[cfg(test)]`):
+
 ```rust
 /// Generous cap so a crafted payload can't inflate to gigabytes and OOM us.
 const MAX_INFLATED: u64 = 128 * 1024 * 1024;
@@ -407,6 +422,7 @@ pub fn compress(scheme: ChunkCompression, raw: &[u8]) -> Result<Vec<u8>> {
 - [ ] **Step 2: Add codec round-trip tests**
 
 Inside the existing `#[cfg(test)] mod tests` block in `compression.rs`, add:
+
 ```rust
     #[test]
     fn compress_decompress_roundtrip_all_schemes() {
@@ -453,12 +469,14 @@ git commit -m "feat(anvil): zlib/gzip/none/lz4 payload codecs (bounded inflate)"
 ## Task 5: Chunk + NBT-file codec
 
 **Files:**
+
 - Create: `rust/crates/anvil/src/codec.rs`
 - Modify: `rust/crates/anvil/src/lib.rs` (add `pub mod codec;` + re-export)
 
 - [ ] **Step 1: Write decode/encode + standalone NBT file load/save with tests**
 
 `rust/crates/anvil/src/codec.rs`:
+
 ```rust
 //! Bridge between raw chunk payloads / `.dat` files and `mca-nbt` values.
 
@@ -555,6 +573,7 @@ mod tests {
 - [ ] **Step 2: Wire the module**
 
 In `rust/crates/anvil/src/lib.rs`:
+
 ```rust
 pub mod codec;
 ```
@@ -576,12 +595,14 @@ git commit -m "feat(anvil): chunk + standalone NBT file codec over mca-nbt"
 ## Task 6: RegionWriter
 
 **Files:**
+
 - Create: `rust/crates/anvil/src/region.rs`
 - Modify: `rust/crates/anvil/src/lib.rs` (add `pub mod region;` + re-export `RegionWriter`)
 
 - [ ] **Step 1: Write the region writer**
 
 `rust/crates/anvil/src/region.rs`:
+
 ```rust
 //! Anvil region container (`r.X.Z.mca`): the 8 KiB header + sector-aligned bodies.
 
@@ -660,12 +681,14 @@ impl RegionWriter {
 - [ ] **Step 2: Wire the module**
 
 In `rust/crates/anvil/src/lib.rs`:
+
 ```rust
 pub mod region;
 pub use region::{RegionFile, RegionWriter};
 ```
 
 (Note: `RegionFile` is added in Task 7; this re-export line compiles only after Task 7. To keep this task green, temporarily re-export just the writer:)
+
 ```rust
 pub mod region;
 pub use region::RegionWriter;
@@ -688,12 +711,14 @@ git commit -m "feat(anvil): RegionWriter (header + sector-aligned bodies, .mcc s
 ## Task 7: RegionFile reader + round-trip
 
 **Files:**
+
 - Modify: `rust/crates/anvil/src/region.rs` (add `RegionFile` + tests)
 - Modify: `rust/crates/anvil/src/lib.rs` (re-export `RegionFile`)
 
 - [ ] **Step 1: Add the reader**
 
 At the top of `rust/crates/anvil/src/region.rs`, extend the imports:
+
 ```rust
 use crate::chunk::{ChunkPos, RawChunk};
 use crate::compression::ChunkCompression;
@@ -701,9 +726,11 @@ use crate::{AnvilError, Result};
 use std::collections::HashMap;
 use std::path::Path;
 ```
+
 (Replace the existing `use crate::chunk::RawChunk;` and `use crate::Result;` lines with the block above.)
 
 Append after the `impl RegionWriter` block:
+
 ```rust
 /// Reader for the Anvil region container. Parses the 8 KiB header and exposes
 /// each present chunk's raw compressed bytes (external `.mcc` bodies are loaded
@@ -840,6 +867,7 @@ impl RegionFile {
 - [ ] **Step 2: Update the re-export**
 
 In `rust/crates/anvil/src/lib.rs`, change the region re-export to include the reader:
+
 ```rust
 pub mod region;
 pub use region::{RegionFile, RegionWriter};
@@ -848,6 +876,7 @@ pub use region::{RegionFile, RegionWriter};
 - [ ] **Step 3: Add round-trip tests (writer → reader, incl. external spill)**
 
 Append to `rust/crates/anvil/src/region.rs`:
+
 ```rust
 #[cfg(test)]
 mod tests {
@@ -952,11 +981,13 @@ git commit -m "feat(anvil): RegionFile reader + write/read round-trip tests"
 ## Task 8: Real-region gate + crate-wide lint/test gate (M2 gate)
 
 **Files:**
+
 - Modify: `rust/crates/anvil/src/region.rs` (add an env-gated real-region test)
 
 - [ ] **Step 1: Add an env-gated round-trip test against a real region**
 
 Append inside the `#[cfg(test)] mod tests` block in `region.rs`:
+
 ```rust
     // Round-trips a real region (decode -> encode -> decode == equal NBT for every
     // decodable chunk). Set MCAGIT_TEST_REGION to an r.X.Z.mca path to run it;
@@ -997,18 +1028,22 @@ Expected: all anvil tests pass (≈ 15), the real-region test prints "skipping�
 - [ ] **Step 3: Run the M2 gate against a real dobbscraft region**
 
 Run (substitute any present region; pick one from the newest snapshot's overworld):
+
 ```bash
 cd rust && MCAGIT_TEST_REGION="$(ls -1 /Volumes/Storage/Code/minecraft/dobbscraft-snapshots/2026-05-31_05-39-05/New_World/region/r.*.mca | head -1)" \
   cargo test -p mca-anvil real_region_chunks_roundtrip -- --nocapture
 ```
+
 Expected: prints "round-tripped N chunks…" with N > 0, test passes. **This is the M2 gate.**
 
 - [ ] **Step 4: Workspace-wide green + lint gate**
 
 Run:
+
 ```bash
 cd rust && cargo test --all && cargo fmt --all -- --check && cargo clippy --all-targets -- -D warnings
 ```
+
 Expected: all tests pass (nbt + anvil), fmt clean, clippy clean.
 
 - [ ] **Step 5: Commit (incl. any fmt fixes)**

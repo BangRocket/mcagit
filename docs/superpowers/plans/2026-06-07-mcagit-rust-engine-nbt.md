@@ -14,7 +14,7 @@
 
 ## File Structure
 
-```
+```text
 rust/
   Cargo.toml                      workspace manifest (members, shared deps)
   rust-toolchain.toml             pin stable toolchain
@@ -41,6 +41,7 @@ Responsibilities: `value` owns the data model; `mutf8`/`read`/`write` own binary
 ## Task 1: Workspace + crate scaffold (M0)
 
 **Files:**
+
 - Create: `rust/Cargo.toml`
 - Create: `rust/rust-toolchain.toml`
 - Create: `rust/crates/nbt/Cargo.toml`
@@ -49,6 +50,7 @@ Responsibilities: `value` owns the data model; `mutf8`/`read`/`write` own binary
 - [ ] **Step 1: Create the workspace manifest**
 
 `rust/Cargo.toml`:
+
 ```toml
 [workspace]
 resolver = "2"
@@ -74,6 +76,7 @@ codegen-units = 1
 - [ ] **Step 2: Pin the toolchain**
 
 `rust/rust-toolchain.toml`:
+
 ```toml
 [toolchain]
 channel = "stable"
@@ -83,6 +86,7 @@ components = ["rustfmt", "clippy"]
 - [ ] **Step 3: Create the nbt crate manifest**
 
 `rust/crates/nbt/Cargo.toml`:
+
 ```toml
 [package]
 name = "mca-nbt"
@@ -100,6 +104,7 @@ thiserror = { workspace = true }
 - [ ] **Step 4: Create a minimal lib.rs so the workspace builds**
 
 `rust/crates/nbt/src/lib.rs`:
+
 ```rust
 //! `mca-nbt` — NBT tag model, binary codec, canonical form, identity, path, JSON.
 
@@ -144,11 +149,13 @@ git commit -m "feat(rust): scaffold cargo workspace + mca-nbt crate skeleton"
 ## Task 2: CI workflow (M0 gate)
 
 **Files:**
+
 - Create: `.github/workflows/rust.yml`
 
 - [ ] **Step 1: Add the Rust CI workflow**
 
 `.github/workflows/rust.yml`:
+
 ```yaml
 name: rust
 on:
@@ -189,12 +196,14 @@ git commit -m "ci(rust): fmt + clippy + test workflow for rust/"
 ## Task 3: Modified-UTF8 codec (`mutf8`)
 
 **Files:**
+
 - Create: `rust/crates/nbt/src/mutf8.rs`
 - Modify: `rust/crates/nbt/src/lib.rs` (add `mod mutf8;`)
 
 - [ ] **Step 1: Write the failing tests**
 
 `rust/crates/nbt/src/mutf8.rs`:
+
 ```rust
 //! Java "modified UTF-8" (CESU-8 + U+0000 as 0xC0 0x80) used for NBT strings.
 
@@ -248,6 +257,7 @@ mod tests {
 - [ ] **Step 2: Wire the module**
 
 In `rust/crates/nbt/src/lib.rs`, add after the `Result` alias:
+
 ```rust
 pub mod mutf8;
 ```
@@ -269,12 +279,14 @@ git commit -m "feat(nbt): modified-UTF8 string codec"
 ## Task 4: NBT value model (`value`)
 
 **Files:**
+
 - Create: `rust/crates/nbt/src/value.rs`
 - Modify: `rust/crates/nbt/src/lib.rs` (add `mod value;` + re-export)
 
 - [ ] **Step 1: Write the value model and its test**
 
 `rust/crates/nbt/src/value.rs`:
+
 ```rust
 //! The NBT data model.
 
@@ -335,6 +347,7 @@ mod tests {
 - [ ] **Step 2: Wire + re-export**
 
 In `rust/crates/nbt/src/lib.rs` add:
+
 ```rust
 pub mod value;
 pub use value::{tag_id, Compound, NbtValue};
@@ -357,12 +370,14 @@ git commit -m "feat(nbt): NbtValue model + tag_id"
 ## Task 5: Binary reader (`read`)
 
 **Files:**
+
 - Create: `rust/crates/nbt/src/read.rs`
 - Modify: `rust/crates/nbt/src/lib.rs` (add `mod read;` + re-export `read`)
 
 - [ ] **Step 1: Write the reader and a unit test**
 
 `rust/crates/nbt/src/read.rs`:
+
 ```rust
 //! Big-endian NBT binary reader.
 
@@ -511,6 +526,7 @@ mod tests {
 - [ ] **Step 2: Wire + re-export**
 
 In `rust/crates/nbt/src/lib.rs` add:
+
 ```rust
 pub mod read;
 pub use read::read;
@@ -533,12 +549,14 @@ git commit -m "feat(nbt): big-endian binary reader"
 ## Task 6: Binary writer (`write`) + round-trip
 
 **Files:**
+
 - Create: `rust/crates/nbt/src/write.rs`
 - Modify: `rust/crates/nbt/src/lib.rs` (add `mod write;` + re-export `write_named`)
 
 - [ ] **Step 1: Write the writer with a round-trip test**
 
 `rust/crates/nbt/src/write.rs`:
+
 ```rust
 //! Big-endian NBT binary writer.
 
@@ -657,6 +675,7 @@ mod tests {
 - [ ] **Step 2: Wire + re-export**
 
 In `rust/crates/nbt/src/lib.rs` add:
+
 ```rust
 pub mod write;
 pub use write::write_named;
@@ -679,12 +698,14 @@ git commit -m "feat(nbt): big-endian binary writer + round-trip"
 ## Task 7: Canonical bytes (`canonical`)
 
 **Files:**
+
 - Create: `rust/crates/nbt/src/canonical.rs`
 - Modify: `rust/crates/nbt/src/lib.rs` (add `mod canonical;` + re-export)
 
 - [ ] **Step 1: Write canonical + determinism test**
 
 `rust/crates/nbt/src/canonical.rs`:
+
 ```rust
 //! Deterministic canonical byte form: compound keys are emitted sorted, with a
 //! fixed empty root name, so equal content hashes identically regardless of
@@ -744,6 +765,7 @@ mod tests {
 - [ ] **Step 2: Wire + re-export**
 
 In `rust/crates/nbt/src/lib.rs` add:
+
 ```rust
 pub mod canonical;
 pub use canonical::canonical_bytes;
@@ -766,6 +788,7 @@ git commit -m "feat(nbt): deterministic canonical bytes"
 ## Task 8: List-element identity (`identity`)
 
 **Files:**
+
 - Create: `rust/crates/nbt/src/identity.rs`
 - Modify: `rust/crates/nbt/src/lib.rs` (add `mod identity;` + re-export)
 
@@ -774,6 +797,7 @@ Mirrors `src/McaGit/Nbt/NbtIdentity.cs`: a stable key for matching a compound ac
 - [ ] **Step 1: Write identity + tests**
 
 `rust/crates/nbt/src/identity.rs`:
+
 ```rust
 //! Stable identity key for matching list elements across versions.
 
@@ -871,6 +895,7 @@ mod tests {
 - [ ] **Step 2: Wire + re-export**
 
 In `rust/crates/nbt/src/lib.rs` add:
+
 ```rust
 pub mod identity;
 pub use identity::identity_key;
@@ -893,6 +918,7 @@ git commit -m "feat(nbt): list-element identity keys"
 ## Task 9: Path language (`path`)
 
 **Files:**
+
 - Create: `rust/crates/nbt/src/path.rs`
 - Modify: `rust/crates/nbt/src/lib.rs` (add `mod path;` + re-export)
 
@@ -901,6 +927,7 @@ Mirrors `src/McaGit/Nbt/NbtPath.cs`. Path syntax: dot-separated keys, with `[n]`
 - [ ] **Step 1: Write the path parser + traversal + tests**
 
 `rust/crates/nbt/src/path.rs`:
+
 ```rust
 //! The NBT path language: addressing nodes by key, list index, or identity.
 
@@ -1151,6 +1178,7 @@ mod tests {
 - [ ] **Step 2: Wire + re-export**
 
 In `rust/crates/nbt/src/lib.rs` add:
+
 ```rust
 pub mod path;
 pub use path::NbtPath;
@@ -1173,6 +1201,7 @@ git commit -m "feat(nbt): path language (get/set/remove by key, index, identity)
 ## Task 10: Lossless type-tagged JSON (`json`)
 
 **Files:**
+
 - Create: `rust/crates/nbt/src/json.rs`
 - Modify: `rust/crates/nbt/src/lib.rs` (add `mod json;` + re-export)
 
@@ -1181,6 +1210,7 @@ Mirrors `src/McaGit/Nbt/NbtJson.cs`: each value becomes a single-key object tagg
 - [ ] **Step 1: Write to_json / from_json + round-trip test**
 
 `rust/crates/nbt/src/json.rs`:
+
 ```rust
 //! Lossless, type-tagged JSON encoding of NBT (longs as strings).
 
@@ -1326,6 +1356,7 @@ mod tests {
 - [ ] **Step 2: Wire + re-export**
 
 In `rust/crates/nbt/src/lib.rs` add:
+
 ```rust
 pub mod json;
 pub use json::{from_json, to_json};

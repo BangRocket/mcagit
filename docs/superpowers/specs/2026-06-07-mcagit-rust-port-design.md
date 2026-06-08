@@ -20,6 +20,7 @@ to be readable by the Rust tool.
 ## Goals & Non-Goals
 
 ### Goals
+
 - **Full parity** with all 35 .NET subcommands and their git-like semantics (exit codes
   `0`/`1`/`2`, `-C <repo>`, revision syntax, `.mcaignore`, hooks, SSH signing, cloud remotes).
 - **Speed on four axes:**
@@ -31,6 +32,7 @@ to be readable by the Rust tool.
   Minecraft; round-trip invariants hold.
 
 ### Non-Goals
+
 - On-disk/wire compatibility with .NET repos (clean-slate; no cross-tool repo interop).
 - Matching Minecraft's exact compressed bytes (we choose compression levels for speed).
 - Preserving the .NET object-store format, packfile format, or hash algorithm.
@@ -63,7 +65,7 @@ repo** under `rust/` during the port, so the .NET binary can serve as a live cor
 oracle and we can reuse `compare-worlds/` + the dobbscraft snapshots and one PR history.
 It may split into its own repo once it reaches parity.
 
-```
+```text
 rust/
   Cargo.toml                 (workspace)
   crates/
@@ -78,6 +80,7 @@ rust/
 ```
 
 ### Module responsibilities (mirrors the .NET layering)
+
 - **`mca-nbt`** — semantic foundation: `NbtValue`, parse/write, `NbtIdentity` (list-element
   matching), `NbtPath` (path language), `NbtCanonical` (deterministic bytes), `NbtJson`
   (lossless type-tagged JSON).
