@@ -37,6 +37,7 @@ The 3 existing `Packfile.Write` callers (`Gc.cs:52`, `BucketTransport.cs:101`, `
 Locks in current serial behavior before the refactor. It passes against today's code.
 
 **Files:**
+
 - Create: `tests/McaGit.Tests/PackfileTests.cs`
 
 - [ ] **Step 1: Write the test file**
@@ -117,6 +118,7 @@ git commit -m "test: characterize Packfile.Write round-trip"
 ### Task 2: Extract `WriteSegment` from `Write` (behavior-preserving refactor)
 
 **Files:**
+
 - Modify: `src/McaGit/Repo/Packfile.cs` (the `Write` method, ~lines 134-201; the `using` block, ~lines 1-4)
 
 - [ ] **Step 1: Add the `McaGit.Output` using**
@@ -247,6 +249,7 @@ git commit -m "refactor: extract Packfile.WriteSegment from Write"
 ### Task 3: Add `Packfile.WriteParallel` + `PartitionByBytes`
 
 **Files:**
+
 - Modify: `src/McaGit/Repo/Packfile.cs`
 - Modify: `tests/McaGit.Tests/PackfileTests.cs`
 
@@ -424,6 +427,7 @@ git commit -m "feat: parallel Packfile.WriteParallel (segment-parallel, serial c
 ### Task 4: Wire `Gc.Repack` to threads + progress
 
 **Files:**
+
 - Modify: `src/McaGit/Repo/ObjectStore.cs`
 - Modify: `src/McaGit/Repo/Gc.cs`
 
@@ -507,6 +511,7 @@ git commit -m "feat: Gc.Repack drives parallel pack writing + progress"
 ### Task 5: `GcCmd` — `--threads` flag + Progress reporter, with an integration test
 
 **Files:**
+
 - Modify: `src/McaGit/Cli/RepoCommands.cs` (the `GcCmd` method)
 - Modify: `tests/McaGit.Tests/PackAtCommitTests.cs`
 
@@ -601,6 +606,7 @@ git commit -m "feat: gc --threads + progress reporter"
 ### Task 6: Document `gc --threads` and progress in the README
 
 **Files:**
+
 - Modify: `README.md`
 
 - [ ] **Step 1: Find the gc section**
