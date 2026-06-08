@@ -16,8 +16,11 @@ pub fn to_json(v: &NbtValue) -> J {
         NbtValue::Short(x) => obj("short", J::from(*x)),
         NbtValue::Int(x) => obj("int", J::from(*x)),
         NbtValue::Long(x) => obj("long", J::from(x.to_string())),
-        NbtValue::Float(x) => obj("float", J::from(*x)),
-        NbtValue::Double(x) => obj("double", J::from(*x)),
+        // Floats/doubles are string-encoded (like longs) so the value round-trips
+        // bit-for-bit: serde_json's default float *parser* is up to 1 ULP lossy,
+        // and NaN/Inf have no JSON-number form. Rust's f32/f64 <-> string is exact.
+        NbtValue::Float(x) => obj("float", J::from(x.to_string())),
+        NbtValue::Double(x) => obj("double", J::from(x.to_string())),
         NbtValue::ByteArray(b) => obj("byteArray", J::from(b.clone())),
         NbtValue::String(s) => obj("string", J::from(s.clone())),
         NbtValue::List(items) => obj("list", J::Array(items.iter().map(to_json).collect())),
@@ -65,8 +68,17 @@ pub fn from_json(j: &J) -> Result<NbtValue> {
                 .parse()
                 .map_err(|_| bad("long"))?,
         ),
-        "float" => NbtValue::Float(val.as_f64().ok_or_else(|| bad("float"))? as f32),
-        "double" => NbtValue::Double(val.as_f64().ok_or_else(|| bad("double"))?),
+        // Prefer the exact string form; accept a legacy JSON-number form too.
+        "float" => NbtValue::Float(match val.as_str() {
+            Some(s) => s.parse::<f32>().map_err(|_| bad("float"))?,
+            // legacy JSON-number form: parsed as f64 then narrowed (sub-ULP loss
+            // possible, acceptable for back-compat reads of pre-fix patches).
+            None => val.as_f64().ok_or_else(|| bad("float"))? as f32,
+        }),
+        "double" => NbtValue::Double(match val.as_str() {
+            Some(s) => s.parse::<f64>().map_err(|_| bad("double"))?,
+            None => val.as_f64().ok_or_else(|| bad("double"))?,
+        }),
         "byteArray" => {
             let arr = val.as_array().ok_or_else(|| bad("byteArray"))?;
             let mut b = Vec::with_capacity(arr.len());
@@ -149,5 +161,58 @@ mod tests {
         m.insert("int".into(), J::from(1));
         m.insert("extra".into(), J::from(2));
         assert!(from_json(&J::Object(m)).is_err());
+    }
+
+    #[test]
+    fn double_survives_file_roundtrip() {
+        for x in [
+            -1.8179372026061453_f64,
+            8.5,
+            -7.064525711408038,
+            f64::MIN_POSITIVE,
+        ] {
+            let v = NbtValue::Double(x);
+            let s = serde_json::to_string(&to_json(&v)).unwrap();
+            let j2: J = serde_json::from_str(&s).unwrap();
+            assert_eq!(from_json(&j2).unwrap(), v, "double {x} serialized as {s}");
+        }
+    }
+
+    #[test]
+    fn nonfinite_double_survives() {
+        for x in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            let v = NbtValue::Double(x);
+            let s = serde_json::to_string(&to_json(&v)).unwrap();
+            let j2: J = serde_json::from_str(&s).unwrap();
+            let got = from_json(&j2).unwrap();
+            match (&v, &got) {
+                (NbtValue::Double(a), NbtValue::Double(b)) => {
+                    assert!(
+                        a == b || (a.is_nan() && b.is_nan()),
+                        "double {x} -> {s} -> {got:?}"
+                    )
+                }
+                _ => panic!("type changed: {x} -> {s} -> {got:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn nonfinite_float_survives() {
+        for x in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let v = NbtValue::Float(x);
+            let s = serde_json::to_string(&to_json(&v)).unwrap();
+            let j2: J = serde_json::from_str(&s).unwrap();
+            let got = from_json(&j2).unwrap();
+            match (&v, &got) {
+                (NbtValue::Float(a), NbtValue::Float(b)) => {
+                    assert!(
+                        a == b || (a.is_nan() && b.is_nan()),
+                        "float {x} -> {s} -> {got:?}"
+                    )
+                }
+                _ => panic!("type changed: {x} -> {s} -> {got:?}"),
+            }
+        }
     }
 }

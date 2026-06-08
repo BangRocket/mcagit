@@ -34,9 +34,17 @@ NOT COVERED:
 - A compound with no keys
 - ByteArray where values > 127 (signed vs unsigned) — partial coverage with {0, 255, 1, 254}
 
+## Rust Port Encoding (crates/nbt/src/json.rs) — as of 2026-06-08
+
+In the Rust port, floats and doubles are NOW string-encoded via `x.to_string()` (like longs), matching the fix for B1/B4 above. `from_json` prefers the string form; accepts legacy JSON-number form for backward compatibility with patches written before the fix. Rust's `f32`/`f64` Display is exact (shortest round-trippable representation; NaN/Inf serialize as "NaN"/"inf"/"-inf"). Tests added: `double_survives_file_roundtrip`, `nonfinite_double_survives`.
+
+**WARN (Rust float/f32 test gap):** `nonfinite_double_survives` covers f64 only. f32 NaN/Inf are not tested in isolation. Rust f32::to_string() for NaN is "NaN", Inf is "inf" — both parseable by `s.parse::<f32>()`. Low risk but add `nonfinite_float_survives` for completeness.
+
+**WARN (legacy float path):** The `None => val.as_f64()? as f32` legacy path for float can lose precision (f64→f32 narrowing). This only matters when reading old patch files with JSON-number floats — any float that was previously lossy stays lossy; the new path is exact. Acceptable one-way compat.
+
 ## Known Lossiness
 
-1. float/double NaN and ±Infinity: System.Text.Json by default will throw or produce invalid JSON for these values when serializing a JsonValue.Create(float.NaN). Even if it writes a string token, FromJson does GetValue<float>() which expects a number token. Behavior is undefined / throws. **This is a BLOCKER if any Minecraft chunk uses NaN (e.g., entity velocity=NaN is a known Minecraft corruption case).**
+1. float/double NaN and ±Infinity (C# / .NET port): System.Text.Json by default will throw or produce invalid JSON for these values when serializing a JsonValue.Create(float.NaN). Even if it writes a string token, FromJson does GetValue<float>() which expects a number token. Behavior is undefined / throws. **This is a BLOCKER if any Minecraft chunk uses NaN (e.g., entity velocity=NaN is a known Minecraft corruption case). FIXED in the Rust port.**
 
 2. NbtByte unsigned display: stored as 0-255 unsigned in JSON. fNbt's ByteValue is unsigned. SNBT convention is signed (-128 to 127). Not a round-trip bug but a display confusion.
 

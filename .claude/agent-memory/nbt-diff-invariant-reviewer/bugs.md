@@ -7,7 +7,7 @@ metadata:
 
 ## BLOCKER
 
-### B1: NbtJson float/double round-trip loses NaN and ±Infinity
+### B1: NbtJson float/double round-trip loses NaN and ±Infinity [FIXED in Rust port 2026-06-08]
 - `ToJson` for float/double uses `JsonValue.Create(float/double)`. System.Text.Json serializes NaN and ±Infinity as the string "NaN"/"+Infinity"/"-Infinity" in some paths or throws in others depending on JsonSerializerOptions. The patch file's top-level JsonSerializerOptions does NOT set `AllowTrailingCommas` or any special number handling. When deserializing, `GetValue<float>()` on a JSON string token will throw.
 - NbtEquality uses `.Equals()` so NaN==NaN at comparison time — but if the patch round-trip corrupts the float, apply will fail or produce wrong data.
 - Fix: string-encode floats (like longs) or use IEEE 754 hex encoding. Add a test: `NbtFloat(float.NaN)`, `NbtFloat(float.PositiveInfinity)`, `NbtDouble(double.NaN)`.
@@ -21,7 +21,7 @@ metadata:
 
 ## HIGH
 
-### H1: NbtPath.Set for identity list elements — inserts at tail on add, not at original position
+### H1: NbtPath.Set for identity list elements — inserts at tail on add, not at original position [C# only; Rust index-append path partially fixes the index-list case 2026-06-08]
 - When applying an Added op for a keyed list element, `NbtPath.Set` calls `list.Add(newTag)`. The element is appended at the end, not inserted at the original position. This changes list order relative to what was in B, which matters when Minecraft reads the list by index (e.g., inventory slots whose Slot key and physical position are expected to agree).
 - For identity-keyed lists Minecraft re-sorts on load for some cases (block_entities), but not all. If Minecraft reads position-sensitive data by index after a patch that reordered entries, behavior may differ.
 - Fix: PatchExtractor could record original index in a side-channel, or PatchApplier could insert at the position computed by FindIdentity on the surrounding elements. At minimum, document the limitation.

@@ -32,6 +32,13 @@ jobs:
           NEW=compare-worlds/New_World_Newer
           # cross-diff must find changes (exit 1)
           if "$BIN" diff "$OLD" "$NEW" >/dev/null; then echo "FAIL: expected differences"; exit 1; fi
+          # forward patch: apply(OLD, fwd) reproduces NEW
+          "$BIN" extract "$OLD" "$NEW" --out fwd.mcapatch
+          "$BIN" apply fwd.mcapatch "$OLD" --out fwd_out
+          "$BIN" diff fwd_out "$NEW" || { echo "FAIL: forward patch mismatch"; exit 1; }
+          # reverse patch: apply --reverse(NEW, fwd) reproduces OLD
+          "$BIN" apply --reverse fwd.mcapatch "$NEW" --out rev_out
+          "$BIN" diff rev_out "$OLD" || { echo "FAIL: reverse patch mismatch"; exit 1; }
           # commit -> checkout reproduces the world; verify confirms the tree; fsck is clean
           "$BIN" init repo
           H=$("$BIN" -C repo commit -m newer "$NEW")
@@ -39,6 +46,3 @@ jobs:
           "$BIN" -C repo verify "$H" co
           "$BIN" -C repo fsck
           echo "e2e OK"
-          # NOTE: patch extract/apply round-trip on these real worlds is intentionally NOT
-          # asserted here yet — it does not fully reproduce (forward leaves region-chunk diffs;
-          # --reverse conflicts on player Pos). Tracked as a known issue; re-add once fixed.

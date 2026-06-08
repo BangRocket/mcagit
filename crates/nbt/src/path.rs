@@ -101,8 +101,14 @@ impl NbtPath {
                 m.insert(k.clone(), value);
                 true
             }
-            (Seg::Index(i), NbtValue::List(items)) if *i < items.len() => {
-                items[*i] = value;
+            // `i < len` replaces; `i == len` appends (the comparer expresses an
+            // added list element as an op at the new trailing index).
+            (Seg::Index(i), NbtValue::List(items)) if *i <= items.len() => {
+                if *i == items.len() {
+                    items.push(value);
+                } else {
+                    items[*i] = value;
+                }
                 true
             }
             (Seg::Ident(id), NbtValue::List(items)) => {
@@ -214,6 +220,22 @@ mod tests {
         let p = NbtPath::parse("Data.Player.Pos[1]").unwrap();
         assert!(p.set(&mut w, NbtValue::Double(99.0)));
         assert_eq!(p.get(&w), Some(&NbtValue::Double(99.0)));
+    }
+
+    #[test]
+    fn set_appends_at_end_index() {
+        let mut w = world();
+        // Pos has 3 elements [0..2]; index 3 == len should append, not no-op.
+        let p = NbtPath::parse("Data.Player.Pos[3]").unwrap();
+        assert!(p.set(&mut w, NbtValue::Double(4.0)));
+        assert_eq!(
+            NbtPath::parse("Data.Player.Pos[3]").unwrap().get(&w),
+            Some(&NbtValue::Double(4.0))
+        );
+        // but a gap (index 5 when len is now 4) still fails.
+        assert!(!NbtPath::parse("Data.Player.Pos[5]")
+            .unwrap()
+            .set(&mut w, NbtValue::Double(9.0)));
     }
 
     #[test]

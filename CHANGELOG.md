@@ -30,9 +30,10 @@ tags. Releases `v0.2.0`–`v0.7.0` were the original .NET implementation — see
   `where-changed`), `log` metadata filters, `verify-remote`, reflog (`HEAD@{n}`), `bisect`, and
   SSH commit/tag signing. The object-copy core ships via local path-transport clone/push/pull.
 
-### Known issues
+### Fixed
 
-- Patch `extract` / `apply` does not yet fully reproduce real worlds (forward apply can leave
-  region-chunk differences; `apply --reverse` can conflict on floating-point player `Pos`).
-  `commit` → `checkout` → `verify` reproduces faithfully; prefer the repo flow over `.mcapatch`
-  on real saves until this is resolved.
+- **Patch `extract`/`apply` now reproduces real worlds round-trip** — forward and `--reverse`,
+  verified on the sample worlds and gated in CI. Two bugs: (1) floats/doubles were JSON-number
+  encoded and lost up to 1 ULP through serde_json's default parser — now string-encoded like
+  longs (also fixes NaN/Inf); (2) `NbtPath::set` silently no-op'd when appending a new trailing
+  list element (e.g. a growing block-state palette) — it now appends at `index == len`.
