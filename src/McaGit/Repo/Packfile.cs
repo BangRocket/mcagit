@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using System.IO.Compression;
 using System.Security.Cryptography;
+using McaGit.Output;
 using Microsoft.Win32.SafeHandles;
 
 namespace McaGit.Repo;
@@ -131,7 +132,8 @@ public sealed class Packfile : IDisposable
     /// against a recent window. Returns the pack id, or null if there was nothing to pack.
     /// Peak memory is the window, not the whole set.
     /// </summary>
-    public static string? Write(string objectsDir, IReadOnlyList<string> orderedHashes, Func<string, byte[]> load)
+    public static string? Write(string objectsDir, IReadOnlyList<string> orderedHashes,
+        Func<string, byte[]> load, Action? onObject = null)
     {
         if (orderedHashes.Count == 0) return null;
         string packDir = Path.Combine(objectsDir, "pack");
@@ -142,62 +144,190 @@ public sealed class Packfile : IDisposable
         if (File.Exists(packPath)) return id; // identical set already packed
 
         string tmp = packPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
-        var entries = new List<(string Hash, long Offset)>(orderedHashes.Count);
-
+        List<(string Hash, long Offset)> entries;
         using (var fs = File.Create(tmp))
         {
             fs.WriteByte((byte)'M'); fs.WriteByte((byte)'C'); fs.WriteByte((byte)'A'); fs.WriteByte((byte)'P');
             fs.WriteByte(Version);
-
-            var window = new List<WindowEntry>(Window);
-            foreach (string hash in orderedHashes)
-            {
-                byte[] content = load(hash);
-                long entryOff = fs.Position;
-                byte[] compContent = Deflate(content);
-
-                // Try to delta against a recent base of comparable size.
-                byte[]? bestDelta = null;
-                WindowEntry? bestBase = null;
-                foreach (WindowEntry w in window)
-                {
-                    if (w.Depth >= MaxDepth) continue;
-                    if (content.Length > w.Content.Length * 4 || w.Content.Length > content.Length * 4) continue;
-                    byte[] d = Delta.Diff(w.Content, content);
-                    if (bestDelta is null || d.Length < bestDelta.Length) { bestDelta = d; bestBase = w; }
-                }
-
-                int depth = 0;
-                if (bestDelta is not null && bestBase is { } baseEntry)
-                {
-                    byte[] compDelta = Deflate(bestDelta);
-                    if (compDelta.Length < compContent.Length)
-                    {
-                        fs.WriteByte(1);
-                        WriteVarint(fs, (ulong)(entryOff - baseEntry.Offset));
-                        WriteVarint(fs, (ulong)compDelta.Length);
-                        fs.Write(compDelta);
-                        depth = baseEntry.Depth + 1;
-                    }
-                    else bestDelta = null;
-                }
-                if (bestDelta is null)
-                {
-                    fs.WriteByte(0);
-                    WriteVarint(fs, (ulong)compContent.Length);
-                    fs.Write(compContent);
-                }
-
-                entries.Add((hash, entryOff));
-                window.Add(new WindowEntry(content, entryOff, depth));
-                if (window.Count > Window) window.RemoveAt(0);
-            }
+            entries = WriteSegment(fs, orderedHashes, load, onObject);
         }
 
         WriteIndex(Path.ChangeExtension(tmp, ".idx"), entries);
         File.Move(tmp, packPath);
         File.Move(Path.ChangeExtension(tmp, ".idx"), Path.ChangeExtension(packPath, ".idx"));
         return id;
+    }
+
+    /// <summary>
+    /// Writes the given objects as pack entries into <paramref name="body"/> — type-0 (whole, zlib) or
+    /// type-1 (delta vs an earlier object in THIS call, via a relative back-offset) — returning each
+    /// entry's offset within <paramref name="body"/>. No MCAP header is written (the caller owns it).
+    /// Because delta bases are confined to this call and back-offsets are relative, the produced bytes
+    /// are position-independent: appending them at any file offset preserves every back-reference.
+    /// Peak memory is the window, not the whole set.
+    /// </summary>
+    private static List<(string Hash, long Offset)> WriteSegment(
+        Stream body, IReadOnlyList<string> hashes, Func<string, byte[]> load, Action? onObject)
+    {
+        var entries = new List<(string Hash, long Offset)>(hashes.Count);
+        var window = new List<WindowEntry>(Window);
+        foreach (string hash in hashes)
+        {
+            byte[] content = load(hash);
+            long entryOff = body.Position;
+            byte[] compContent = Deflate(content);
+
+            // Try to delta against a recent base of comparable size.
+            byte[]? bestDelta = null;
+            WindowEntry? bestBase = null;
+            foreach (WindowEntry w in window)
+            {
+                if (w.Depth >= MaxDepth) continue;
+                if (content.Length > w.Content.Length * 4 || w.Content.Length > content.Length * 4) continue;
+                byte[] d = Delta.Diff(w.Content, content);
+                if (bestDelta is null || d.Length < bestDelta.Length) { bestDelta = d; bestBase = w; }
+            }
+
+            int depth = 0;
+            if (bestDelta is not null && bestBase is { } baseEntry)
+            {
+                byte[] compDelta = Deflate(bestDelta);
+                if (compDelta.Length < compContent.Length)
+                {
+                    body.WriteByte(1);
+                    WriteVarint(body, (ulong)(entryOff - baseEntry.Offset));
+                    WriteVarint(body, (ulong)compDelta.Length);
+                    body.Write(compDelta);
+                    depth = baseEntry.Depth + 1;
+                }
+                else bestDelta = null;
+            }
+            if (bestDelta is null)
+            {
+                body.WriteByte(0);
+                WriteVarint(body, (ulong)compContent.Length);
+                body.Write(compContent);
+            }
+
+            entries.Add((hash, entryOff));
+            window.Add(new WindowEntry(content, entryOff, depth));
+            if (window.Count > Window) window.RemoveAt(0);
+            onObject?.Invoke();
+        }
+        return entries;
+    }
+
+    /// <summary>
+    /// Like <see cref="Write"/>, but delta-compresses the objects across <paramref name="threads"/>
+    /// CPU cores. The size-sorted set is split into byte-balanced contiguous segments (so adjacency —
+    /// hence delta quality — is preserved and no segment is a straggler); each segment is compressed in
+    /// parallel to its own <c>*.pack.tmp</c> with delta bases confined to that segment, then the segment
+    /// bodies are concatenated serially into the final pack. Within-segment delta back-offsets are
+    /// relative, so concatenation needs no offset fixup; only the index records global offsets.
+    /// Falls back to the serial <see cref="Write"/> when there is nothing to parallelize.
+    /// Peak memory is the window per worker. Drives <paramref name="progress"/> if supplied.
+    /// </summary>
+    public static string? WriteParallel(string objectsDir, IReadOnlyList<string> orderedHashes,
+        Func<string, byte[]> load, int threads, Func<string, long> sizeOf, Progress? progress)
+    {
+        if (orderedHashes.Count == 0) return null;
+
+        long total = orderedHashes.Count;
+        long done = 0;
+        progress?.Begin("gc: packing");
+        Action onObject = () => progress?.Update(Interlocked.Increment(ref done), total);
+
+        // Don't oversplit: past the core count, more (smaller) segments only cost delta quality and temp
+        // files with no extra throughput — and this defangs an absurd --threads (one near the object count
+        // would otherwise create ~one segment temp file per object). Keep a few objects per segment.
+        const int MinObjectsPerSegment = 4;
+        int effectiveThreads = Math.Min(threads, Math.Max(1, orderedHashes.Count / MinObjectsPerSegment));
+        if (effectiveThreads <= 1)
+        {
+            string? sid = Write(objectsDir, orderedHashes, load, onObject);
+            progress?.Done(total, total, $"{orderedHashes.Count} objects");
+            return sid;
+        }
+
+        string packDir = Path.Combine(objectsDir, "pack");
+        Directory.CreateDirectory(packDir);
+
+        string id = PackId(orderedHashes);
+        string packPath = Path.Combine(packDir, $"pack-{id}.pack");
+        if (File.Exists(packPath)) { progress?.Done(total, total, "already packed"); return id; }
+
+        List<(int Start, int Count)> segments = PartitionByBytes(orderedHashes, sizeOf, effectiveThreads);
+
+        // Parallel phase: each segment -> its own temp body file (peak memory = window per worker).
+        var segFiles = new string[segments.Count];
+        var segEntries = new List<(string Hash, long Offset)>[segments.Count];
+        Parallel.For(0, segments.Count, new ParallelOptions { MaxDegreeOfParallelism = effectiveThreads }, k =>
+        {
+            (int start, int count) = segments[k];
+            var slice = new List<string>(count);
+            for (int i = 0; i < count; i++) slice.Add(orderedHashes[start + i]);
+            string segTmp = Path.Combine(packDir, $"incoming-seg-{k}-{Guid.NewGuid():N}.pack.tmp");
+            segFiles[k] = segTmp;
+            using var seg = File.Create(segTmp);
+            segEntries[k] = WriteSegment(seg, slice, load, onObject);
+        });
+
+        // Serial concat: header, then append each segment body and shift its offsets by where the
+        // segment lands in the final file. Within-segment relative deltas survive untouched.
+        string tmp = packPath + "." + Guid.NewGuid().ToString("N") + ".tmp";
+        var entries = new List<(string Hash, long Offset)>(orderedHashes.Count);
+        using (var fs = File.Create(tmp))
+        {
+            fs.WriteByte((byte)'M'); fs.WriteByte((byte)'C'); fs.WriteByte((byte)'A'); fs.WriteByte((byte)'P');
+            fs.WriteByte(Version);
+            for (int k = 0; k < segments.Count; k++)
+            {
+                long pk = fs.Position;
+                using (var seg = File.OpenRead(segFiles[k])) seg.CopyTo(fs);
+                foreach ((string hash, long off) in segEntries[k]) entries.Add((hash, pk + off));
+                File.Delete(segFiles[k]);
+            }
+        }
+
+        WriteIndex(Path.ChangeExtension(tmp, ".idx"), entries);
+        File.Move(tmp, packPath);
+        File.Move(Path.ChangeExtension(tmp, ".idx"), Path.ChangeExtension(packPath, ".idx"));
+        progress?.Done(total, total, $"{orderedHashes.Count} objects");
+        return id;
+    }
+
+    /// <summary>
+    /// Splits <paramref name="ordered"/> into at most <paramref name="segments"/> contiguous chunks
+    /// balanced by cumulative stored size, each non-empty. Contiguous keeps size-adjacency (delta
+    /// quality); byte-balancing keeps the large-object chunk from being a straggler.
+    /// </summary>
+    private static List<(int Start, int Count)> PartitionByBytes(
+        IReadOnlyList<string> ordered, Func<string, long> sizeOf, int segments)
+    {
+        var sizes = new long[ordered.Count];
+        long total = 0;
+        for (int i = 0; i < ordered.Count; i++) { sizes[i] = Math.Max(1, sizeOf(ordered[i])); total += sizes[i]; }
+        long target = Math.Max(1, total / segments);
+
+        var result = new List<(int Start, int Count)>(segments);
+        int start = 0;
+        long running = 0;
+        for (int i = 0; i < ordered.Count; i++)
+        {
+            running += sizes[i];
+            int remainingObjs = ordered.Count - (i + 1);
+            int remainingSegs = segments - result.Count - 1;   // segments still to open after this cut
+            // Cut when over target, but only while more segments remain and enough objects are left to
+            // give each remaining segment at least one.
+            if (result.Count < segments - 1 && running >= target && remainingObjs > remainingSegs)
+            {
+                result.Add((start, i - start + 1));
+                start = i + 1;
+                running = 0;
+            }
+        }
+        result.Add((start, ordered.Count - start));            // last segment takes the remainder
+        return result;
     }
 
     /// <summary>
