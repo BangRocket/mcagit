@@ -38,6 +38,8 @@ pub mod snapshot;
 pub use checkout::checkout;
 pub mod status;
 pub use status::{status, Change, ChangeKind};
+pub mod verify;
+pub use verify::{verify_commit, world_tree};
 pub mod fsck;
 pub use fsck::{fsck, FsckReport};
 pub mod gc;

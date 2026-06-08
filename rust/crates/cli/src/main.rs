@@ -136,6 +136,11 @@ enum Cmd {
         remote: PathBuf,
         branch: Option<String>,
     },
+    /// Verify a world reproduces a commit (fast single-sided tree-hash check).
+    Verify {
+        reff: String,
+        world: Option<PathBuf>,
+    },
 }
 
 fn main() -> ExitCode {
@@ -685,6 +690,33 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                 remote.display()
             );
             Ok(ExitCode::SUCCESS)
+        }
+
+        Cmd::Verify { reff, world } => {
+            let repo = open_repo(&cli)?;
+            let commit = repo.resolve_ref(reff)?;
+            let world = world
+                .clone()
+                .or_else(|| repo.worktree().map(PathBuf::from))
+                .ok_or_else(|| anyhow!("no world given and no worktree bound"))?;
+            let (ok, candidate, target) = mca_repo::verify_commit(&repo, &world, &commit)?;
+            if ok {
+                eprintln!(
+                    "OK — {} reproduces {} (tree {})",
+                    world.display(),
+                    &commit[..10],
+                    &target[..10]
+                );
+                Ok(ExitCode::SUCCESS)
+            } else {
+                eprintln!(
+                    "MISMATCH — world tree {} != commit {} tree {}",
+                    &candidate[..10],
+                    &commit[..10],
+                    &target[..10]
+                );
+                Ok(ExitCode::from(1))
+            }
         }
     }
 }
