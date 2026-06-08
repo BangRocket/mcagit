@@ -1,5 +1,4 @@
-# Editor defaults that match the `dotnet format McaGit.sln` CI gate. Keep these in sync with
-# what the formatter enforces so editors and CI agree (see .github/workflows/ci.yml `lint`).
+# Editor defaults. Rust formatting is enforced by `cargo fmt` (rustfmt); these cover the rest.
 root = true
 
 [*]
@@ -10,17 +9,10 @@ trim_trailing_whitespace = true
 indent_style = space
 indent_size = 4
 
-[*.cs]
+[*.rs]
 indent_size = 4
-# Brace style the codebase + `dotnet format` settled on: a braced `case:` body is indented
-# one level deeper than the label (the format sweep that made the lint job green).
-csharp_indent_case_contents = true
-csharp_indent_case_contents_when_block = true
 
-[*.{csproj,props,targets,sln}]
-indent_size = 2
-
-[*.{yml,yaml,json,jsonc}]
+[*.{toml,yml,yaml,json,jsonc}]
 indent_size = 2
 
 # Markdown: trailing whitespace can be a hard line break — don't strip it.

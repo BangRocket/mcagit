@@ -1,568 +1,97 @@
 # mcagit
 
-A semantic, **git-style diff for Anvil-format Minecraft (Java Edition) worlds**.
+A semantic, git-style **diff / patch / version-control** tool for Anvil-format Minecraft
+(Java Edition) worlds — built in Rust for **speed** (parallel, streaming, native).
 
-Git only sees `.mca` region files as opaque binary blobs — `git diff` reports
-"binary files differ" and nothing more. `mcagit` opens both worlds, parses every
-region → chunk → NBT element, and prints what actually changed:
+`mcagit` understands worlds at the NBT level: it matches chunks and list elements by
+*identity* (block coords, entity UUID, inventory slot, `id`), so a reorder isn't a rewrite,
+and its unit of storage dedup is the **chunk**, hashed by decoded content. The result is a
+git work-alike — commit, branch, merge, rebase, stash, gc — that stores Minecraft worlds
+compactly and reproduces them byte-faithfully (playable in Minecraft).
+
+> mcagit began as a .NET proof-of-concept; this Rust implementation (validated against that
+> original during the port) is now the sole, primary version.
+
+## Build & test
+
+Requires a stable Rust toolchain (see `rust-toolchain.toml`).
+
+```sh
+cargo build --release        # binary: target/release/mcagit
+cargo test --all
+cargo fmt --all -- --check
+cargo clippy --all-targets -- -D warnings
+```
+
+## Workspace
 
 ```text
-diff --mca entities/r.0.0.mca
-  @@ chunk (0, 0) @@
-    ~ DataVersion: 3955 → 3956
-    ~ Entities[uuid:641b80dde18a476d8dcb56cb10f440c5].Pos[1]: -30.9d → -22.9d
-    + mcagit_demo: "hello from mcagit"
-
-diff --nbt level.dat
-  ~ Data.DayTime: 6121995L → 6127995L
-  ~ Data.Time: 25105491L → 25117836L
-
-2 files changed (2 modified, 0 added, 0 deleted), 1 chunks, 5 nbt changes
+crates/
+  nbt/     mca-nbt    NBT model, big-endian read/write (modified-UTF8), canonical bytes,
+                      list-element identity, the path language, lossless type-tagged JSON
+  anvil/   mca-anvil  region (r.X.Z.mca) read/write, chunk codecs (zlib/gzip/none/lz4),
+                      external .mcc, standalone .dat load/save
+  diff/    mca-diff   one comparer -> DiffSink trait; ChangeSink (display); WorldDiffer
+                      (parallel, byte-identical fast paths); text + json formats
+  patch/   mca-patch  .mcapatch model; extract; apply (3-way guarded, reversible)
+  repo/    mca-repo   content-addressed store (blake3 + zstd), packfiles + pack-at-commit,
+                      parallel commit, parallel checkout, verify, status, fsck, gc,
+                      merge-base + 3-way merge, cherry-pick/revert/rebase, stash,
+                      path-transport clone/push/pull
+  cli/     mcagit     the binary (28 subcommands)
 ```
 
-It can also **extract those changes into a portable patch and apply them to
-another save** — surgically and non-destructively — for restore/rollback or
-forward-porting (see [Patch & restore](#patch--restore)), and it includes a
-**content-addressed, deduplicating version-control system** for worlds —
-`init`/`commit`/`log`/`checkout`/`branch` plus a true 3-way `merge`
-(see [Version control](#version-control)).
+## Commands
 
-## Why not just zip my world folder?
-
-Zipping your save is a full copy you can only restore *wholesale* — and it can't
-tell you what changed. mcagit treats a world the way git treats source: it
-understands what's *inside* it.
-
-| Just zipping the world | mcagit |
-|---|---|
-| Full copy every backup | Stores only the **chunks that changed** — content-addressed dedup |
-| "Restore" = overwrite everything | **Undo one change**: restore a single region, chunk, or NBT node — or the whole world |
-| No idea what changed | **Semantic diff** — exactly which chunks, blocks, and entities differ |
-| Can't combine two people's edits | **3-way merge** of two builders' work |
-| A pile of dated zips | Real **history** — branches, tags, signed snapshots |
-
-It's the only Minecraft tool that understands what a world *is*. Even git-backed
-backups (FastBack) treat the world as opaque binaries — `git diff` just says
-"binary files differ," and one block edit rewrites the whole region file. mcagit
-dedups and diffs at the **chunk** level: what FastBack would be if it understood
-the world.
-
-**And it works on backups you already have.** Block-loggers (CoreProtect, Prism)
-only help if they were installed *before* the grief; when they weren't, the usual
-advice is "restore everything." mcagit does retroactive forensics and surgical
-rollback from ordinary snapshots — no prior plugin, no database. It won't tell you
-*who* (that's the loggers' job) — it tells you *what* changed, *where*, and puts it
-back.
-
-## Install
-
-Grab a self-contained binary from the [Releases](https://github.com/BangRocket/mcagit/releases) page — no .NET runtime required. Builds are published for `win-x64`, `linux-x64`, `linux-arm64`, `osx-x64`, and `osx-arm64`, each with a `SHA256SUMS` file.
+`init · commit · checkout · status · log · diff [--json] · extract · apply [--reverse] ·
+verify · branch · merge · fsck · gc · revert · cherry-pick · rebase · stash · rev-parse ·
+cat-file · ls-tree · tag · reset [--hard] · restore · clean · clone · push · pull`
 
 ```sh
-# Linux / macOS (adjust RID + tag)
-curl -sSfL -o mcagit.tar.gz https://github.com/BangRocket/mcagit/releases/latest/download/mcagit-<tag>-linux-x64.tar.gz
-tar -xzf mcagit.tar.gz && chmod +x mcagit && ./mcagit --help
+mcagit init repo.mcagit --worktree ./World
+mcagit -C repo.mcagit commit -m "before raid"
+mcagit -C repo.mcagit checkout HEAD~1 ./restored
+mcagit -C repo.mcagit verify HEAD ./restored      # fast tree-hash accuracy check
+mcagit diff ./WorldA ./WorldB
+mcagit -C repo.mcagit gc --threads 8
 ```
-
-On Windows, download the `win-x64` `.zip` and run `mcagit.exe`.
-
-## Build from source
-
-Requires the **.NET 10 SDK** (LTS); the only NuGet dependencies (`fNbt`, `K4os.Compression.LZ4`) restore automatically.
-
-```sh
-dotnet build -c Release
-dotnet run --project src/McaGit -- <A> <B>     # or run the built mcagit binary
-```
-
-mcagit targets **.NET 10 (LTS)**. The published release binaries are self-contained, so end users need no .NET runtime at all.
-
-`<A>` and `<B>` are either **two world folders** or **two single files**
-(`.mca` region files or `.dat` loose NBT files).
-
-```sh
-mcagit ~/backups/world-monday ~/backups/world-tuesday
-mcagit old/region/r.0.0.mca new/region/r.0.0.mca
-```
-
-## Example
-
-Diffing two saves of the same world a minute apart — the loose-NBT view
-(`--only nbt`) reads like a play-by-play of what the player did:
-
-```sh
-mcagit --only nbt New_World_Older New_World_Newer
-```
-
-```text
-diff --nbt level.dat
-  ~ Data.DayTime: 383L → 1574L
-  ~ Data.Player.Pos[0]: 8.5d → -1.8179372026061453d
-  ~ Data.Player.Pos[2]: -3.5d → -7.064525711408038d
-  ~ Data.Player.Rotation[0]: 5.8904247f → 0.5203297f
-  ~ Data.Player.XpSeed: 0 → 1815296106
-  ~ Data.Time: 383L → 1574L
-  ~ Data.rainTime: 41203 → 40012
-
-diff --nbt playerdata/0bde0058-…-470118f9a8c7.dat
-  ~ Pos[0]: 8.5d → -1.8179372026061453d
-  ~ warden_spawn_tracker.ticks_since_last_warning: 370 → 1553
-
-5 files changed (5 modified, 0 added, 0 deleted), 0 chunks, 20 nbt changes
-```
-
-The full world diff (terrain included) for the same pair touches 1,762 chunks
-across the four `region/` files — mostly `InhabitedTime` / `LastUpdate` ticking up
-on the chunks nearest the player. Use `--summary` for a per-file overview.
-
-## Options
-
-| Flag | Effect |
-|------|--------|
-| `--json` | Emit a structured JSON change list instead of colored text. |
-| `--expand` | Show every changed array index (default: summarize as `long[37] — 3 of 37 entries differ`). |
-| `--only <cats>` | Limit to categories: `region,entities,poi,nbt` (comma-separated, repeatable). |
-| `--summary` | Per-file status and totals only; omit per-change detail. |
-| `--no-color` | Disable ANSI color (also honors `NO_COLOR`; auto-off when piped). |
-| `-h`, `--help` | Show help. |
-
-**Exit codes** (git convention): `0` = identical, `1` = differences found, `2` = error.
-
-## Inspect a world
-
-Beyond "what changed", mcagit can answer "what *is* the world right now" — read-only
-queries over the same parsed NBT (they never modify the world; exit `0` found / `1`
-none / `2` error, so they script cleanly):
-
-```sh
-mcagit inspect -2 -60 -7 <world>            # block + biome at a coordinate
-mcagit find block-entity chest <world> --near 0,64,0 --radius 128
-mcagit find entity zombie <world>           # mobs/frames/stands (entities/ + legacy)
-mcagit find sign <world> --text spawn       # signs whose text matches (1.20+ and legacy)
-mcagit players <world>                       # last-saved positions / health / gamemode
-mcagit poi <world> --type bed                # points of interest (beds/workstations/portals)
-mcagit where-changed <old> <new>             # "where did the griefing happen?" — classify + locate
-```
-
-`where-changed` decodes the block-level diff of two world folders and reports how many blocks
-were destroyed / placed / replaced, the bounding box and centre of the destruction, and the
-most-destroyed block types (`--verbose` lists every changed coordinate; `--json` for tooling).
-
-All take an optional `<world>` (defaults to the bound worktree), `--dim overworld|nether|end`,
-and `--json`. The block lookup uses the same palette decoder as the coordinate-level diff.
-
-## What gets compared
-
-For a world folder, across the overworld and the `DIM-1` / `DIM1` dimensions:
-
-- **Chunk data** — `region/`, `entities/`, `poi/` (`r.X.Z.mca`), diffed
-  chunk-by-chunk and then NBT element-by-element.
-- **Loose NBT** — `level.dat`, `playerdata/*.dat`, `data/*.dat`, `data/*.nbt`
-  (custom structures), and per-dimension `data/`.
-- **Non-NBT files** (`.json`, `.mcc`) are byte-compared when you diff them directly
-  as single files; the whole-world diff skips them, because the patch format can't
-  carry a raw blob (a world `commit` still captures them — `checkout` restores them).
-
-### How the NBT diff reads
-
-- **Compounds** are matched by key → `Added` / `Removed` / `Modified` / `TypeChanged`.
-- **Lists** that behave as sets are matched by identity rather than position, so a
-  reorder isn't reported as a rewrite. The identity used, in order of preference:
-  block coordinates `(x,y,z)` (`block_entities[@5,63,8]`), entity UUID
-  (`Entities[uuid:…]`), inventory `Slot` (`Items[slot:3]`), or a string `id`
-  (`attributes[id:minecraft:generic.movement_speed]`). When elements have no
-  unique identity, lists fall back to index matching (`list[3]`).
-- **Packed arrays** (block states, heightmaps, biomes) are summarized by default;
-  `--expand` shows each changed index.
-
-## Patch & restore
-
-`mcagit` can turn a diff into a portable, **bidirectional** patch and apply it
-to another world. Use it to roll a save forward, or — applied in reverse — to
-**restore** old, known-good state (undo griefing, corruption, accidental edits)
-without overwriting everything else.
-
-```sh
-# 1. Capture the changes from <old> to <new> as a patch file
-mcagit extract <old> <new> -o changes.mcapatch
-
-# 2. Apply forward onto a base (writes a NEW world; never mutates the target)
-mcagit apply changes.mcapatch <base-world> -o <output-world>
-
-# 3. …or apply in reverse onto the newer world to restore the old state
-mcagit apply --reverse changes.mcapatch <new-world> -o <restored-world>
-```
-
-**Non-destructive by design:**
-
-- `apply` copies the target to a fresh `--output` world and only rewrites the
-  patched nodes — everything else is preserved byte-for-byte.
-- Every node is **guarded** (3-way): it's only changed if the target's current
-  value matches what the patch expects. A mismatch is reported as a *conflict*
-  and skipped — your data is never clobbered. `--force` overrides the guard;
-  `--dry-run` reports what would happen and writes nothing.
-
-The patch (`*.mcapatch`) is human-readable JSON. Each op records both the old and
-new value (losslessly type-encoded), which is what makes it invertible:
-
-```jsonc
-{ "path": "Data.Time", "base": {"long":"383"}, "value": {"long":"1574"} }
-```
-
-`extract` flags: `--only <cats>`, and `--whole-chunk` / `--whole-file` to store
-whole roots instead of node-level ops. `apply` flags: `--reverse`, `--force`,
-`--dry-run`, `--only`. Apply exits `0` clean, `1` if any conflicts were skipped.
-
-### Worked example
-
-Advance the older save to the newer one by extracting the changes and applying
-them onto **old** (`extract <base> <target>` — base first):
-
-```sh
-# 1. Capture old → new as a patch
-mcagit extract New_World_Older New_World_Newer -o changes.mcapatch
-#   Wrote changes.mcapatch — 13 files, 4707 ops.
-
-# 2. Apply onto old → a fresh updated world (New_World_Older is never modified)
-mcagit apply changes.mcapatch New_World_Older -o Old_Updated
-#   Applied 4711 ops across 13 files; 0 conflicts.
-
-# 3. Verify it now matches new
-mcagit Old_Updated New_World_Newer
-#   No differences.
-```
-
-The reverse direction restores instead: keep the same patch and run
-`mcagit apply --reverse changes.mcapatch New_World_Newer -o Old_Restored` to
-rebuild the older state from the newer world. Both directions are verified
-end-to-end against these worlds in the test suite.
-
-### Patches are version-specific
-
-A `.mcapatch` records changes by `NbtPath`. Minecraft occasionally renames or restructures NBT across
-versions, so a path captured on one version can silently not match on another (apply reports it as a
-guarded conflict rather than misapplying). Apply a patch onto a base whose **DataVersion** matches the
-one it was extracted from. Known on-disk boundaries:
-
-| Version | DataVersion | What changed on disk |
-|---|---|---|
-| 1.21.2 | 4080 | `Lock` → `lock`; boat id restructure |
-| 1.21.4 | 4189 | furnace field renames (`CookTime` → `cooking_time_spent`, …) |
-| 1.21.5 | 4325 | nothing on disk (informational) |
-
-The full `.mcapatch` schema is in [`docs/mcapatch-format.md`](docs/mcapatch-format.md).
-
-## Version control
-
-A semantic VCS for worlds — like git, but it understands chunks. The repository is
-a **content-addressed object store**: each chunk is hashed by its *decoded NBT*,
-so an unchanged chunk is stored **once** no matter how many snapshots reference it
-(the thing fastback + git-LFS can't do — they store whole region blobs per snapshot).
-
-The CLI mirrors git: the repo is the current directory (or nearest ancestor), or
-you pass `-C <repo>`; a **bound worktree** (the world) lets `commit`/`status`/
-`diff`/`checkout` take no path — just like git's working tree.
-
-```sh
-mcagit init <repo> --worktree <world>     # create a repo, bind a world
-cd <repo>                                   # …or prefix commands with -C <repo>
-
-mcagit commit -m "before raid"             # snapshot the bound worktree
-# …play, then:
-mcagit commit -m "after raid"              # only changed chunks add objects
-
-mcagit status                              # changes vs HEAD (by hash; fast)
-mcagit diff                                # worktree vs HEAD
-mcagit diff <refA> <refB>                  # any two snapshots (branch/commit/HEAD/path)
-mcagit log [--oneline|-p|--stat]           # history (optionally with diffs)
-mcagit show <ref>                          # a commit's metadata + diff
-mcagit checkout <ref> [<world-out>]        # materialize a snapshot
-mcagit reset <ref> [--hard]                # move the branch (─ worktree with --hard)
-mcagit restore <ref> <path>...             # restore specific files from a snapshot
-mcagit revert <commit>                     # new commit that undoes a commit
-mcagit branch [name]                       # list / create branches
-mcagit tag -a v1 -m "season 1" [-s]        # annotated (optionally SSH-signed) tags
-mcagit merge <other-branch>               # 3-way merge (stops on conflict)
-mcagit merge --continue | --abort          # finish / undo a conflicted merge
-
-mcagit add <path>... | restore --staged …  # stage / unstage (the index)
-mcagit stash [push|pop|list|drop|clear]    # shelve / restore the worktree
-mcagit rebase [--onto <base>] <upstream>   # replay commits onto a new base
-mcagit bisect start|good|bad|reset         # binary-search for a bad commit
-mcagit clean [-n|-f]                        # remove untracked worktree files
-mcagit fsck                                 # verify object integrity + reachability
-mcagit rev-parse|cat-file|hash-object|ls-tree   # plumbing
-```
-
-Revisions accept `HEAD`, branch/tag names, abbreviated hashes, `~n` / `^n` suffixes,
-`HEAD@{n}` reflog positions, and ranges `A..B` / `A...B` for `log` (e.g.
-`diff HEAD~2 HEAD`, `checkout main~1`, `log v1..HEAD`). A `.mcaignore` in the world
-(gitignore-lite: `*.ext`, `dir/`, `name`, `/anchored/path`) excludes files from
-commits. Identity comes from `config user.name` / `user.email`; commits and tags can
-be SSH-signed (`commit -S`, `tag -s`, `user.signingkey`) and verified (`tag -v`).
-
-`cherry-pick <commit>` applies one commit onto HEAD via the 3-way engine. A conflicted
-`merge` stops without committing, records MERGE_HEAD + a conflict list, and lays the
-partial result into the worktree; resolve it and `merge --continue`, or `merge --abort`.
-Pre-commit / post-commit **hooks** run from `<repo>/hooks/`.
-
-### Where it diverges from git (on purpose)
-
-mcagit is git-shaped but a world isn't a source tree — a few behaviors differ deliberately:
-
-- **`commit` exits `0` on "nothing to commit"** (git exits `1`). A scheduled backup of an unchanged
-  world isn't an error; `commit --json`'s `committed` flag distinguishes the cases.
-- **`clean -f` removes untracked files but leaves directories** — pass `-d` to remove untracked dirs
-  too (git's behavior).
-- **`stash` doesn't shelve untracked files** (no `-u`/`--include-untracked` yet).
-- **No byte-identical restore** — `checkout` re-encodes chunks canonically (sorted keys, re-zlib) and
-  resets region chunk timestamps; reproduction is semantically faithful (loads in Minecraft), not
-  bit-for-bit.
-- **`git log` / `git fsck` can't read an mcagit repo** and vice-versa — the object model (manifests
-  as trees, canonical-NBT blobs, a custom packfile format) is its own; there's no git interop goal.
-
-**Automating backups.** `commit --push <remote>` snapshots and pushes in one shot (and
-still pushes when nothing changed, to keep the offsite current); `commit --json` prints a
-machine-readable result with a `committed` boolean (so a scheduler can tell "snapshotted"
-from "nothing changed" — exit code stays `0` for both). `commit` and `push` take a coarse
-repository lock (git's `index.lock` model) for their duration: a second concurrent
-invocation **fails fast** (exit `2`) instead of racing branch advancement, so two
-overlapping backup runs can't silently drop a commit. The lock is an OS advisory lock that
-releases automatically if the process crashes — a leftover `mcagit.lock` never wedges the
-repo.
-
-**Progress.** `commit`, `checkout`, and `push` print git-style progress to **stderr**, repainting
-one line in place:
-
-```text
-Snapshotting world:  86% (748/870 files), 271503 chunks
-Checking out: 100% (3174/3174), done.
-Counting objects: 311047, done.
-Writing objects: 100% (4128/4128), done.
-```
-
-It's shown only when stderr is an interactive terminal, so pipes, CI, and `--json` consumers stay
-clean (the same rule as color); set `NO_PROGRESS` to turn it off everywhere.
-
-### Remotes & maintenance
-
-Sync history between repositories — push world backups offsite or pull them down.
-A remote is a **path**, an **`http(s)://`** URL, **`ssh://`**, or a serverless
-cloud bucket (**`azure://`**, **`s3://`**). Because objects are content-addressed,
-transfer copies only what the other side lacks.
-
-```sh
-mcagit clone <src> <dest> [--depth N] [--token T]   # src: path | http(s):// | ssh:// | azure:// | s3://
-mcagit remote add origin <url>
-mcagit push  [<remote> [<branch>]] [--force] [--token T]   # fast-forward-checked
-mcagit fetch [<remote> [<branch>]] [--token T]            # into refs/remotes/<remote>/*
-mcagit push  [<remote>] --all                # push every branch
-mcagit ls-remote [<remote>]                  # list a remote's refs
-mcagit verify-remote [<remote>] [--deep]     # check offsite integrity (--deep: hash every object)
-mcagit reflog                                # HEAD movement history
-mcagit gc [--threads N] [--prune-only]       # repack reachable objects + prune the rest
-```
-
-**`gc`** delta-packs reachable objects across all CPU cores by default and prints live
-progress on a terminal (silent when piped or when `NO_PROGRESS` is set). `--threads N`
-caps parallelism (`--threads 1` forces the serial writer); `--prune-only` deletes
-unreachable loose objects without repacking.
-
-**`--depth N`** makes a *shallow* clone — only the last N commits, with their worlds
-fully intact. History is grafted at the boundary (older commits look like roots), so
-`log`/`checkout`/`gc`/`fsck` all work; operations that need the pruned history (a diff
-of the boundary commit against its absent parent, a merge across it) aren't available —
-the same constraint git's shallow clones have. Good for "just pull the latest snapshot"
-disaster recovery without dragging down the whole backup history.
-
-**Serving over the network** (git's model — anonymous read, authenticated push):
-
-```sh
-# HTTP: run a daemon. Read is open; push needs --allow-push and (optionally) a token.
-mcagit -C <repo> serve --port 8421 --allow-push --token s3cret
-mcagit clone http://host:8421 ./world.mcagit          # anonymous
-mcagit push origin main --token s3cret                # authenticated
-
-# SSH: no daemon — runs `mcagit serve-stdio` on the remote over your ssh session.
-# Auth & encryption are ssh's job (keys/agent); requires mcagit on the remote.
-mcagit clone ssh://user@host/path/to/world.mcagit ./world.mcagit
-mcagit push  ssh://user@host/path/to/world.mcagit main
-```
-
-By default an SSH caller that can reach `serve-stdio` may push (shell access ≈ push
-access). To pin a key to **fetch/clone only**, give it a forced command in the remote's
-`~/.ssh/authorized_keys`:
-
-```text
-command="mcagit serve-stdio /path/to/world.mcagit --read-only",no-pty ssh-ed25519 AAAA… reader@key
-```
-
-**Serverless cloud buckets** (no daemon — push straight to object storage). There's
-nothing to run server-side: the whole protocol is client-side. A push bundles the
-objects the bucket lacks into **one** content-addressed pack and updates the branch
-ref with a compare-and-swap, so it's ≈3 bucket writes regardless of how many chunks
-changed (cheap against per-request billing) and concurrent pushes can't clobber each
-other.
-
-```sh
-# Azure Blob Storage — azure://<account>/<container>/<path>
-export AZURE_STORAGE_CONNECTION_STRING='…'     # or: AZURE_STORAGE_KEY (+ account from the URL)
-mcagit clone azure://myacct/backups/world ./world.mcagit
-mcagit push  azure://myacct/backups/world main
-
-# Any S3-compatible store (AWS, Cloudflare R2, Backblaze B2, MinIO) — s3://<bucket>/<path>
-export AWS_ACCESS_KEY_ID=… AWS_SECRET_ACCESS_KEY=… AWS_REGION=us-east-1
-export S3_ENDPOINT_URL='https://…'             # only for non-AWS providers (R2/B2/MinIO)
-mcagit push s3://my-bucket/world main
-```
-
-Credentials come from the env (Azure: connection string, or account + `AZURE_STORAGE_KEY`;
-S3: the standard AWS credential chain). Anyone with write access to the bucket can push,
-so scope the credentials per backup. The compare-and-swap that guards refs needs the
-provider to honor conditional writes — Azure Blob always does; S3 (If-Match, 2024+) and
-R2 do. `verify-remote` walks the bucket's history and confirms every referenced object is
-present (`--deep` re-hashes each one) — a quick offsite bit-rot / partial-upload check.
-
-> **Encryption:** bucket objects are content-addressed but **not encrypted at rest by
-> mcagit** — a world's NBT is recoverable by anyone who can read the bucket. For private
-> backups, rely on the provider's server-side encryption (SSE) and tight bucket ACLs.
-> Client-side (zero-knowledge) encryption would need to be record-level — encrypting whole
-> objects breaks cross-snapshot dedup, the very thing that makes incremental pushes cheap —
-> and isn't implemented yet.
-
-- **Whole-world snapshots:** region/entities/poi as deduped per-chunk objects,
-  loose NBT as canonical objects, everything else (datapacks, stats, advancements)
-  as raw blobs — so `checkout` restores a faithful, playable world (a full checkout
-  prunes worktree files absent from the snapshot; `.mcaignore`'d files are kept).
-- **Delta-packed storage:** `gc` repacks reachable objects into a single packfile
-  with delta compression between similar chunks (a chunk whose only change is a
-  ticking `InhabitedTime` packs to a few bytes) and prunes the unreachable rest.
-- **True 3-way merge:** finds the common ancestor and merges **per NBT node** —
-  changes from both sides that touch different nodes both land; only a genuine
-  same-node clash is a conflict (kept *ours*, or *theirs* with `--theirs`, and
-  reported). Far finer than git's line-based merge on these files.
-- Verified on the example worlds: committing Older then Newer reproduces each
-  exactly on `checkout` (and loads in real Minecraft), with shared chunks stored once.
-
-> Stop the server before `checkout` (it rewrites world files). The repo lives
-> outside the world directory; bind the world with `--worktree` / `config worktree`.
 
 ## Performance
 
-Two fast paths keep whole-world diffs cheap:
+On the full `dobbscraft` world (2.4 GB, 312,717 chunks, 8 cores):
 
-1. Files with byte-identical contents are skipped without parsing.
-2. Within a region, chunks whose **compressed** payloads are byte-identical are
-   skipped without decompressing or parsing NBT.
+| operation | time |
+|---|---|
+| commit (cold) | ~44 s |
+| commit (incremental) | ~12 s |
+| **checkout (restore)** | **~57 s** (parallel) |
+| `verify` (accuracy gate) | 10–12 s |
+| semantic diff | 23–26 s |
+| storage: 8 snapshots (~19 GB raw) | **2.2 GB** deduped |
 
-Region files are diffed in parallel. A self-diff of a ~2,900-file world completes
-in a couple of seconds.
+Checkout is parallel across the whole pipeline (rayon over a flat per-chunk job list,
+lock-free pack reads); against the original serial .NET checkout (268 s) this is **~4.7×**
+faster, and every restored world reproduces byte-faithfully (confirmed by `verify` and
+semantic diff).
 
-## Architecture
+## Clean-slate format notes
 
-```text
-src/McaGit/
-  Anvil/     RegionFile, RegionWriter, RawChunk, ChunkPos, — region container
-             ChunkCodec                                      read + write
-  Nbt/       NbtIdentity, NbtEquality, NbtJson, NbtPath,    — NBT identity, equality,
-             NbtCanonical                                    lossless JSON, paths, canonical form
-  Diff/      NbtComparer + IDiffSink (NbtChangeSink /       — one tree walk, two outputs
-             PatchOpSink), ListMatcher, ValueRepr,
-             WorldDiffer, DiffModels                        — file/chunk/world orchestration
-  Patch/     WorldPatch/PatchModels, PatchExtractor,        — extract & apply patches
-             PatchApplier
-  Repo/      ObjectStore, Repository, Manifest, Snapshotter,— content-addressed VCS:
-             Checkout, StatusCalc, MergeBase, Merger          commit/log/status/checkout/merge
-             RemoteOps, Transports, IBucket, BucketTransport,— sync: local/http/ssh + serverless
-             CloudBuckets, Packfile, Fsck                      cloud buckets, packs, integrity
-  Model/     WorldSource                                    — world layout discovery
-  Output/    TextDiffFormatter, JsonDiffFormatter, Ansi     — rendering
-  Cli/       Diff/Extract/ApplyOptions, RepoCommands,       — subcommand dispatch
-             + Program.cs
-tests/McaGit.Tests/  xUnit suite (synthetic + real-region parse)
-```
+- Object id = `blake3(uncompressed canonical NBT)`; loose objects are `zstd`-compressed at
+  `objects/aa/rest`; packs are `objects/pack/pack-<id>.{pack,idx}` (mmap'd).
+- The repo is **bare and external** to the world; the bound worktree is recorded in the repo
+  `config`. `Repository::discover` walks up from cwd, git-style.
+- Region files written on checkout are valid Anvil (zlib chunks) but not byte-identical to
+  Minecraft's own output — **semantic diff / `verify` is the equivalence check** (an unchanged
+  chunk hashes identically regardless of on-disk compression).
 
-The Anvil region container (8 KiB sector header + per-chunk compression) is parsed
-and written directly; `fNbt` handles the NBT tag tree (GZip/ZLib/uncompressed). A
-single tree walk (`NbtComparer` + `IDiffSink`) feeds both the display diff and the
-patch extractor, so they can never drift.
+Design rationale (NBT identity, canonical encoding, 3-way merge, chunk-vs-git model) lives in
+`docs/architecture/`. The sample worlds in `compare-worlds/` (real Anvil data) are used for
+end-to-end round-trip checks.
 
-The serverless cloud backend (bucket layout, the pack-based push protocol, the
-compare-and-swap concurrency model, and the encryption stance) is written up in
-[`docs/cloud-backend.md`](docs/cloud-backend.md).
+## Not yet implemented
 
-## Tests
-
-```sh
-dotnet test
-```
-
-220+ tests covering: the NBT comparer (add/remove/modify/type-change, identity-list
-matching, array summarize/expand); the lossless `NbtJson` codec (incl. longs
-beyond 2^53); `NbtPath` get/set/remove by key, index and identity; `RegionWriter`
-round-trip; the full patch pipeline (forward/reverse round-trips, conflict guard,
-`--force`, `--dry-run`); and the VCS — object-store dedup, canonical-form
-determinism, commit→checkout reproduces a world, merge-base, and 3-way merge.
-The git-likeness tiers add: fsck integrity/reachability, config + identity, the
-author/committer split, annotated & SSH-signed tags, object classification + plumbing;
-the binary delta codec, packfile round-trips/compression and gc repacking; the
-recursive merge base (incl. criss-cross) and the merge stop/continue/abort workflow;
-bisect convergence and the staging index; and HEAD@{n}, stash (+gc survival), rebase
-(+`--onto`), clean, and hooks. One test additionally parses a real region file when
-`MCAGIT_TEST_REGION` points at one (auto-skipped otherwise).
-
-## Minecraft version support
-
-Targets the **Anvil** format. Safe floor is **DataVersion 2724 (1.17)**; below it the
-pre-1.18 `Level`-compound shape and pre-1.16 straddled `block_states` packing make
-paths and comparisons unreliable. All chunk compression types are decoded:
-GZip (1), Zlib (2), uncompressed (3), and **LZ4 frame (4)** — the latter is the
-`region-file-compression=lz4` server setting shipped since 1.20.5, so worlds saved
-with it diff/commit at full per-chunk granularity (was previously demoted to an opaque
-blob). Only type 127 (Custom, a namespaced mod algorithm) is undecodable and falls back
-to a raw blob. Data-pack/mod dimensions under `dimensions/<ns>/<path>/` are included.
-Excluded: Alpha/Beta/MCRegion (`.mcr`, pre-1.2.1) — a different container.
-
-## Limitations
-
-- Block and biome changes are decoded to **coordinate level** — a changed section
-  reports `sections[Y].block_states[@x,y,z]: minecraft:stone → minecraft:air` rather than
-  an opaque `long[]` delta (a section changed wholesale, e.g. worldgen or `/fill`,
-  collapses to a one-line summary; `--expand` lists every cell). Heightmaps and other
-  packed arrays are still shown as array diffs. This is a **display** enrichment: the
-  patch path stores the raw array, so `apply` is unaffected.
-- `diff`/`extract`/`status` never modify a world. `apply` writes only to the fresh
-  output directory it creates; `checkout` / `reset --hard` / `bisect` / `merge` update
-  the bound worktree in place (a full checkout prunes files not in the snapshot).
-- Loose objects are whole (zlib-compressed); `gc` delta-packs them into a packfile.
-  **Push** bundles new objects into one delta-compressed pack on every transport
-  (path / http / ssh / bucket); **fetch** is still per-object (it walks the commit
-  graph to know what to pull — batched fetch is planned). `apply` copies the whole
-  target world before editing (no hardlink/reflink yet). The
-  first commit decodes every chunk (parallelized, a few seconds on a large world);
-  re-commits reuse a per-repo decode cache.
-- `merge` uses a recursive merge base (folds multiple bases on a criss-cross), and a
-  conflicted merge stops with MERGE_HEAD + a conflict list for `merge --continue` /
-  `--abort` (resolution is by re-snapshotting the worktree, not in-file markers — the
-  files are binary). `merge --ours`/`--theirs` still auto-resolve in one shot.
-- Tag/commit signing is SSH-key based (`ssh-keygen`), not GPG. `rebase` is
-  non-interactive (no `-i`); on a conflict it keeps the replayed change and reports.
-- The HTTP server is a simple built-in daemon (single token, no TLS — put it behind a
-  reverse proxy for `https`); `push --all` and `ls-remote` work, but pushing tag refs
-  over the network isn't wired up yet.
-- A compound key containing a literal `.` or `[` isn't addressable by patch/merge
-  paths (real Minecraft keys don't use them).
-
-## More documentation
-
-- [`docs/commands.md`](docs/commands.md) — every command and flag (the single source of truth).
-- [`docs/architecture/`](docs/architecture/) — the design decision records (ADRs).
-- [`CHANGELOG.md`](CHANGELOG.md) — notable changes.
-- [`docs/repo-format.md`](docs/repo-format.md) — the on-disk repository format (objects, manifest, commit/tag, packfiles).
-- [`docs/mcapatch-format.md`](docs/mcapatch-format.md) — the `.mcapatch` JSON schema, type-tagged NBT encoding, and `NbtPath` grammar.
-- [`docs/cloud-backend.md`](docs/cloud-backend.md) — the serverless `azure://` / `s3://` bucket backend.
-- [`SECURITY.md`](SECURITY.md) — threat model and trust boundaries. [`CONTRIBUTING.md`](CONTRIBUTING.md) and [`TESTING.md`](TESTING.md) — development.
-
-## License
-
-GPL-3.0-or-later. See [LICENSE](LICENSE). mcagit is free software: you may redistribute and/or modify it under the terms of the GNU General Public License, version 3 or (at your option) any later version. It is distributed WITHOUT ANY WARRANTY. As copyleft, distributed derivatives must also be GPL-licensed with source available.
+- **Network/cloud remotes**: http/ssh/stdio transports, `serve`, S3/Azure. The object-copy
+  core is done + tested via **path transport** (local clone/push/pull); networked transports
+  layer byte-moving on top.
+- reflog (`HEAD@{n}`), `bisect`, annotated-tag/commit **SSH signing**.
+- The bare `mcagit A B` diff fallthrough (use `mcagit diff A B`).

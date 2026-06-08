@@ -1,46 +1,60 @@
 # Contributing to mcagit
 
-Thanks for helping. mcagit is a single .NET 10 (LTS) console app (`src/McaGit`, assembly `mcagit`) plus an xUnit test project. Runtime dependencies: `fNbt`, `K4os.Compression.LZ4`, and `Azure.Storage.Blobs` / `AWSSDK.S3` (cloud remotes).
+Thanks for helping. mcagit is a **Rust** cargo workspace of six crates
+(`nbt → anvil → {diff, repo} → patch → cli`) producing one binary, `mcagit`. Key deps:
+`flate2` (zlib/gzip), `lz4_flex`, `blake3`, `zstd`, `rayon`, `memmap2`, `arc-swap`, `serde`,
+`clap`.
 
 ## Build and test
 
-```sh
-dotnet build -c Release
-dotnet test                                            # full suite (all synthetic — no fixtures)
-dotnet test --filter "FullyQualifiedName~NbtComparer"  # one class
-dotnet test --filter "DisplayName~merge"               # by name fragment
-dotnet run --project src/McaGit -- <args>             # run the CLI
-```
+Requires a stable Rust toolchain (see `rust-toolchain.toml`).
 
-Targets `net10.0`; install the .NET 10 SDK.
+```sh
+cargo build --release                       # binary: target/release/mcagit
+cargo test --all                            # full suite (all synthetic — no fixtures)
+cargo test -p mca-repo                       # one crate
+cargo test -p mca-diff comparer              # by name fragment
+cargo run -p mcagit -- <args>                # run the CLI
+```
 
 ## Before you push
 
-1. `dotnet test` — the full suite must be green locally.
-2. `dotnet format McaGit.sln` — CI runs `--verify-no-changes` as a gate. The formatter expands compact multi-member object initializers to one per line and indents `case: {}` block bodies a level deeper; an `.editorconfig` pins these so editors agree.
+1. `cargo test --all` — the full suite must be green locally.
+2. `cargo fmt --all -- --check` and `cargo clippy --all-targets -- -D warnings` — CI gates on
+   both.
 3. If you changed user-facing behavior, update `README.md` (and the relevant `docs/` spec).
 
 ## Writing tests
 
-Tests build synthetic worlds and regions through `tests/McaGit.Tests/TestAnvil.cs` — there are **no binary fixtures**. Use `TestAnvil.Root`, `TestAnvil.WriteRegion`, `TestAnvil.WriteLoose`, and `TestAnvil.TempDir` to construct inputs. See [`TESTING.md`](TESTING.md) for the test-type taxonomy and which kind to reach for.
-
-Recent work follows a tiered naming convention (`GitLikeTierNTests.cs`, and per-feature files like `BucketTransportTests.cs`).
+Tests build synthetic worlds and regions through the in-crate test helpers (see the test
+modules in `crates/anvil` and `crates/repo`) — there are **no binary fixtures**. Construct
+inputs programmatically; assert exact world reproduction.
 
 ## Architecture in one paragraph
 
-Three layers share one core: **diff** (display), **patch** (extract / apply), and **repo** (VCS) all sit on the same NBT comparison walk (`Diff/NbtComparer` + `IDiffSink`) and canonical encoding (`Nbt/NbtCanonical`). Any change to diff semantics must go through the comparer / sink so display and patch cannot drift. The region container lives in `Anvil/`, the NBT semantics in `Nbt/`, and the VCS in `Repo/`. The format specs are in [`docs/repo-format.md`](docs/repo-format.md) and [`docs/mcapatch-format.md`](docs/mcapatch-format.md); the load-bearing invariants are in [`.github/copilot-instructions.md`](.github/copilot-instructions.md).
+Three layers share one core: **diff** (display), **patch** (extract/apply), and **repo** (VCS)
+all sit on the same NBT comparison walk (`crates/diff` comparer + `DiffSink`) and canonical
+encoding (`crates/nbt`). Any change to diff semantics must go through the comparer/sink so
+display and patch cannot drift. The region container lives in `crates/anvil`, the NBT semantics
+in `crates/nbt`, and the VCS in `crates/repo`. See [`CLAUDE.md`](CLAUDE.md) for the full
+architecture and the load-bearing invariants.
 
 ## Invariants you must preserve
 
-- `commit` → `checkout` reproduces a world faithfully (playable in Minecraft); tests assert exact reproduction.
-- The canonical NBT encoding is deterministic and version-independent — never make `NbtCanonical` depend on fNbt internals, ordering, or a diff-path normalization.
-- Diff-only normalizations (e.g. dropping a redundant single-entry-palette `data`) belong in the diff path, never on the canonical / storage path.
-- `diff` / `extract` / `status` must never modify a world.
+- `commit` → `checkout` reproduces a world faithfully (playable in Minecraft); tests assert
+  exact reproduction, and `verify` re-hashes a world's canonical tree against a commit.
+- The canonical NBT encoding is deterministic and version-independent — never make it depend
+  on map ordering or a diff-path normalization.
+- Diff-only normalizations belong in the diff path, never on the canonical/storage path.
+- `diff` / `extract` / `status` / `verify` must never modify a world.
 
 ## Pull requests
 
-CI re-runs build + tests on Ubuntu and Windows, coverage, an end-to-end round-trip gauntlet against the sample worlds, `dotnet format`, markdownlint, and CodeQL. Keep them green. Describe what you changed and why; if you touched diff / patch / repo semantics, note how you verified the round-trip still holds.
+CI re-runs `cargo fmt`, `clippy`, `cargo test --all`, an end-to-end round-trip on the sample
+worlds, and markdownlint. Keep them green. Describe what you changed and why; if you touched
+diff/patch/repo semantics, note how you verified the round-trip still holds.
 
 ## License
 
-By contributing you agree your contributions are licensed under the project's [GPL-3.0](LICENSE).
+By contributing you agree your contributions are licensed under the project's
+[GPL-3.0](LICENSE).
