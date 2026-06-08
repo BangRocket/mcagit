@@ -50,4 +50,26 @@ mod tests {
             canonical_bytes(&NbtValue::Compound(outer2))
         );
     }
+
+    #[test]
+    fn keys_inside_list_of_compounds_are_sorted_too() {
+        // a compound holding a list of compounds, inner keys in differing order
+        let mk = |first_z: bool| {
+            let mut inner = Compound::new();
+            if first_z {
+                inner.insert("z".into(), NbtValue::Byte(1));
+                inner.insert("a".into(), NbtValue::Byte(2));
+            } else {
+                inner.insert("a".into(), NbtValue::Byte(2));
+                inner.insert("z".into(), NbtValue::Byte(1));
+            }
+            let mut outer = Compound::new();
+            outer.insert(
+                "items".into(),
+                NbtValue::List(vec![NbtValue::Compound(inner)]),
+            );
+            NbtValue::Compound(outer)
+        };
+        assert_eq!(canonical_bytes(&mk(true)), canonical_bytes(&mk(false)));
+    }
 }
