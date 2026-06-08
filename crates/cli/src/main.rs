@@ -382,6 +382,9 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                                 "x": c.x, "z": c.z,
                                 "status": format!("{:?}", c.status),
                                 "changes": c.changes.len(),
+                                "blockEdits": c.block_edits.iter().map(|e| serde_json::json!({
+                                    "x": e.x, "y": e.y, "z": e.z, "old": e.old, "new": e.new,
+                                })).collect::<Vec<_>>(),
                             })).collect::<Vec<_>>(),
                             "nodeChanges": f.changes.iter().map(|c| serde_json::json!({
                                 "path": c.path, "kind": format!("{:?}", c.kind),

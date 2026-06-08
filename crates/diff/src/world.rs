@@ -3,7 +3,8 @@
 
 use crate::change::{compare as compare_nbt, NbtChange};
 use crate::Result;
-use mca_anvil::{codec, ChunkPos, RegionFile};
+use mca_anvil::{codec, section_blocks, section_ys, BlockState, ChunkPos, RegionFile};
+use mca_nbt::NbtValue;
 use rayon::prelude::*;
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -22,12 +23,24 @@ pub enum ChunkStatus {
     Modified,
 }
 
+/// A coordinate-level block change within a chunk (decoded from the paletted
+/// `block_states`), surfaced for display alongside the raw node changes.
+#[derive(Debug, Clone)]
+pub struct BlockEdit {
+    pub x: i32,
+    pub y: i32,
+    pub z: i32,
+    pub old: Option<String>,
+    pub new: Option<String>,
+}
+
 #[derive(Debug)]
 pub struct ChunkDiff {
     pub x: i32,
     pub z: i32,
     pub status: ChunkStatus,
     pub changes: Vec<NbtChange>,
+    pub block_edits: Vec<BlockEdit>,
 }
 
 #[derive(Debug)]
@@ -155,12 +168,19 @@ fn diff_region(a_path: &Path, ba: &[u8], b_path: &Path, bb: &[u8]) -> Result<Vec
                 let va = codec::decode(ca)?;
                 let vb = codec::decode(cb)?;
                 let changes = compare_nbt(&va, &vb);
+                // `block_edits` is a pure function of the same decoded NBT, so it
+                // can only be non-empty when `block_states` differs — which
+                // `compare_nbt` already reports. Keying emission off `changes`
+                // alone keeps display and patch agreeing on *what* changed;
+                // `block_edits` only adds coordinate detail to the display.
                 if !changes.is_empty() {
+                    let block_edits = block_edits_between(&va, &vb, x, z);
                     out.push(ChunkDiff {
                         x,
                         z,
                         status: ChunkStatus::Modified,
                         changes,
+                        block_edits,
                     });
                 }
             }
@@ -169,17 +189,64 @@ fn diff_region(a_path: &Path, ba: &[u8], b_path: &Path, bb: &[u8]) -> Result<Vec
                 z,
                 status: ChunkStatus::Removed,
                 changes: vec![],
+                block_edits: vec![],
             }),
             (None, Some(_)) => out.push(ChunkDiff {
                 x,
                 z,
                 status: ChunkStatus::Added,
                 changes: vec![],
+                block_edits: vec![],
             }),
             (None, None) => {}
         }
     }
     Ok(out)
+}
+
+/// Coordinate-level block changes between two decoded chunks (paletted
+/// `block_states` per section). `cx`/`cz` are the chunk coords.
+fn block_edits_between(a: &NbtValue, b: &NbtValue, cx: i32, cz: i32) -> Vec<BlockEdit> {
+    let mut ys = section_ys(a);
+    ys.extend(section_ys(b));
+    ys.sort_unstable();
+    ys.dedup();
+    let mut out = Vec::new();
+    for sy in ys {
+        let ab = section_blocks(a, sy);
+        let bb = section_blocks(b, sy);
+        if ab == bb {
+            continue;
+        }
+        for idx in 0..4096usize {
+            let o = ab.as_ref().and_then(|v| v.get(idx));
+            let n = bb.as_ref().and_then(|v| v.get(idx));
+            if o != n {
+                let (ly, rem) = (idx / 256, idx % 256);
+                out.push(BlockEdit {
+                    x: cx * 16 + (rem % 16) as i32,
+                    y: sy * 16 + ly as i32,
+                    z: cz * 16 + (rem / 16) as i32,
+                    old: o.map(fmt_block),
+                    new: n.map(fmt_block),
+                });
+            }
+        }
+    }
+    out
+}
+
+fn fmt_block(bs: &BlockState) -> String {
+    if bs.properties.is_empty() {
+        bs.name.clone()
+    } else {
+        let p: Vec<String> = bs
+            .properties
+            .iter()
+            .map(|(k, v)| format!("{k}={v}"))
+            .collect();
+        format!("{}[{}]", bs.name, p.join(","))
+    }
 }
 
 fn list_files(root: &Path) -> Vec<String> {
@@ -285,5 +352,76 @@ mod tests {
         world(&a, 20, false);
         world(&b, 20, false);
         assert!(diff(&a, &b).unwrap().is_empty());
+    }
+
+    #[test]
+    fn chunk_block_edits_are_decoded() {
+        let comp = |pairs: Vec<(&str, NbtValue)>| {
+            let mut m = Compound::new();
+            for (k, v) in pairs {
+                m.insert(k.into(), v);
+            }
+            NbtValue::Compound(m)
+        };
+        let named = |n: &str| comp(vec![("Name", NbtValue::String(n.into()))]);
+        let section = |bs: NbtValue| {
+            comp(vec![(
+                "sections",
+                NbtValue::List(vec![comp(vec![
+                    ("Y", NbtValue::Byte(0)),
+                    ("block_states", bs),
+                ])]),
+            )])
+        };
+        let write = |dir: &Path, root: NbtValue| {
+            std::fs::create_dir_all(dir.join("region")).unwrap();
+            let payload = codec::encode(&root, ChunkCompression::ZLib).unwrap();
+            let ch = RawChunk {
+                pos: ChunkPos::new(0, 0),
+                compression: ChunkCompression::ZLib,
+                payload,
+                external: false,
+                timestamp: 0,
+            };
+            RegionWriter::write(
+                &dir.join("region").join("r.0.0.mca"),
+                std::slice::from_ref(&ch),
+            )
+            .unwrap();
+        };
+        let d = tempfile::tempdir().unwrap();
+        let a = d.path().join("a");
+        let b = d.path().join("b");
+        write(
+            &a,
+            section(comp(vec![(
+                "palette",
+                NbtValue::List(vec![named("minecraft:air")]),
+            )])),
+        );
+        let mut data = vec![0i64; 256];
+        data[0] = 1;
+        write(
+            &b,
+            section(comp(vec![
+                (
+                    "palette",
+                    NbtValue::List(vec![named("minecraft:air"), named("minecraft:stone")]),
+                ),
+                ("data", NbtValue::LongArray(data)),
+            ])),
+        );
+        let wd = diff(&a, &b).unwrap();
+        let region = wd
+            .files
+            .iter()
+            .find(|f| f.path.contains("r.0.0.mca"))
+            .unwrap();
+        assert_eq!(region.chunks.len(), 1);
+        let edits = &region.chunks[0].block_edits;
+        assert_eq!(edits.len(), 1);
+        assert_eq!((edits[0].x, edits[0].y, edits[0].z), (0, 0, 0));
+        assert_eq!(edits[0].old.as_deref(), Some("minecraft:air"));
+        assert_eq!(edits[0].new.as_deref(), Some("minecraft:stone"));
     }
 }

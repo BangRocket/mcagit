@@ -28,6 +28,23 @@ pub fn render(d: &WorldDiff) -> String {
                         s.push_str(&format!(" ({} changes)", ch.changes.len()));
                     }
                     s.push('\n');
+                    const CAP: usize = 8;
+                    for e in ch.block_edits.iter().take(CAP) {
+                        s.push_str(&format!(
+                            "        @{},{},{}: {} -> {}\n",
+                            e.x,
+                            e.y,
+                            e.z,
+                            e.old.as_deref().unwrap_or("-"),
+                            e.new.as_deref().unwrap_or("-"),
+                        ));
+                    }
+                    if ch.block_edits.len() > CAP {
+                        s.push_str(&format!(
+                            "        … and {} more block changes\n",
+                            ch.block_edits.len() - CAP
+                        ));
+                    }
                 }
             }
         }
