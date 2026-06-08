@@ -10,6 +10,10 @@ use valence_nbt::{Compound as VCompound, Value as VValue};
 /// compound; a non-compound root (not produced by any real world) is written as
 /// an empty document.
 pub fn write_named(name: &str, v: &NbtValue, sort: bool) -> Vec<u8> {
+    debug_assert!(
+        matches!(v, NbtValue::Compound(_)),
+        "NBT document root must be a compound"
+    );
     let compound = match to_value(v, sort) {
         VValue::Compound(c) => c,
         _ => VCompound::new(),

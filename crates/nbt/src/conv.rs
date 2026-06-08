@@ -178,3 +178,33 @@ fn to_list(items: &[NbtValue], sort: bool) -> VList {
         ),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn conv_roundtrips_every_type() {
+        let mut m = Compound::new();
+        m.insert("k".into(), NbtValue::Int(7));
+        let cases = vec![
+            NbtValue::Byte(-1),
+            NbtValue::Short(-32768),
+            NbtValue::Int(i32::MIN),
+            NbtValue::Long(i64::MIN),
+            NbtValue::Float(0.1 + 0.2),
+            NbtValue::Double(-1.8179372026061453),
+            NbtValue::ByteArray(vec![0, 127, 128, 255]), // high bytes exercise u8<->i8
+            NbtValue::String("modified\u{0}utf8".into()),
+            NbtValue::IntArray(vec![1, -2, i32::MAX]),
+            NbtValue::LongArray(vec![1, -2, 1 << 60]),
+            NbtValue::List(vec![]), // empty -> List::End
+            NbtValue::List(vec![NbtValue::Byte(1), NbtValue::Byte(2)]),
+            NbtValue::List(vec![NbtValue::Compound(m.clone())]),
+            NbtValue::Compound(m),
+        ];
+        for v in cases {
+            assert_eq!(from_value(to_value(&v, false)), v, "roundtrip {v:?}");
+        }
+    }
+}
