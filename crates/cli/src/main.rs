@@ -115,6 +115,8 @@ enum Cmd {
     RevParse { rev: String },
     /// Print an object's raw bytes to stdout.
     CatFile { id: String },
+    /// Show a commit: metadata + files changed vs its first parent.
+    Show { rev: String },
     /// List the files/regions in a snapshot.
     LsTree { rev: String },
     /// Create, list, or delete tags.
@@ -124,11 +126,16 @@ enum Cmd {
         #[arg(short = 'd', long)]
         delete: bool,
     },
-    /// Move the current branch to <rev> (worktree too with --hard).
+    /// Move the current branch to <rev>. --hard also resets the worktree;
+    /// --soft/--mixed move the ref only (mcagit has no staging index).
     Reset {
         rev: String,
         #[arg(long)]
         hard: bool,
+        #[arg(long)]
+        soft: bool,
+        #[arg(long)]
+        mixed: bool,
     },
     /// Restore specific files from <rev> into the worktree.
     Restore { rev: String, paths: Vec<String> },
@@ -403,6 +410,25 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                     Some(v) => println!("{v}"),
                     None => return Ok(ExitCode::from(1)),
                 },
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+
+        Cmd::Show { rev } => {
+            let repo = open_repo(&cli)?;
+            let h = repo.resolve_ref(rev)?;
+            let c = repo.read_commit(&h)?;
+            println!(
+                "commit {h}\nAuthor: {}\nDate:   {}\n\n    {}\n",
+                c.author, c.time, c.message
+            );
+            let m = repo.read_manifest(&c.tree)?;
+            let parent = match c.parents.first() {
+                Some(p) => Some(repo.read_manifest(&repo.read_commit(p)?.tree)?),
+                None => None,
+            };
+            for (st, path) in manifest_changes(&m, parent.as_ref()) {
+                println!("  {st} {path}");
             }
             Ok(ExitCode::SUCCESS)
         }
@@ -714,7 +740,7 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             Ok(ExitCode::SUCCESS)
         }
 
-        Cmd::Reset { rev, hard } => {
+        Cmd::Reset { rev, hard, .. } => {
             let repo = open_repo(&cli)?;
             let target = repo.resolve_ref(rev)?;
             match repo.current_branch() {
@@ -1065,6 +1091,39 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             Ok(ExitCode::SUCCESS)
         }
     }
+}
+
+/// Top-level paths changed between a manifest and its parent (A/D/M), sorted.
+fn manifest_changes(
+    new: &mca_repo::Manifest,
+    old: Option<&mca_repo::Manifest>,
+) -> Vec<(char, String)> {
+    use std::collections::BTreeSet;
+    let ident = |m: &mca_repo::Manifest, p: &str| -> Option<String> {
+        if let Some(r) = m.regions.get(p) {
+            return Some(format!("r:{r:?}"));
+        }
+        if let Some(h) = m.nbt.get(p) {
+            return Some(format!("n:{h}"));
+        }
+        m.blobs.get(p).map(|h| format!("b:{h}"))
+    };
+    let mut all: BTreeSet<String> = BTreeSet::new();
+    for m in std::iter::once(new).chain(old) {
+        all.extend(m.regions.keys().cloned());
+        all.extend(m.nbt.keys().cloned());
+        all.extend(m.blobs.keys().cloned());
+    }
+    let mut out = Vec::new();
+    for p in all {
+        match (old.and_then(|m| ident(m, &p)), ident(new, &p)) {
+            (None, Some(_)) => out.push(('A', p)),
+            (Some(_), None) => out.push(('D', p)),
+            (Some(a), Some(b)) if a != b => out.push(('M', p)),
+            _ => {}
+        }
+    }
+    out
 }
 
 /// Resolve the world to inspect: an explicit `--world`, else the bound worktree.
