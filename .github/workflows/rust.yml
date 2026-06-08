@@ -1,14 +1,12 @@
-name: rust
+name: ci
 on:
   push:
-    paths: ["rust/**", ".github/workflows/rust.yml"]
+    branches: [main]
   pull_request:
-    paths: ["rust/**", ".github/workflows/rust.yml"]
-defaults:
-  run:
-    working-directory: rust
+
 jobs:
   check:
+    name: fmt + clippy + test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -18,3 +16,29 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo clippy --all-targets -- -D warnings
       - run: cargo test --all
+
+  e2e:
+    name: e2e round-trip (sample worlds)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - run: cargo build --release
+      - name: round-trip on compare-worlds
+        run: |
+          set -u
+          BIN=target/release/mcagit
+          OLD=compare-worlds/New_World_Older
+          NEW=compare-worlds/New_World_Newer
+          # cross-diff must find changes (exit 1)
+          if "$BIN" diff "$OLD" "$NEW" >/dev/null; then echo "FAIL: expected differences"; exit 1; fi
+          # commit -> checkout reproduces the world; verify confirms the tree; fsck is clean
+          "$BIN" init repo
+          H=$("$BIN" -C repo commit -m newer "$NEW")
+          "$BIN" -C repo checkout "$H" co
+          "$BIN" -C repo verify "$H" co
+          "$BIN" -C repo fsck
+          echo "e2e OK"
+          # NOTE: patch extract/apply round-trip on these real worlds is intentionally NOT
+          # asserted here yet — it does not fully reproduce (forward leaves region-chunk diffs;
+          # --reverse conflicts on player Pos). Tracked as a known issue; re-add once fixed.

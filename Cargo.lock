@@ -392,7 +392,7 @@ dependencies = [
 
 [[package]]
 name = "mca-anvil"
-version = "0.1.0"
+version = "0.8.0"
 dependencies = [
  "flate2",
  "lz4_flex",
@@ -403,7 +403,7 @@ dependencies = [
 
 [[package]]
 name = "mca-diff"
-version = "0.1.0"
+version = "0.8.0"
 dependencies = [
  "mca-anvil",
  "mca-nbt",
@@ -414,7 +414,7 @@ dependencies = [
 
 [[package]]
 name = "mca-nbt"
-version = "0.1.0"
+version = "0.8.0"
 dependencies = [
  "cesu8",
  "indexmap",
@@ -424,7 +424,7 @@ dependencies = [
 
 [[package]]
 name = "mca-patch"
-version = "0.1.0"
+version = "0.8.0"
 dependencies = [
  "base64",
  "mca-anvil",
@@ -439,7 +439,7 @@ dependencies = [
 
 [[package]]
 name = "mca-repo"
-version = "0.1.0"
+version = "0.8.0"
 dependencies = [
  "arc-swap",
  "blake3",
@@ -457,7 +457,7 @@ dependencies = [
 
 [[package]]
 name = "mcagit"
-version = "0.1.0"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "clap",

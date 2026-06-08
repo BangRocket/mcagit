@@ -4,70 +4,137 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-`mcagit` — a semantic, git-style diff/patch/version-control tool for Anvil-format Minecraft (Java Edition) worlds. Single .NET 10 (LTS) console app (`src/McaGit`, assembly name `mcagit`) + xUnit test project. External dependencies: `fNbt` (NBT tag tree parsing), `K4os.Compression.LZ4` (LZ4 chunks), plus `Azure.Storage.Blobs` / `AWSSDK.S3` for cloud remotes.
+`mcagit` — a semantic, git-style diff/patch/version-control tool for Anvil-format Minecraft
+(Java Edition) worlds, built in **Rust** for speed (parallel, streaming, native). It began as
+a .NET proof-of-concept; the Rust implementation (validated against that original during the
+port) is now the sole, primary version. A cargo workspace of six crates produces one binary,
+`mcagit`. Key deps: `flate2` (zlib/gzip, `zlib-rs` backend), `lz4_flex` (LZ4 chunks), `blake3`
+(object ids), `zstd` (loose-object + pack compression), `rayon` (parallelism), `memmap2`
+(pack reads), `arc-swap` (lock-free pack list), `serde`/`serde_json`, `clap`.
+
+The repo's internal formats are **clean-slate** — behaviorally equivalent to the original but
+with their own (faster) on-disk encodings; not wire/disk compatible with the old .NET repos.
 
 ## Commands
 
 ```sh
-dotnet build -c Release
-dotnet test                                            # full suite (220+ tests, all synthetic — no fixtures needed)
-dotnet test --filter "FullyQualifiedName~NbtComparer"  # one test class
-dotnet test --filter "DisplayName~merge"               # by name fragment
-dotnet run --project src/McaGit -- <args>             # run the CLI
+cargo build --release                       # binary: target/release/mcagit
+cargo test --all                            # full suite (synthetic worlds — no fixtures)
+cargo test -p mca-repo                       # one crate
+cargo test -p mca-diff comparer              # by name fragment
+cargo fmt --all -- --check                   # formatting gate
+cargo clippy --all-targets -- -D warnings    # lint gate
+cargo run -p mcagit -- <args>                # run the CLI
 ```
 
-- One test (`RegionFileTests`) optionally parses a real region file when `MCAGIT_TEST_REGION` points at one; auto-skipped otherwise.
-- `compare-worlds/New_World_Older` and `New_World_Newer` are real sample worlds for manual end-to-end checks (e.g. `dotnet run --project src/McaGit -- compare-worlds/New_World_Older compare-worlds/New_World_Newer`).
-- Tests build synthetic worlds/regions via `tests/McaGit.Tests/TestAnvil.cs` — use it when adding tests.
+- The `compare-worlds/New_World_Older` and `New_World_Newer` directories are real sample
+  worlds (Anvil format) for manual + CI end-to-end round-trip checks (e.g.
+  `cargo run -p mcagit -- diff compare-worlds/New_World_Older compare-worlds/New_World_Newer`).
+- Tests build synthetic worlds/regions via the in-crate test helpers (see `mca-anvil` /
+  `mca-repo` test modules) — use them when adding tests; do not add binary fixtures.
 
 ## CLI shape
 
-`Program.cs` is a top-level switch over subcommands (git-style, with optional leading `-C <repo>`). `mcagit <A> <B>` with no subcommand falls through to `diff`. Exit codes follow git: `0` = identical/clean, `1` = differences/conflicts, `2` = error. Repo subcommands live in `Cli/RepoCommands.cs`; diff/extract/apply have their own option parsers in `Cli/`.
+`crates/cli/src/main.rs` is a `clap` derive over subcommands (git-style, with an optional
+leading `-C <repo>`). Exit codes follow git: `0` = identical/clean, `1` = differences/conflicts,
+`2` = error. `commit` prints the new commit hash to stdout (scriptable). 28 subcommands:
+`init · commit · checkout · status · log · diff [--json] · extract · apply [--reverse] ·
+verify · branch · merge · fsck · gc · revert · cherry-pick · rebase · stash · rev-parse ·
+cat-file · ls-tree · tag · reset [--hard] · restore · clean · clone · push · pull`.
 
 ## Architecture
 
-Three layers share one core: **diff** (display), **patch** (extract/apply), and **repo** (VCS) all sit on the same NBT comparison walk and canonical encoding — keep them in sync by construction, not duplication.
+Three layers share one core: **diff** (display), **patch** (extract/apply), and **repo** (VCS)
+all sit on the same NBT comparison walk and canonical encoding — keep them in sync by
+construction, not duplication. Workspace deps point downward: `nbt → anvil → {diff, repo} →
+patch → cli`.
 
-- **`Anvil/`** — the region container format itself: `RegionFile` (read), `RegionWriter` (write), `RawChunk` (compressed payload + metadata), `ChunkCodec` (payload ↔ fNbt tree). Parsed/written directly; no library.
-- **`Nbt/`** — the semantic foundation:
-  - `NbtIdentity` — how list elements are matched across versions (block coords, entity UUID, `Slot`, string `id`; index fallback). This is what makes reorders not look like rewrites.
-  - `NbtPath` — the path language used everywhere (`Data.Player.Pos[0]`, `Entities[uuid:…].Pos[1]`); get/set/remove by key, index, or identity. Note: keys containing literal `.` or `[` are not addressable.
-  - `NbtJson` — *lossless* type-tagged JSON encoding (`{"long":"383"}`), used by patches and repo objects; longs beyond 2^53 must survive round-trips.
-  - `NbtCanonical` — deterministic canonical byte form; the basis of content hashing in the object store (an unchanged chunk hashes identically regardless of on-disk compression).
-- **`Diff/`** — `NbtComparer` does one tree walk and reports leaf decisions to an `IDiffSink`. Two sinks exist: `NbtChangeSink` (display rows) and `Patch/PatchOpSink` (applyable ops). **Any change to diff semantics must go through the comparer/sink so display and patch can't drift.** `WorldDiffer` orchestrates file/chunk/world level, with fast paths (byte-identical files skipped unparsed; byte-identical compressed chunk payloads skipped undecompressed) and per-region parallelism.
-- **`Patch/`** — `.mcapatch` is JSON; every op records both `base` and `value`, making patches invertible (`apply --reverse`). Apply is 3-way guarded: a node is only changed if the target matches the patch's expected base, otherwise it's a reported conflict (skipped unless `--force`). `apply` never mutates the target — it copies to a fresh output world.
-- **`Repo/`** — a git work-alike whose unit of dedup is the *chunk*, hashed by decoded NBT:
-  - `ObjectStore` — SHA-256 content-addressed, zlib loose objects at `objects/aa/rest…`, plus packfiles (`Packfile`, `Delta`) created by `gc`.
-  - `Manifest` ≈ git tree: regions map chunk position → chunk-object hash; loose NBT and other files map path → object hash. `CommitObject`/`TagObject` are JSON with an author/committer split and optional SSH signatures (`SshSigner`).
-  - The repo is **bare and external to the world**; a bound worktree (the world dir) is stored in the repo `config`. `Repository.Discover` walks up from cwd, git-style.
-  - `Snapshotter` (commit), `Checkout`, `StatusCalc`, `Staging` (index), `MergeBase` (recursive, criss-cross-safe) + `Merger` (per-NBT-node 3-way), `Rebase`, `Stash`, `Bisect`, `Fsck`, `Hooks`.
-  - Remotes: `Transports.cs` dispatches path / `http(s)://` / `ssh://` to `HttpTransport` / `SshTransport` (+ `StdioTransport` for `serve-stdio`); `Transfer` copies only missing objects. Network transfer is per-object (no packs on the wire yet).
-- **`Output/`** — `TextDiffFormatter` (ANSI, honors `NO_COLOR`/pipe detection) and `JsonDiffFormatter` render the same `DiffModels`.
-
-## Agent delegation rules
-
-Project agents live in `.claude/agents/` (their descriptions say what they do). Standing rules:
-
-- Before declaring a change to `Diff/`, `Nbt/`, or `Patch/` done, have `nbt-diff-invariant-reviewer` review it.
-- Before declaring a substantive change to `Anvil/`, `Patch/`, or `Repo/` done, run `world-roundtrip-gauntlet`.
-- When implementing a new git-like command, consult `git-fidelity-researcher` for real-git semantics first.
-- New tests go through `testanvil-test-author` conventions (synthetic worlds via `TestAnvil.cs`, no fixtures).
-- Changes touching `RepoServer`, transports, `PatchApplier` path handling, or hooks get a `trust-boundary-exploit-hunter` pass.
-
-### Pre-PR checklist
-
-Before opening a PR, in this order:
-
-1. `dotnet test` — full suite green locally. (Targets `net10.0`; needs the .NET 10 SDK.)
-2. Map the branch diff (`git diff main...HEAD --stat`) against the delegation rules above and run **every** agent whose paths are touched — a PR spanning `Diff/` and `Repo/` gets both the invariant review and the gauntlet.
-3. `trust-boundary-exploit-hunter` additionally runs if the diff touches anything reachable from untrusted input (network, patch apply, checkout path handling), even if the rule paths above don't match.
-4. Surface agent findings in the PR description: BLOCKERs must be fixed before opening; WARNs may ship but get listed.
-
-CI (`.github/workflows/ci.yml`) re-runs build + tests (ubuntu/windows), coverage, and the e2e round-trip gauntlet on the real sample worlds. The `lint` job (`dotnet format --verify-no-changes`) is now green — run `dotnet format McaGit.sln` before pushing to keep it that way (note: it expands compact multi-member object initializers to one member per line and indents `case: {}` block bodies a level deeper).
+- **`crates/nbt` (`mca-nbt`)** — the semantic foundation: the NBT value model + big-endian
+  read/write (Java modified-UTF8 strings); **canonical** (key-sorted) deterministic byte form
+  that is the basis of content hashing (an unchanged chunk hashes identically regardless of
+  on-disk compression); list-element **identity** (block coords, entity UUID, `Slot`, string
+  `id`; index fallback) so reorders aren't rewrites; the **path** language (`Data.Player.Pos[0]`,
+  `Entities[uuid:…].Pos[1]`); and **lossless type-tagged JSON** (`{"long":"383"}`) where longs
+  beyond 2^53 and float/double NaN/Inf are string-encoded and must survive round-trips.
+- **`crates/anvil` (`mca-anvil`)** — the region container: `RegionFile` (read), `RegionWriter`
+  (write), `RawChunk` (compressed payload + metadata), chunk codecs (zlib/gzip/none/lz4 with
+  bounded inflate), external `.mcc`, standalone `.dat` load/save. `compress`/`compress_level`
+  for chunk payloads. Parsed/written directly; no library.
+- **`crates/diff` (`mca-diff`)** — one comparer walk reports leaf decisions to a `DiffSink`
+  trait. `ChangeSink` produces display rows; the patch op sink produces applyable ops. **Any
+  change to diff semantics must go through the comparer/sink so display and patch can't drift.**
+  `WorldDiffer` orchestrates file/chunk/world level with fast paths (byte-identical files
+  skipped unparsed; byte-identical compressed chunk payloads skipped undecompressed) and
+  per-region parallelism. Text + JSON output.
+- **`crates/patch` (`mca-patch`)** — `.mcapatch` is JSON; every op records both `base` and
+  `value`, making patches invertible (`apply --reverse`). Apply is 3-way guarded: a node is
+  only changed if the target matches the patch's expected base, otherwise it's a reported
+  conflict (skipped unless `--force`). `apply` never mutates the target — it writes a fresh
+  output world.
+- **`crates/repo` (`mca-repo`)** — a git work-alike whose unit of dedup is the *chunk*, hashed
+  by decoded NBT:
+  - `ObjectStore` — blake3 content ids over uncompressed canonical content; `zstd` loose
+    objects at `objects/aa/rest`; mmap'd packfiles (`pack.rs`) with **pack-at-commit**. Pack
+    list is read lock-free via `ArcSwap` (checkout/diff read objects hundreds of thousands of
+    times across threads).
+  - `Manifest` ≈ git tree (regions map chunk pos → chunk-object id; loose nbt + blobs map path
+    → id); `CommitObject` JSON. `Repository` is **bare and external** to the world; the bound
+    worktree is stored in the repo `config`; `Repository::discover` walks up from cwd.
+  - `snapshot` (commit, parallel), `checkout` (parallel — one flat per-chunk rayon job list,
+    then parallel region writes), `verify` (fast single-sided tree-hash accuracy check),
+    `status`, `fsck`, `gc`, `merge_base` + 3-way `merge`, `replay` (cherry-pick/revert/rebase),
+    `stash`, `transfer` (path-transport clone/push/pull — copies only missing objects).
 
 ## Invariants worth preserving
 
-- `diff`/`extract`/`status` never modify a world; `apply` only writes its fresh output dir; only `checkout`/`reset --hard`/`merge`/`rebase`/`bisect`/`clean`/`stash` touch the bound worktree.
-- Commit → checkout must reproduce a world faithfully (playable in Minecraft); tests assert exact reproduction.
-- LZ4 chunks (compression type 4) are fully decoded and re-encoded (`ChunkCodec`, via `K4os.Compression.LZ4`). Only type 127 (Custom) remains undecodable — a whole region containing one falls back to a raw blob.
-- README documents behavior in detail (options, repo layout, limitations) — update it when changing user-facing behavior; recent commits follow a "git-likeness tier" naming convention with matching `GitLikeTierNTests.cs` files.
+- **One comparison walk.** Any change to diff semantics goes through the comparer + `DiffSink`
+  so the display diff and extracted patch cannot drift. Do not write a second comparison.
+- **Identity-based list matching.** Lists that behave as sets are matched by identity, not
+  position (block coords → entity UUID → `Slot` → string `id` → index fallback).
+- **Canonical determinism.** Canonical bytes are independent of on-disk compression and map
+  ordering; they are the basis of content hashing. An unchanged chunk must hash identically.
+  Diff-only normalizations stay out of the canonical/storage path.
+- **Lossless type-tagged JSON.** longs beyond 2^53 and float/double NaN/Inf are string-encoded
+  and must survive round-trips — never encode them as JSON numbers.
+- **Never mutate in place.** `diff`/`extract`/`status`/`verify` never modify a world. `apply`
+  only writes a fresh output dir. Only `checkout`/`reset --hard`/`merge`/`rebase`/`clean`/
+  `stash` touch the bound worktree.
+- **Reproduction.** `commit` → `checkout` must reproduce a playable world; tests assert exact
+  reproduction, and `verify` re-hashes a world's canonical tree against a commit's tree.
+- **LZ4 is decoded; Custom is not.** Compression type 4 (LZ4) is fully decoded/re-encoded.
+  Only type 127 (Custom) is opaque — a region containing one falls back to a raw blob.
+- **Untrusted input is confined.** Manifest keys / patch paths / network-supplied names are
+  path-confined before being materialized to disk; thread depth limits through recursive NBT
+  walks; size-bound every inflate of untrusted bytes.
+
+## Agent delegation rules
+
+Project agents live in `.claude/agents/`. Standing rules (paths are the Rust crates):
+
+- Before declaring a change to `crates/diff`, `crates/nbt`, or `crates/patch` done, have
+  `nbt-diff-invariant-reviewer` review it (comparer/sink parity, canonical determinism,
+  lossless JSON, identity stability).
+- Before declaring a substantive change to `crates/anvil`, `crates/patch`, or `crates/repo`
+  done, run `world-roundtrip-gauntlet` — extract→apply→diff, `apply --reverse`, and
+  commit→checkout→`verify` round-trips against the `compare-worlds/` sample worlds (mcagit's
+  own diff/verify is the equivalence check — there is no external oracle).
+- Changes touching transports, checkout/apply path handling, packfile parsing, or hooks get a
+  `trust-boundary-exploit-hunter` pass.
+- New tests follow the synthetic-world conventions (no binary fixtures).
+
+> The agent definitions and their memory under `.claude/` still carry .NET-era context from the
+> port and are being migrated to the Rust layout; treat their path references as the Rust
+> crates above.
+
+### Pre-PR checklist
+
+1. `cargo test --all` green; `cargo fmt --all -- --check` and `cargo clippy --all-targets --
+   -D warnings` clean.
+2. Map the branch diff against the delegation rules and run every agent whose paths are touched.
+3. End-to-end: a commit→checkout→`verify` (and diff) round-trip on the `compare-worlds/`
+   worlds is clean.
+4. Surface agent findings in the PR description: BLOCKERs fixed before opening; WARNs listed.
+
+CI (`.github/workflows/`) re-runs fmt + clippy + `cargo test --all` and an e2e round-trip on
+the sample worlds; `markdownlint.yml` gates docs. Update this file and `README.md` when
+changing user-facing behavior.

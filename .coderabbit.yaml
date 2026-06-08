@@ -12,40 +12,41 @@ reviews:
     drafts: false
 
   path_instructions:
-    - path: "src/McaGit/Nbt/**"
+    - path: "crates/nbt/**"
       instructions: >
-        Canonical determinism is load-bearing. NbtCanonical must produce identical bytes
-        regardless of on-disk compression or fNbt iteration order, and must never depend on a
-        diff-path normalization. Type-tagged NbtJson must round-trip losslessly — longs beyond
-        2^53 and float/double NaN/Inf are string-encoded, never JSON numbers. Thread `depth`
-        through any new recursive NBT walk and respect NbtCanonical.MaxDepth.
-    - path: "src/McaGit/Diff/**"
+        Canonical determinism is load-bearing. The canonical encoding must produce identical
+        bytes regardless of on-disk compression or map ordering, and must never depend on a
+        diff-path normalization. Type-tagged JSON must round-trip losslessly — longs beyond
+        2^53 and float/double NaN/Inf are string-encoded, never JSON numbers. Thread a depth
+        limit through any new recursive NBT walk.
+    - path: "crates/diff/**"
       instructions: >
-        There is ONE comparison walk: NbtComparer + IDiffSink feed both the display diff and the
+        There is ONE comparison walk: the comparer + DiffSink feed both the display diff and the
         patch extractor, so they can't drift. Lists that behave as sets are matched by identity
-        (block coords, entity UUID, Slot, string id), not position. Diff-only normalizations (e.g.
-        single-entry-palette data, ChunkNormalize) belong here, never on the canonical/storage path.
-    - path: "src/McaGit/Patch/**"
+        (block coords, entity UUID, Slot, string id), not position. Diff-only normalizations
+        belong here, never on the canonical/storage path.
+    - path: "crates/patch/**"
       instructions: >
-        Patches record both base and value (invertible) and apply is 3-way guarded — a node changes
-        only if the target matches the recorded base, else it's a reported conflict. Apply NEVER
-        mutates the target; it writes a fresh output world.
-    - path: "src/McaGit/Repo/**"
+        Patches record both base and value (invertible) and apply is 3-way guarded — a node
+        changes only if the target matches the recorded base, else it's a reported conflict.
+        Apply NEVER mutates the target; it writes a fresh output world.
+    - path: "crates/repo/**"
       instructions: >
-        Exit codes follow git (0 clean / 1 differences-or-conflicts / 2 error); commit deliberately
-        exits 0 on "nothing to commit". commit→checkout must reproduce a playable world. Untrusted
-        input (manifest keys, ref names, received packs) goes through PathGuard.Confine /
-        ObjectStore.IsValidHash; every inflate of untrusted bytes must be size-bounded (SafeInflate)
-        and NBT depth-checked (NbtDepthGuard) before fNbt parses.
-    - path: "src/McaGit/Cli/**"
+        Exit codes follow git (0 clean / 1 differences-or-conflicts / 2 error). commit→checkout
+        must reproduce a playable world; verify re-hashes a world's canonical tree against a
+        commit. Untrusted input (manifest keys, ref names, received packs) is path-confined
+        before being materialized to disk; every inflate of untrusted bytes is size-bounded and
+        NBT depth is checked before parsing.
+    - path: "crates/cli/**"
       instructions: >
-        Validate args and return clean git-style exit codes; never throw a raw stack trace (the
-        top-level catch-all maps failures to "mcagit: error: <msg>" + exit 2). Destructive worktree
-        ops confirm unless -y or non-interactive stdin.
-    - path: "tests/**"
+        Validate args and return clean git-style exit codes; never surface a raw panic (map
+        failures to "mcagit: error: <msg>" + exit 2). Destructive worktree ops confirm unless
+        forced or non-interactive.
+    - path: "crates/anvil/**"
       instructions: >
-        Tests are synthetic via TestAnvil — no binary fixtures. Prefer deterministic concurrency
-        primitives over sleeps. See TESTING.md for the test-type taxonomy.
+        Region read/write and chunk codecs (zlib/gzip/none/lz4) must round-trip decode→encode→
+        decode to identical NBT. Bound every inflate of untrusted bytes. Type 127 (Custom) is
+        opaque and falls back to a raw blob; do not claim LZ4 (type 4) is unsupported.
 
   tools:
     markdownlint:

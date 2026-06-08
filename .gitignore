@@ -1,13 +1,9 @@
-# Build output
-bin/
-obj/
-[Bb]uild/
+# Rust build output
+/target
 
-# .NET / IDE
-*.user
-.vs/
+# IDE
 .idea/
-*.DotSettings.user
+.vs/
 
 # OS
 .DS_Store

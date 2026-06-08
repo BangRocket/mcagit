@@ -10,6 +10,7 @@ use std::process::ExitCode;
 #[derive(Parser)]
 #[command(
     name = "mcagit",
+    version,
     about = "semantic git-style VCS for Minecraft worlds (Rust)"
 )]
 struct Cli {

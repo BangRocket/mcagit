@@ -2,52 +2,37 @@
 
 All notable changes to mcagit are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); this project uses semantic-ish `v0.x`
-tags. Releases `v0.2.0`–`v0.7.0` predate this file — see the git tag history for those.
+tags. Releases `v0.2.0`–`v0.7.0` were the original .NET implementation — see the git tag history.
 
-## [Unreleased]
-
-### Added
-
-- **Serverless cloud remotes** — `azure://` (Azure Blob) and `s3://` (any S3-compatible store) push/clone
-  with no daemon: missing objects bundle into one content-addressed pack per push (~3 bucket ops),
-  refs/manifest use ETag compare-and-swap. See `docs/cloud-backend.md`.
-- **`verify-remote [--deep]`** — offsite integrity check over any transport (hash-checks the
-  commit/tree spine and leaf presence; `--deep` re-hashes everything).
-- **Shallow clone** — `clone --depth N`, history grafted at a boundary so log/checkout/gc/fsck terminate.
-- **Pack-on-the-wire** — push over path/http/ssh now bundles new objects into one delta-compressed pack
-  instead of N round-trips (the bucket backend already did this).
-- **Coordinate-level block & biome diff** — `sections[Y].block_states[@x,y,z]: stone → air` instead of
-  an opaque `long[]` delta (worldgen-scale sections summarize; `--expand` lists each).
-- **World-state inspection** (read-only) — `inspect <x y z>`, `find <entity|block-entity|sign>`,
-  `players`, `poi`, and `where-changed <old> <new>` (the grief detector).
-- **`log` metadata filters** — `--author`, `--grep`, `--since`/`--until`, `--merges`/`--no-merges`.
-- **`serve-stdio --read-only`**, **`remote` remove/rename/set-url/get-url**, **`clean -d`**,
-  **`config --global`** outside a repo, **abbreviated hashes** (shortest-unambiguous).
-- **GPL-3.0 LICENSE**; install/quickstart; `docs/repo-format.md`, `docs/mcapatch-format.md`,
-  `SECURITY.md`, `CONTRIBUTING.md`, `TESTING.md`, `docs/architecture/` ADRs.
+## [0.8.0] - 2026-06-08
 
 ### Changed
 
-- Target framework migrated from `net9.0` (STS) to **`net10.0`** (LTS).
-- `commit` / `push` take an inter-process repository lock (fail-fast) so concurrent runs can't drop a
-  commit; `commit --push` / `commit --json` for backup drivers.
-- `clean` / `reset --hard` / force-`checkout` confirm before destroying data (skipped with `-y` or when
-  stdin isn't a terminal).
-- `checkout` / `reset --hard` refuse a world that's open in Minecraft (`session.lock`) before writing.
+- **mcagit is now a Rust implementation and the sole, primary version.** The tool was rewritten
+  in Rust (parallel, streaming, native) — checkout is ~4.7× faster than the .NET serial baseline
+  on a full world, with on-par commit and ~2.8× faster diff. Internal repo and patch formats are
+  **clean-slate** and are **not** compatible with repositories created by the .NET v0.x releases.
+- The cargo workspace was promoted to the repository root (`Cargo.toml` + `crates/` at top level);
+  build with `cargo build --release`.
 
-### Fixed
+### Added
 
-- **Single-entry-palette false diffs** — a section going all-stone/all-air no longer diffs as a spurious
-  `block_states.data` add/remove.
-- Loose-file coverage (`data/*.nbt`; single-file `.json`/`.mcc` byte-compare).
-- git-fidelity leftovers: `push --all` exit code, `config --global`, `clean -d`, `remote` subcommands.
-- First-run crashes: `init` in a world folder, `checkout` while the server is up; unknown subcommands
-  now suggest a correction instead of silently running a diff; no raw stack traces.
+- **`verify`** — fast single-sided tree-hash accuracy check: re-hashes a world's canonical tree
+  and compares it to a commit's tree (no second decode, no tree-walk).
+- `--version` on the CLI.
 
-### Security
+### Removed
 
-- **Decompression bombs** bounded at every inflate callsite (`SafeInflate`).
-- **Deeply-nested NBT** no longer crashes the process (non-recursive `NbtDepthGuard` pre-parse scan).
-- **Bucket pack-ID path traversal** blocked (40-hex validation before any path use).
-- **`tag -v`** now exits non-zero for an untrusted signer; ssh-keygen works on Windows.
-- **NTFS Alternate Data Stream** writes rejected on Windows (`PathGuard`).
+- The .NET implementation (`src/`, `tests/`, `McaGit.sln`) and its .NET build / release / CodeQL CI.
+- Capabilities that existed in the .NET v0.x line but are **not yet ported** to Rust: network &
+  cloud remotes (http/ssh/stdio transports, `serve`, S3/Azure), shallow clone, pack-on-the-wire,
+  coordinate-level block/biome diff, world-state inspection (`inspect`/`find`/`players`/`poi`/
+  `where-changed`), `log` metadata filters, `verify-remote`, reflog (`HEAD@{n}`), `bisect`, and
+  SSH commit/tag signing. The object-copy core ships via local path-transport clone/push/pull.
+
+### Known issues
+
+- Patch `extract` / `apply` does not yet fully reproduce real worlds (forward apply can leave
+  region-chunk differences; `apply --reverse` can conflict on floating-point player `Pos`).
+  `commit` → `checkout` → `verify` reproduces faithfully; prefer the repo flow over `.mcapatch`
+  on real saves until this is resolved.
