@@ -116,6 +116,14 @@ fn handle(root: &Path, token: Option<&str>, mut req: Request) -> Result<()> {
             Err(e) => respond(req, 400, e.into_bytes()),
         };
     }
+    // POST /getpack — a batched object download (reply is one wire pack)
+    if method == Method::Post && action == "getpack" {
+        let body = read_body(&mut req)?;
+        return match op_get_pack(&dir, &body) {
+            Ok(pack) => respond(req, 200, pack),
+            Err(e) => respond(req, 400, e.into_bytes()),
+        };
+    }
     // POST /refs/heads/<branch>
     if method == Method::Post {
         if let Some(branch) = action.strip_prefix("refs/heads/") {
@@ -165,6 +173,10 @@ fn dispatch(dir: &Path, head: &str, body: &[u8]) -> (&'static str, Vec<u8>) {
         },
         "put-pack" => match op_put_pack(dir, body) {
             Ok(n) => ("ok", n.to_string().into_bytes()),
+            Err(e) => ("err", e.into_bytes()),
+        },
+        "get-pack" => match op_get_pack(dir, body) {
+            Ok(pack) => ("ok", pack),
             Err(e) => ("err", e.into_bytes()),
         },
         "set-ref" => match op_set_ref(dir, arg, body) {
@@ -221,6 +233,30 @@ pub(crate) fn op_have(dir: &Path, body: &[u8]) -> Vec<u8> {
 /// An object's decompressed content, or `None` if absent.
 pub(crate) fn op_get(dir: &Path, hash: &str) -> Option<Vec<u8>> {
     Repository::open(dir).ok()?.objects().read(hash).ok()
+}
+
+/// Most object ids one `getpack` request may ask for — a DoS bound on how big
+/// a pack the server will assemble (and hold) for one client request. The
+/// client batches its leaf requests well below this.
+const MAX_GETPACK_IDS: usize = 100_000;
+
+/// `body` is a JSON `[id,…]`; reply with a wire pack of the subset present.
+/// Ids are validated to the object-id shape by the store before any path is
+/// built (a bad id is simply absent from the pack); the request count is
+/// bounded so a client can't make the server assemble an unbounded pack.
+pub(crate) fn op_get_pack(dir: &Path, body: &[u8]) -> std::result::Result<Vec<u8>, String> {
+    let ids: Vec<String> = serde_json::from_slice(body).map_err(|e| e.to_string())?;
+    if ids.len() > MAX_GETPACK_IDS {
+        return Err("too many ids in one getpack request".into());
+    }
+    let repo = Repository::open(dir).map_err(|e| e.to_string())?;
+    let mut objects = Vec::with_capacity(ids.len());
+    for id in &ids {
+        if let Ok(content) = repo.objects().read(id) {
+            objects.push((id.clone(), content));
+        }
+    }
+    crate::wirepack::build(&objects).map_err(|e| e.to_string())
 }
 
 /// Store `content` after verifying `blake3(content) == hash`; auto-creates the repo.
@@ -391,6 +427,42 @@ mod tests {
         assert!(op_put_pack(dir, &bad).is_err());
         // and garbage framing is rejected outright
         assert!(op_put_pack(dir, b"junk").is_err());
+    }
+
+    #[test]
+    fn op_get_pack_returns_present_subset_and_dispatch_round_trips() {
+        let d = tempfile::tempdir().unwrap();
+        let dir = d.path();
+        let a = b"object alpha".to_vec();
+        let b = b"object beta".to_vec();
+        let ida = blake3::hash(&a).to_hex().to_string();
+        let idb = blake3::hash(&b).to_hex().to_string();
+        op_put(dir, &ida, &a).unwrap();
+        op_put(dir, &idb, &b).unwrap();
+
+        // ask for both present ids, one absent, one malformed → pack holds the
+        // two present objects only; absent/invalid are silently omitted.
+        let req = serde_json::to_vec(&[
+            ida.clone(),
+            idb.clone(),
+            "f".repeat(64),
+            "../etc/passwd".to_string(),
+        ])
+        .unwrap();
+        let pack = op_get_pack(dir, &req).unwrap();
+        let mut got = crate::wirepack::parse(&pack).unwrap();
+        got.sort();
+        let mut want = vec![(ida.clone(), a.clone()), (idb.clone(), b.clone())];
+        want.sort();
+        assert_eq!(got, want);
+
+        // the stdio dispatcher exposes it as the `get-pack` verb
+        let (st, body) = dispatch(dir, "get-pack", &req);
+        assert_eq!(st, "ok");
+        assert_eq!(crate::wirepack::parse(&body).unwrap().len(), 2);
+
+        // malformed request body errors
+        assert!(op_get_pack(dir, b"not json").is_err());
     }
 
     #[test]

@@ -20,6 +20,20 @@ pub trait Transport {
     fn list_refs(&self) -> Result<Vec<(String, String)>>;
     /// Object content for `id` (decompressed canonical bytes).
     fn get_object(&self, id: &str) -> Result<Vec<u8>>;
+    /// Fetch many objects in one shot, returned as a wire-pack body (the
+    /// symmetric counterpart to [`Transport::put_objects`]). Network transports
+    /// override this with a single request; the default loops `get_object` and
+    /// packs locally — correct, but with no round-trip savings. Ids the remote
+    /// lacks are simply omitted from the returned pack.
+    fn get_pack(&self, ids: &[String]) -> Result<Vec<u8>> {
+        let mut objects = Vec::with_capacity(ids.len());
+        for id in ids {
+            if let Ok(content) = self.get_object(id) {
+                objects.push((id.clone(), content));
+            }
+        }
+        crate::wirepack::build(&objects)
+    }
     /// Which of `ids` the remote is missing.
     fn missing(&self, ids: &[String]) -> Result<Vec<String>>;
     /// Store object `content` (its id is `content`-addressed).
@@ -136,6 +150,19 @@ impl Transport for HttpTransport {
         let url = format!("{}/objects/{id}", self.base);
         self.bearer(ureq::get(&url))
             .call()
+            .map_err(http_err)?
+            .body_mut()
+            .read_to_vec()
+            .map_err(http_err)
+    }
+
+    fn get_pack(&self, ids: &[String]) -> Result<Vec<u8>> {
+        if ids.is_empty() {
+            return crate::wirepack::build(&[]);
+        }
+        let url = format!("{}/getpack", self.base);
+        self.bearer(ureq::post(&url))
+            .send_json(ids)
             .map_err(http_err)?
             .body_mut()
             .read_to_vec()
@@ -283,6 +310,17 @@ impl Transport for StdioTransport {
             "none" => Err(RepoError::Other(format!("no such object {id}"))),
             _ => Err(stdio_status(&st, &body)),
         }
+    }
+    fn get_pack(&self, ids: &[String]) -> Result<Vec<u8>> {
+        if ids.is_empty() {
+            return crate::wirepack::build(&[]);
+        }
+        let body = serde_json::to_vec(ids).map_err(stdio_err)?;
+        let (st, b) = self.call("get-pack", &body)?;
+        if st != "ok" {
+            return Err(stdio_status(&st, &b));
+        }
+        Ok(b)
     }
     fn missing(&self, ids: &[String]) -> Result<Vec<String>> {
         if ids.is_empty() {
@@ -470,13 +508,23 @@ pub fn fetch(local: &Repository, t: &dyn Transport, branch: &str) -> Result<(Str
     Ok((tip, copied))
 }
 
+/// Leaf ids fetched per pack request. Each pack is built (and held) whole on
+/// the remote, so keep batches modest; the round-trip count still drops from
+/// one-per-object to one-per-batch. The remote caps the count it will serve.
+const FETCH_BATCH: usize = 1000;
+
 /// Walk from `tip` over the transport, storing every reachable object `local`
-/// lacks. Each object is written before being parsed so its children resolve.
+/// lacks. The commit/tree skeleton is fetched per-object (few of them, and each
+/// must be parsed to discover its children); the bulk — the leaf chunk/blob
+/// objects — is collected across the whole walk and pulled in batched packs, so
+/// an active world's fetch is a handful of requests instead of one per chunk.
 fn fetch_reachable(local: &Repository, t: &dyn Transport, tip: &str) -> Result<usize> {
     use std::collections::HashSet;
     let mut seen: HashSet<String> = HashSet::new();
     let mut stack = vec![tip.to_string()];
     let mut copied = 0usize;
+    let mut want_leaves: Vec<String> = Vec::new();
+    let mut queued: HashSet<String> = HashSet::new();
     while let Some(c) = stack.pop() {
         if !seen.insert(c.clone()) {
             continue;
@@ -497,9 +545,8 @@ fn fetch_reachable(local: &Repository, t: &dyn Transport, tip: &str) -> Result<u
             }
             if let Ok(m) = local.read_manifest(&commit.tree) {
                 for id in crate::fsck::manifest_ids(&m) {
-                    if !local.objects().exists(&id) {
-                        local.objects().write(&t.get_object(&id)?)?;
-                        copied += 1;
+                    if !local.objects().exists(&id) && queued.insert(id.clone()) {
+                        want_leaves.push(id);
                     }
                 }
             }
@@ -508,8 +555,32 @@ fn fetch_reachable(local: &Repository, t: &dyn Transport, tip: &str) -> Result<u
             }
         }
     }
+    copied += fetch_leaves(local, t, &want_leaves)?;
     if copied > 0 {
         local.objects().reload_packs();
+    }
+    Ok(copied)
+}
+
+/// Fetch `ids` (objects `local` is known to lack) in batched packs, ingesting
+/// each pack streamed and hash-verified. Errors loudly if the remote omits a
+/// requested object — a broken remote must not yield a silently-incomplete tree.
+fn fetch_leaves(local: &Repository, t: &dyn Transport, ids: &[String]) -> Result<usize> {
+    let mut copied = 0usize;
+    for batch in ids.chunks(FETCH_BATCH) {
+        let body = t.get_pack(batch)?;
+        crate::wirepack::for_each(&body, |_id, content| {
+            local.objects().write(&content)?;
+            copied += 1;
+            Ok(())
+        })?;
+        for id in batch {
+            if !local.objects().exists(id) {
+                return Err(RepoError::Other(format!(
+                    "remote did not return requested object {id}"
+                )));
+            }
+        }
     }
     Ok(copied)
 }
@@ -916,6 +987,85 @@ mod tests {
         // url-shape errors (missing bucket/container) are deterministic.
         assert!(connect("s3://").is_err());
         assert!(connect("azure://account").is_err());
+    }
+
+    /// Counts per-object gets vs batched pack gets, to prove fetch pulls the
+    /// leaf set as packs rather than one round-trip per object.
+    struct Counting<T: Transport> {
+        inner: T,
+        objects: std::sync::atomic::AtomicUsize,
+        packs: std::sync::atomic::AtomicUsize,
+    }
+    impl<T: Transport> Counting<T> {
+        fn new(inner: T) -> Self {
+            Self {
+                inner,
+                objects: std::sync::atomic::AtomicUsize::new(0),
+                packs: std::sync::atomic::AtomicUsize::new(0),
+            }
+        }
+    }
+    impl<T: Transport> Transport for Counting<T> {
+        fn list_refs(&self) -> Result<Vec<(String, String)>> {
+            self.inner.list_refs()
+        }
+        fn get_object(&self, id: &str) -> Result<Vec<u8>> {
+            self.objects
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.inner.get_object(id)
+        }
+        fn get_pack(&self, ids: &[String]) -> Result<Vec<u8>> {
+            self.packs
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            self.inner.get_pack(ids)
+        }
+        fn missing(&self, ids: &[String]) -> Result<Vec<String>> {
+            self.inner.missing(ids)
+        }
+        fn put_object(&self, content: &[u8]) -> Result<()> {
+            self.inner.put_object(content)
+        }
+        fn set_branch(&self, branch: &str, hash: &str) -> Result<()> {
+            self.inner.set_branch(branch, hash)
+        }
+    }
+
+    #[test]
+    fn fetch_pulls_leaves_as_one_pack_not_per_object() {
+        let tmp = tempfile::tempdir().unwrap();
+        let origin = Repository::init(&tmp.path().join("origin")).unwrap();
+        origin.set_head_to_branch("main").unwrap();
+
+        // A world with many distinct leaf objects (one blob each).
+        let w = tmp.path().join("world");
+        std::fs::create_dir_all(w.join("data")).unwrap();
+        for i in 0..12 {
+            std::fs::write(w.join("data").join(format!("f{i}")), format!("leaf-{i}")).unwrap();
+        }
+        let m = snapshot::snapshot(&origin, &w).unwrap();
+        let leaf_count = crate::fsck::manifest_ids(&m).len();
+        assert!(leaf_count >= 12, "world has many leaves: {leaf_count}");
+        let tree = origin.write_manifest(&m).unwrap();
+        let c = origin.create_commit(&tree, vec![], "w", "me", "0").unwrap();
+        origin.write_branch("main", &c).unwrap();
+
+        let local = Repository::init(&tmp.path().join("local")).unwrap();
+        let t = Counting::new(LocalTransport::open(origin.dir()).unwrap());
+        let (tip, copied) = fetch(&local, &t, "main").unwrap();
+        assert_eq!(tip, c);
+        assert_eq!(copied, 2 + leaf_count, "commit + tree + every leaf copied");
+
+        // Graph skeleton (commit + tree) came per-object; leaves came as packs.
+        let per_object = t.objects.load(std::sync::atomic::Ordering::Relaxed);
+        let pack_reqs = t.packs.load(std::sync::atomic::Ordering::Relaxed);
+        assert_eq!(per_object, 2, "only the commit and tree fetched per-object");
+        assert_eq!(pack_reqs, 1, "all leaves arrived in a single pack request");
+
+        // and every object actually landed
+        for id in crate::fsck::manifest_ids(&m) {
+            assert!(local.objects().exists(&id), "leaf {id} fetched");
+        }
+        assert!(local.objects().exists(&c) && local.objects().exists(&tree));
     }
 
     #[test]
