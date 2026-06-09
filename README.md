@@ -69,7 +69,11 @@ verify-remote [--deep]` over a **local path**, **`http(s)://`** (served by
 store: AWS, R2, B2, MinIO) and **`azure://account/container/prefix`**. Pushes travel as
 **wire packs** — the missing objects batched (zstd-per-object) into one request per
 ~128 MiB instead of a round-trip per object; the receiver streams them in, hash-verifying
-every object and bounding every inflate (and the total) before storing. `clone --depth N`
+every object and bounding every inflate (and the total) before storing. **Fetch/clone
+batch symmetrically**: the commit/tree skeleton is walked per-object, then every missing
+leaf chunk is pulled in batched packs (one request per ~1000 objects) over the same
+hash-verified, size-bounded ingest — so cloning an active world is a handful of requests,
+not one per chunk. `clone --depth N`
 makes a shallow clone (history grafted at a recorded boundary; tags skipped).
 `verify-remote` walks the remote's history confirming every commit/tree hashes correctly
 and every leaf is present (`--deep` re-downloads and hash-checks the leaves too).
