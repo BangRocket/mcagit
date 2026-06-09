@@ -4,6 +4,7 @@ use anyhow::{anyhow, bail};
 use clap::{Parser, Subcommand};
 use mca_patch::WorldPatch;
 use mca_repo::{snapshot, ChangeKind, Repository};
+use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::process::ExitCode;
 
@@ -380,7 +381,16 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             if mca_repo::hooks::run(&repo, "pre-commit") != 0 {
                 bail!("pre-commit hook failed; commit aborted");
             }
-            let manifest = snapshot::snapshot(&repo, &world)?;
+            // A first commit decodes every chunk — show a sign of life on a tty.
+            let manifest = if std::io::stderr().is_terminal() {
+                let m = snapshot::snapshot_with_progress(&repo, &world, &|done, total| {
+                    eprint!("\rsnapshot: {done}/{total} files");
+                })?;
+                eprint!("\r\x1b[K"); // clear the progress line
+                m
+            } else {
+                snapshot::snapshot(&repo, &world)?
+            };
             let tree = repo.write_manifest(&manifest)?;
             let head = repo.head_commit();
             if let Some(h) = &head {

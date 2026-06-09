@@ -386,11 +386,7 @@ impl Repository {
         self.dir.join("logs").join("HEAD")
     }
     fn branch_log_path(&self, name: &str) -> PathBuf {
-        self.dir
-            .join("logs")
-            .join("refs")
-            .join("heads")
-            .join(name)
+        self.dir.join("logs").join("refs").join("heads").join(name)
     }
 
     /// Append a ref movement to a reflog: `<from|zeros> <to> <message>`.
@@ -424,9 +420,9 @@ impl Repository {
     }
 
     fn reflog_at(entries: &[String], what: &str, n: usize) -> Result<String> {
-        let line = entries.get(n).ok_or_else(|| {
-            RepoError::BadRef(format!("reflog for {what} has no entry @{{{n}}}"))
-        })?;
+        let line = entries
+            .get(n)
+            .ok_or_else(|| RepoError::BadRef(format!("reflog for {what} has no entry @{{{n}}}")))?;
         line.split(' ')
             .nth(1)
             .filter(|h| !h.is_empty())
@@ -567,8 +563,7 @@ impl Repository {
         if let Some((name, rest)) = base.split_once("@{") {
             if let Some(n) = rest.strip_suffix('}') {
                 if self.read_branch(name).is_some() || !self.branch_reflog(name).is_empty() {
-                    let n: usize =
-                        n.parse().map_err(|_| RepoError::BadRef(base.to_string()))?;
+                    let n: usize = n.parse().map_err(|_| RepoError::BadRef(base.to_string()))?;
                     return self.branch_reflog_commit_at(name, n);
                 }
             }

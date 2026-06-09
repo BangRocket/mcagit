@@ -23,10 +23,31 @@ enum Sink<'a> {
     HashOnly,
 }
 
+/// Per-file progress: `(files done, total files)`. Called from rayon workers.
+pub type Progress<'a> = &'a (dyn Fn(usize, usize) + Sync);
+
 /// Snapshot `world_dir`, streaming all new objects into a single packfile.
 /// A persistent compressed-payload → object-id cache skips decoding chunks
 /// whose raw bytes are unchanged (the common incremental-backup case).
 pub fn snapshot(repo: &Repository, world_dir: &Path) -> Result<Manifest> {
+    snapshot_inner(repo, world_dir, None)
+}
+
+/// Like [`snapshot`], reporting per-file progress (a first commit decodes
+/// every chunk in the world — give the user a sign of life).
+pub fn snapshot_with_progress(
+    repo: &Repository,
+    world_dir: &Path,
+    progress: Progress,
+) -> Result<Manifest> {
+    snapshot_inner(repo, world_dir, Some(progress))
+}
+
+fn snapshot_inner(
+    repo: &Repository,
+    world_dir: &Path,
+    progress: Option<Progress>,
+) -> Result<Manifest> {
     let pack_dir = repo.objects().pack_dir();
     let writer = Mutex::new(PackWriter::new(&pack_dir)?);
     let cache = ChunkCache::load(repo.dir());
@@ -35,6 +56,7 @@ pub fn snapshot(repo: &Repository, world_dir: &Path) -> Result<Manifest> {
         Sink::Pack(repo.objects(), &writer),
         Some(repo.dir()),
         Some(&cache),
+        progress,
     )?;
     let writer = writer.into_inner().unwrap();
     if !writer.is_empty() {
@@ -50,7 +72,13 @@ pub fn snapshot(repo: &Repository, world_dir: &Path) -> Result<Manifest> {
 /// persists it: status must not write repo state.
 pub fn hash_only(repo: &Repository, world_dir: &Path) -> Result<Manifest> {
     let cache = ChunkCache::load(repo.dir());
-    build(world_dir, Sink::HashOnly, Some(repo.dir()), Some(&cache))
+    build(
+        world_dir,
+        Sink::HashOnly,
+        Some(repo.dir()),
+        Some(&cache),
+        None,
+    )
 }
 
 enum Kind {
@@ -68,6 +96,7 @@ fn build(
     sink: Sink,
     repo_dir: Option<&Path>,
     cache: Option<&ChunkCache>,
+    progress: Option<Progress>,
 ) -> Result<Manifest> {
     let root = std::fs::canonicalize(world_dir).unwrap_or_else(|_| world_dir.to_path_buf());
     let repo_prefix = repo_dir.and_then(|d| std::fs::canonicalize(d).ok());
@@ -95,9 +124,18 @@ fn build(
         }
     }
 
+    let total = files.len();
+    let done = std::sync::atomic::AtomicUsize::new(0);
     let entries: Vec<Entry> = files
         .par_iter()
-        .map(|f| classify(f, &root, sink, cache))
+        .map(|f| {
+            let e = classify(f, &root, sink, cache);
+            if let Some(p) = progress {
+                let n = done.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+                p(n, total);
+            }
+            e
+        })
         .collect::<Result<Vec<_>>>()?;
 
     let mut m = Manifest::default();
@@ -289,6 +327,29 @@ mod tests {
         // Re-snapshotting the same world yields an identical manifest (determinism).
         let m2 = snapshot(&repo, &world).unwrap();
         assert_eq!(m, m2);
+    }
+
+    #[test]
+    fn snapshot_reports_per_file_progress() {
+        let d = tempfile::tempdir().unwrap();
+        let repo = Repository::init(&d.path().join("repo")).unwrap();
+        let world = d.path().join("world");
+        build_world(&world); // 3 files: region, level.dat, icon.png
+
+        let seen = Mutex::new(Vec::new());
+        let m = snapshot_with_progress(&repo, &world, &|done, total| {
+            seen.lock().unwrap().push((done, total));
+        })
+        .unwrap();
+        assert_eq!(m, snapshot(&repo, &world).unwrap(), "same manifest");
+
+        let mut seen = seen.into_inner().unwrap();
+        seen.sort();
+        assert_eq!(
+            seen,
+            vec![(1, 3), (2, 3), (3, 3)],
+            "called once per file with a running count"
+        );
     }
 
     #[test]
