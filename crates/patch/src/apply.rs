@@ -226,7 +226,12 @@ fn copy_world(src: &Path, dst: &Path) -> Result<()> {
                     if let Some(parent) = to.parent() {
                         std::fs::create_dir_all(parent)?;
                     }
-                    std::fs::copy(&p, &to)?;
+                    // Reflink (copy-on-write clone) when the filesystem supports
+                    // it — near-instant and zero extra space for the unchanged
+                    // bulk of a world; patched files are rewritten wholesale,
+                    // which breaks the share only for them. Falls back to a
+                    // byte copy on filesystems/targets without reflink.
+                    reflink_copy::reflink_or_copy(&p, &to)?;
                 }
             }
         }
@@ -287,6 +292,37 @@ mod tests {
         let r = apply(&patch, &b, &rev, true, false).unwrap();
         assert!(r.conflicts.is_empty(), "conflicts: {:?}", r.conflicts);
         assert!(mca_diff::world::diff(&rev, &a).unwrap().is_empty());
+    }
+
+    #[test]
+    fn copy_world_reproduces_nested_tree_byte_for_byte() {
+        // copy_world is the base→output copy that reflinks when the filesystem
+        // supports it and falls back to a byte copy otherwise; either way the
+        // output must be identical, including nested dirs and a 0-byte file.
+        let d = tempfile::tempdir().unwrap();
+        let src = d.path().join("src");
+        std::fs::create_dir_all(src.join("region")).unwrap();
+        std::fs::create_dir_all(src.join("data/nested")).unwrap();
+        std::fs::write(src.join("level.dat"), b"LEVEL").unwrap();
+        std::fs::write(src.join("region/r.0.0.mca"), vec![0xABu8; 9000]).unwrap();
+        std::fs::write(src.join("data/nested/deep.bin"), b"deep").unwrap();
+        std::fs::write(src.join("data/empty"), b"").unwrap();
+
+        let dst = d.path().join("dst");
+        copy_world(&src, &dst).unwrap();
+
+        for rel in [
+            "level.dat",
+            "region/r.0.0.mca",
+            "data/nested/deep.bin",
+            "data/empty",
+        ] {
+            assert_eq!(
+                std::fs::read(src.join(rel)).unwrap(),
+                std::fs::read(dst.join(rel)).unwrap(),
+                "{rel} must copy identically"
+            );
+        }
     }
 
     #[test]

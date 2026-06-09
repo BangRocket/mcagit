@@ -13,6 +13,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 base64 = { workspace = true }
 thiserror = { workspace = true }
+reflink-copy = "0.1.29"
 
 [dev-dependencies]
 tempfile = { workspace = true }
