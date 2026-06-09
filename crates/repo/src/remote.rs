@@ -514,9 +514,10 @@ pub fn fetch(local: &Repository, t: &dyn Transport, branch: &str) -> Result<(Str
 }
 
 /// Leaf ids fetched per pack request. Each pack is built (and held) whole on
-/// the remote, so keep batches modest; the round-trip count still drops from
-/// one-per-object to one-per-batch. The remote caps the count it will serve.
-const FETCH_BATCH: usize = 1000;
+/// the remote, so keep batches modest: 256 chunk objects is a few MB to tens of
+/// MB, comfortably under the remote's per-request size cap even for dense
+/// worlds, while still cutting round-trips by ~256× versus one-per-object.
+const FETCH_BATCH: usize = 256;
 
 /// Walk from `tip` over the transport, storing every reachable object `local`
 /// lacks. The commit/tree skeleton is fetched per-object (few of them, and each
