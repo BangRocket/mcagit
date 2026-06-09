@@ -94,9 +94,13 @@ patch → cli`.
     then parallel region writes), `verify` (fast single-sided tree-hash accuracy check),
     `status`, `fsck`, `gc`, `merge_base` + 3-way `merge`, `replay` (cherry-pick/revert/rebase),
     `stash`, `transfer` (path-transport clone/push/pull — copies only missing objects),
-    `wirepack` (batched push bodies: one zstd-per-object pack per request, hash-verified +
-    inflate-bounded on ingest), shallow clones (`clone --depth`; `<repo>/shallow` boundary,
-    all graph walks go through `Repository::parents_of` which grafts to empty there).
+    `wirepack` (batched push bodies: one zstd-per-object pack per request, **streamed** in
+    on ingest — hash-verified + per-object and total inflate-bounded), shallow clones
+    (`clone --depth`; `<repo>/shallow` boundary, all graph walks go through
+    `Repository::parents_of` which grafts to empty there), and cloud remotes — `bucket`
+    (the serverless `Bucket` trait + `BucketTransport` protocol + `InMemoryBucket` for
+    tests) and `cloud` (`S3Bucket` SigV4 / `AzureBucket` SharedKey over `ureq`, no async
+    SDKs). `connect` dispatches `s3://` / `azure://` alongside path/http/ssh.
 
 ## Invariants worth preserving
 
@@ -118,7 +122,11 @@ patch → cli`.
   Only type 127 (Custom) is opaque — a region containing one falls back to a raw blob.
 - **Untrusted input is confined.** Manifest keys / patch paths / network-supplied names are
   path-confined before being materialized to disk; thread depth limits through recursive NBT
-  walks; size-bound every inflate of untrusted bytes.
+  walks; size-bound every inflate of untrusted bytes. A received wire pack is streamed
+  object-by-object — each hash-verified, each inflate per-object-bounded, and the pack's
+  *total* decoded size capped (no N-object amplification); the HTTP body read is capped too.
+  Bucket-advertised pack ids (a hostile bucket) are pinned to the 64-hex object-id shape
+  before any key/path is built.
 
 ## Agent delegation rules
 

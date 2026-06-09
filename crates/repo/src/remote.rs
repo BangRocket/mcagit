@@ -369,11 +369,10 @@ fn connect_ssh(url: &str) -> Result<StdioTransport> {
     StdioTransport::spawn(&ssh, &args)
 }
 
-const STUB_SCHEMES: [&str; 2] = ["s3://", "azure://"];
-
 /// Dispatch a remote URL/path to a transport: `http(s)://` → [`HttpTransport`],
-/// `ssh://` → [`StdioTransport`] over ssh, a local path → [`LocalTransport`].
-/// Cloud (s3/azure) is not yet built.
+/// `ssh://` → [`StdioTransport`] over ssh, `s3://bucket[/prefix]` and
+/// `azure://account/container[/prefix]` → [`crate::bucket::BucketTransport`]
+/// over a cloud object store, a local path → [`LocalTransport`].
 pub fn connect(url_or_path: &str) -> Result<Box<dyn Transport>> {
     let lower = url_or_path.to_ascii_lowercase();
     if lower.starts_with("http://") || lower.starts_with("https://") {
@@ -382,9 +381,35 @@ pub fn connect(url_or_path: &str) -> Result<Box<dyn Transport>> {
     if lower.starts_with("ssh://") {
         return Ok(Box::new(connect_ssh(url_or_path)?));
     }
-    if let Some(scheme) = STUB_SCHEMES.iter().find(|s| lower.starts_with(**s)) {
-        return Err(RepoError::Other(format!(
-            "remote transport not yet implemented: {scheme} — use http(s)://, ssh://, or a local path"
+    if let Some(rest) = url_or_path.strip_prefix("s3://") {
+        // s3://bucket[/prefix]
+        let (bucket, prefix) = rest.split_once('/').unwrap_or((rest, ""));
+        if bucket.is_empty() {
+            return Err(RepoError::Other(
+                "s3 url needs a bucket: s3://bucket/prefix".into(),
+            ));
+        }
+        let b = crate::cloud::S3Bucket::connect(bucket)?;
+        return Ok(Box::new(crate::bucket::BucketTransport::new(
+            Box::new(b),
+            prefix,
+        )));
+    }
+    if let Some(rest) = url_or_path.strip_prefix("azure://") {
+        // azure://account/container[/prefix]
+        let mut parts = rest.splitn(3, '/');
+        let account = parts.next().unwrap_or("");
+        let container = parts.next().unwrap_or("");
+        let prefix = parts.next().unwrap_or("");
+        if account.is_empty() || container.is_empty() {
+            return Err(RepoError::Other(
+                "azure url needs account + container: azure://account/container/prefix".into(),
+            ));
+        }
+        let b = crate::cloud::AzureBucket::connect(account, container)?;
+        return Ok(Box::new(crate::bucket::BucketTransport::new(
+            Box::new(b),
+            prefix,
         )));
     }
     Ok(Box::new(LocalTransport::open(Path::new(url_or_path))?))
@@ -883,13 +908,14 @@ mod tests {
 
     #[test]
     fn scheme_dispatch() {
-        // http(s) construct a transport (no request made yet); cloud stubbed.
+        // http(s) construct a transport (no request made yet).
         // (ssh:// spawns the ssh client — exercised by the e2e, not here.)
         assert!(connect("http://x/y").is_ok());
         assert!(connect("https://x/y").is_ok());
-        for url in ["s3://b/k", "azure://a/c"] {
-            assert!(connect(url).is_err(), "{url} should be unimplemented");
-        }
+        // s3/azure construct iff their credentials are present in the env; the
+        // url-shape errors (missing bucket/container) are deterministic.
+        assert!(connect("s3://").is_err());
+        assert!(connect("azure://account").is_err());
     }
 
     #[test]

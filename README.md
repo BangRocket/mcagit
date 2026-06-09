@@ -63,13 +63,22 @@ using `user.signingkey`; `verify-commit` / `tag -v` exit 0 only when the signer 
 
 **Remotes** — `clone [--depth N] · push · pull · fetch · ls-remote · remote ·
 verify-remote [--deep]` over a **local path**, **`http(s)://`** (served by
-`mcagit serve <dir>`), or **`ssh://`** (served by `mcagit serve-stdio <dir>`, spawned over
-`ssh`). Pushes travel as **wire packs** — the missing objects batched (zstd-per-object)
-into one request per ~128 MiB instead of a round-trip per object; the server hash-verifies
-every object and bounds every inflate before storing. `clone --depth N` makes a shallow
-clone (history grafted at a recorded boundary; tags skipped). `verify-remote` walks the
-remote's history confirming every commit/tree hashes correctly and every leaf is present
-(`--deep` re-downloads and hash-checks the leaves too).
+`mcagit serve <dir>`), **`ssh://`** (served by `mcagit serve-stdio <dir>`, spawned over
+`ssh`), or a serverless cloud object store — **`s3://bucket/prefix`** (any S3-compatible
+store: AWS, R2, B2, MinIO) and **`azure://account/container/prefix`**. Pushes travel as
+**wire packs** — the missing objects batched (zstd-per-object) into one request per
+~128 MiB instead of a round-trip per object; the receiver streams them in, hash-verifying
+every object and bounding every inflate (and the total) before storing. `clone --depth N`
+makes a shallow clone (history grafted at a recorded boundary; tags skipped).
+`verify-remote` walks the remote's history confirming every commit/tree hashes correctly
+and every leaf is present (`--deep` re-downloads and hash-checks the leaves too).
+
+Cloud buckets need no daemon: the whole repo protocol runs client-side, so a push is a
+handful of bucket writes (a content-addressed pack blob, a CAS-guarded `packs/manifest`,
+an ETag-CAS'd ref). Credentials come from the standard env (`AWS_ACCESS_KEY_ID` /
+`AWS_SECRET_ACCESS_KEY`, `S3_ENDPOINT_URL` for non-AWS; `AZURE_STORAGE_ACCOUNT` /
+`AZURE_STORAGE_KEY`). S3 requests are SigV4-signed, Azure SharedKey-signed, over plain
+`ureq` — no async cloud SDKs.
 
 **World inspection & render** — `players · find <entity|block-entity|sign> [id] ·
 inspect <x y z> · where-changed <old> <new>` (the grief detector) `· region <file.mca> ·
@@ -132,7 +141,6 @@ end-to-end round-trip checks.
 
 ## Not yet implemented
 
-- **Cloud remotes (S3/Azure)** — local, `http(s)://`, and `ssh://` transports are done
-  (with batched wire-pack pushes); serverless cloud object stores are open.
 - A staging index (mcagit is deliberately index-free, like fossil).
+- Cross-object pack deltas (objects are zstd-per-object; no delta chains).
 - The bare `mcagit A B` diff fallthrough (use `mcagit diff A B`).

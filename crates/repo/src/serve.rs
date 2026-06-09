@@ -233,17 +233,17 @@ pub(crate) fn op_put(dir: &Path, hash: &str, content: &[u8]) -> std::result::Res
     Ok(())
 }
 
-/// Ingest a batched wire pack. Every object is hash-verified and every inflate
-/// size-bounded by `wirepack::parse` before anything is stored; auto-creates
-/// the repo (a push to a new name). Returns the number of objects stored.
+/// Ingest a batched wire pack. Objects are streamed one at a time —
+/// hash-verified, inflate-bounded, and total-size-capped by `wirepack::for_each`
+/// — and written as they decode, so a hostile many-object pack can't force the
+/// server to hold the whole decompressed batch in memory. Auto-creates the repo
+/// (a push to a new name). Returns the number of objects stored.
 pub(crate) fn op_put_pack(dir: &Path, body: &[u8]) -> std::result::Result<usize, String> {
-    let objects = crate::wirepack::parse(body).map_err(|e| e.to_string())?;
     let repo = open_or_init(dir).map_err(|e| e.to_string())?;
-    let n = objects.len();
-    for (_, content) in objects {
-        repo.objects().write(&content).map_err(|e| e.to_string())?;
-    }
-    Ok(n)
+    crate::wirepack::for_each(body, |_id, content| {
+        repo.objects().write(&content).map(|_| ())
+    })
+    .map_err(|e| e.to_string())
 }
 
 /// Advance a branch from a JSON `{old, new, force}` body (fast-forward guarded).
@@ -321,10 +321,17 @@ fn frame_err(e: io::Error) -> RepoError {
 // ---- HTTP helpers ----
 
 fn read_body(req: &mut Request) -> Result<Vec<u8>> {
+    // Bound the read by the same cap the stdio path enforces: a client's
+    // Content-Length is attacker-controlled, so read at most MAX_MSG_BODY+1 and
+    // reject anything larger rather than buffering a 4 GiB body up front.
     let mut buf = Vec::new();
     req.as_reader()
+        .take(MAX_MSG_BODY as u64 + 1)
         .read_to_end(&mut buf)
         .map_err(|e| RepoError::Other(format!("read body: {e}")))?;
+    if buf.len() > MAX_MSG_BODY {
+        return Err(RepoError::Other("request body too large".into()));
+    }
     Ok(buf)
 }
 

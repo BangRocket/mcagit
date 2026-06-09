@@ -16,8 +16,12 @@ walkdir = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
-ureq = { version = "3.3.0", default-features = false, features = ["json"] }
+ureq = { version = "3.3.0", default-features = false, features = ["json", "rustls"] }
 tiny_http = "0.12.0"
+# S3 SigV4 / Azure SharedKey request signing (cloud bucket transports).
+base64 = { workspace = true }
+sha2 = { workspace = true }
+hmac = { workspace = true }
 # sign.rs stages ssh-keygen payloads/signatures through a temp dir at runtime.
 tempfile = { workspace = true }
 
