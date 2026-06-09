@@ -165,6 +165,20 @@ python3 -c "import json; d=json.load(open('$SCRATCH/test-repo/chunkcache.json'))
 - Second commit on unchanged world: "nothing to commit — world matches HEAD" — exit 0 (cache fast path).
 - Corrupt/missing chunkcache.json: silently discarded, operations continue, cache regenerated on commit.
 
+## Branch Reflog Smoke Test
+```sh
+# Requires HEAD pointing to the branch being tested (not detached)
+# Create branch from current tip, make 2 commits on it, then:
+"$CLI" -C "$SCRATCH/test-repo" reflog test-branch          # shows N entries, index 0=tip
+"$CLI" -C "$SCRATCH/test-repo" rev-parse "test-branch"     # current tip hash
+"$CLI" -C "$SCRATCH/test-repo" rev-parse "test-branch@{1}" # prior tip hash
+```
+- Branch reflog lives at logs/refs/heads/<branch>
+- Each line: "<from> <to> <message>\n"
+- @{0} = current tip, @{1} = prior tip, etc.
+- @{n} errors if n >= number of reflog entries (expected, not a bug)
+- Branch creation does NOT append a reflog entry; only commits/updates do
+
 ## Observed Timings (Rust, macOS, Release build, 2026-06-09, commit 4073347)
 - Build: ~instant (incremental, pre-built)
 - Extract Older->Newer: ~instant (18 file entries, 4712 ops, exit 0)

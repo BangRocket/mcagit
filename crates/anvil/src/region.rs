@@ -157,7 +157,10 @@ impl RegionFile {
                 let dir = path.parent().unwrap_or_else(|| Path::new("."));
                 let mcc = dir.join(format!("c.{}.{}.mcc", pos.x, pos.z));
                 match std::fs::metadata(&mcc) {
-                    Ok(meta) if meta.len() > MAX_EXTERNAL_CHUNK => {
+                    // Reject anything but a bounded regular file. A symlink to a
+                    // special file (e.g. /dev/zero, a FIFO) reports len()==0 and
+                    // would otherwise slip past the cap into an unbounded read.
+                    Ok(meta) if !meta.is_file() || meta.len() > MAX_EXTERNAL_CHUNK => {
                         return Err(AnvilError::ExternalChunkTooLarge(MAX_EXTERNAL_CHUNK));
                     }
                     Ok(_) => match std::fs::read(&mcc) {
@@ -316,6 +319,31 @@ mod tests {
             .open(dir.path().join("c.1.2.mcc"))
             .unwrap();
         mcc.set_len(MAX_EXTERNAL_CHUNK + 1).unwrap();
+
+        assert!(matches!(
+            RegionFile::open(&path),
+            Err(AnvilError::ExternalChunkTooLarge(_))
+        ));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn non_regular_mcc_is_rejected_not_read() {
+        // A .mcc symlinked to a 0-length special file (/dev/zero) reports
+        // len()==0, slipping past the size gate; reading it would be unbounded.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("r.0.0.mca");
+        let big = RawChunk {
+            pos: ChunkPos::new(1, 2),
+            compression: ChunkCompression::None,
+            payload: vec![0xAB; 1_100_000],
+            external: false,
+            timestamp: 5,
+        };
+        RegionWriter::write(&path, std::slice::from_ref(&big)).unwrap();
+        let mcc = dir.path().join("c.1.2.mcc");
+        std::fs::remove_file(&mcc).unwrap();
+        std::os::unix::fs::symlink("/dev/zero", &mcc).unwrap();
 
         assert!(matches!(
             RegionFile::open(&path),

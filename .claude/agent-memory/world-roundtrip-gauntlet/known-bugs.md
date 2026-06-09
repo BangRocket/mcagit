@@ -48,6 +48,27 @@ All 5 gauntlet cases PASSED. No bugs found in:
 - GC → checkout → verify
 - Chunk cache resilience (delete / corrupt)
 
+## Rust Implementation — Gauntlet Results (2026-06-09, branch fix/issue-43-41-small-gaps, commit after 4073347)
+
+All checks PASSED for branch fix/issue-43-41-small-gaps:
+- Invariant 1: Extract → apply → diff (forward) — PASS (18 file entries, 4712 ops, exit 0)
+- Invariant 2: Apply --reverse → diff (reverse) — PASS (4712 ops, exit 0)
+- Invariant 3: Commit → checkout → verify (2-commit, Older then Newer) — PASS
+  - stdout last line is valid 64-hex hash in all commits (progress callback does not corrupt stdout)
+  - "nothing to commit" fast path works correctly (cache hit on same-world second commit attempt)
+- Invariant 4 (GC → checkout → verify): PASS — gc kept 4389 objects, pruned 0; fsck 0 corrupt/missing/unreachable
+- Branch reflog smoke test: PASS
+  - write_branch appends to logs/refs/heads/<branch> correctly on each commit
+  - `reflog test-branch` shows 2 entries (indices 0 and 1)
+  - `rev-parse test-branch@{1}` resolves to prior tip (TB1 hash) correctly
+  - `@{2}` correctly errors when only 2 entries exist (expected behavior)
+- cargo test --all: 157 tests, 0 failed (all crates green)
+
+### Note: Reflog @{n} counting
+Branch reflog starts counting from the FIRST UPDATE (not from branch creation). If a branch is
+created pointing at commit X and then 2 commits are made: @{0}=tip, @{1}=prior tip.
+The creation point (X) is NOT in the reflog for the branch — consistent with git behavior.
+
 ## Rust Implementation — Extended Gauntlet Results (2026-06-09, commit 4073347, branch feat/dotnet-parity)
 
 All 5 cases PASSED. No bugs found in new transport/snapshot/gc features:
