@@ -102,6 +102,10 @@ lock-free pack reads); against the original serial .NET checkout (268 s) this is
 faster, and every restored world reproduces byte-faithfully (confirmed by `verify` and
 semantic diff).
 
+Incremental commits keep a persistent chunk cache (`<repo>/chunkcache.json`, compressed
+payload hash → object id), so re-commits of a mostly-unchanged world skip decoding and
+canonicalizing unchanged chunks entirely; a hit is only trusted if the object exists.
+
 ## Clean-slate format notes
 
 - Object id = `blake3(uncompressed canonical NBT)`; loose objects are `zstd`-compressed at

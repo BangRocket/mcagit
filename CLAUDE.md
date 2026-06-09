@@ -85,6 +85,9 @@ patch → cli`.
   - `Manifest` ≈ git tree (regions map chunk pos → chunk-object id; loose nbt + blobs map path
     → id); `CommitObject` JSON. `Repository` is **bare and external** to the world; the bound
     worktree is stored in the repo `config`; `Repository::discover` walks up from cwd.
+  - `chunk_cache` — persistent compressed-payload-hash → chunk-object-id map
+    (`chunkcache.json`) so incremental commits skip decode+canonicalize for unchanged raw
+    chunk bytes; hits are trusted only after an `exists()` check.
   - `snapshot` (commit, parallel), `checkout` (parallel — one flat per-chunk rayon job list,
     then parallel region writes), `verify` (fast single-sided tree-hash accuracy check),
     `status`, `fsck`, `gc`, `merge_base` + 3-way `merge`, `replay` (cherry-pick/revert/rebase),

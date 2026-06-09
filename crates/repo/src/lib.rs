@@ -31,6 +31,7 @@ pub mod object_store;
 pub use object_store::ObjectStore;
 pub mod manifest;
 pub use manifest::{CommitObject, Manifest, TagObject};
+pub mod chunk_cache;
 pub mod hooks;
 pub mod repository;
 pub mod sign;
