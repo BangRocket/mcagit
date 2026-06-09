@@ -54,4 +54,4 @@ pub use transfer::{clone_local, fetch_local, push_local};
 pub mod remote;
 pub use remote::{connect, Transport};
 pub mod serve;
-pub use serve::serve;
+pub use serve::{serve, serve_stdio};

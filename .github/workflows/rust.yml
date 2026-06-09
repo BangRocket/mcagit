@@ -62,3 +62,19 @@ jobs:
           "$BIN" -C cloned verify "$H" out || { echo "FAIL: cloned world does not verify"; kill $SRV; exit 1; }
           kill $SRV 2>/dev/null || true
           echo "http e2e OK"
+      - name: ssh transport round-trip (serve-stdio over a fake ssh)
+        run: |
+          set -u
+          BIN="$PWD/target/release/mcagit"
+          NEW=compare-worlds/New_World_Newer
+          # fake ssh: drop the host arg, run the rest locally — exercises connect_ssh → serve-stdio
+          printf '#!/bin/sh\nshift\nexec "$@"\n' > ssh-noop.sh; chmod +x ssh-noop.sh
+          export MCAGIT_SSH="$PWD/ssh-noop.sh" MCAGIT_REMOTE_BIN="$BIN"
+          "$BIN" init sshlocal
+          H=$("$BIN" -C sshlocal commit -m w "$NEW")
+          "$BIN" -C sshlocal push "ssh://h$PWD/sshremote" main
+          "$BIN" -C sshlocal ls-remote "ssh://h$PWD/sshremote" | grep -q "$H" || { echo "FAIL: ssh ls-remote"; exit 1; }
+          "$BIN" clone "ssh://h$PWD/sshremote" sshclone
+          "$BIN" -C sshclone checkout "$H" sshout
+          "$BIN" -C sshclone verify "$H" sshout || { echo "FAIL: ssh clone does not verify"; exit 1; }
+          echo "ssh e2e OK"

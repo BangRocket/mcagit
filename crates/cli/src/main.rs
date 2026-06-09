@@ -243,6 +243,8 @@ enum Cmd {
         #[arg(long, default_value = "127.0.0.1:5080")]
         addr: String,
     },
+    /// Serve a single repo over stdin/stdout (the ssh transport's server side).
+    ServeStdio { dir: PathBuf },
     /// Render a top-down surface map of a world to a PNG.
     Render {
         world: Option<PathBuf>,
@@ -1110,6 +1112,11 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
 
         Cmd::Serve { root, addr } => {
             mca_repo::serve(root, addr)?;
+            Ok(ExitCode::SUCCESS)
+        }
+
+        Cmd::ServeStdio { dir } => {
+            mca_repo::serve_stdio(dir)?;
             Ok(ExitCode::SUCCESS)
         }
 

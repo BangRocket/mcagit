@@ -11,6 +11,21 @@ pub struct Repository {
     objects: ObjectStore,
 }
 
+/// A ref name safe to use as a path component under `refs/`: rejects traversal
+/// (`..`, a leading `/` or `.`, a trailing `/`, backslashes, NUL) while allowing
+/// namespaced names like `feature/foo`. Untrusted ref names (from the transport)
+/// are validated here before any `refs/…` path is built.
+pub(crate) fn safe_ref_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 255
+        && !name.starts_with('/')
+        && !name.starts_with('.')
+        && !name.ends_with('/')
+        && !name.contains("..")
+        && !name.contains('\\')
+        && !name.contains('\0')
+}
+
 impl Repository {
     pub fn dir(&self) -> &Path {
         &self.dir
@@ -181,6 +196,9 @@ impl Repository {
             .filter(|s| !s.is_empty())
     }
     pub fn write_remote_ref(&self, name: &str, branch: &str, hash: &str) -> Result<()> {
+        if !safe_ref_name(name) || !safe_ref_name(branch) {
+            return Err(RepoError::BadRef(format!("{name}/{branch}")));
+        }
         let p = self.remote_ref_path(name, branch);
         if let Some(parent) = p.parent() {
             std::fs::create_dir_all(parent)?;
@@ -199,6 +217,9 @@ impl Repository {
     }
 
     pub fn read_branch(&self, name: &str) -> Option<String> {
+        if !safe_ref_name(name) {
+            return None;
+        }
         std::fs::read_to_string(self.branch_path(name))
             .ok()
             .map(|s| s.trim().to_string())
@@ -206,6 +227,9 @@ impl Repository {
     }
 
     pub fn write_branch(&self, name: &str, hash: &str) -> Result<()> {
+        if !safe_ref_name(name) {
+            return Err(RepoError::BadRef(name.to_string()));
+        }
         let p = self.branch_path(name);
         if let Some(parent) = p.parent() {
             std::fs::create_dir_all(parent)?;
@@ -215,6 +239,9 @@ impl Repository {
     }
 
     pub fn delete_branch(&self, name: &str) -> Result<()> {
+        if !safe_ref_name(name) {
+            return Err(RepoError::BadRef(name.to_string()));
+        }
         let _ = std::fs::remove_file(self.branch_path(name));
         Ok(())
     }
@@ -237,6 +264,9 @@ impl Repository {
     }
 
     pub fn write_tag(&self, name: &str, commit: &str) -> Result<()> {
+        if !safe_ref_name(name) {
+            return Err(RepoError::BadRef(name.to_string()));
+        }
         let p = self.tag_path(name);
         if let Some(parent) = p.parent() {
             std::fs::create_dir_all(parent)?;
@@ -246,6 +276,9 @@ impl Repository {
     }
 
     pub fn read_tag(&self, name: &str) -> Option<String> {
+        if !safe_ref_name(name) {
+            return None;
+        }
         std::fs::read_to_string(self.tag_path(name))
             .ok()
             .map(|s| s.trim().to_string())
@@ -253,6 +286,9 @@ impl Repository {
     }
 
     pub fn delete_tag(&self, name: &str) -> Result<()> {
+        if !safe_ref_name(name) {
+            return Err(RepoError::BadRef(name.to_string()));
+        }
         let _ = std::fs::remove_file(self.tag_path(name));
         Ok(())
     }

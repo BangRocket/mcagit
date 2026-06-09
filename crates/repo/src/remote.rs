@@ -9,7 +9,10 @@
 
 use crate::repository::Repository;
 use crate::{RepoError, Result};
+use std::io::BufReader;
 use std::path::Path;
+use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::sync::Mutex;
 
 /// The minimal remote protocol.
 pub trait Transport {
@@ -118,17 +121,7 @@ impl Transport for HttpTransport {
             .body_mut()
             .read_json()
             .map_err(http_err)?;
-        let mut out = Vec::new();
-        for (kind, prefix) in [("branches", "refs/heads/"), ("tags", "refs/tags/")] {
-            if let Some(map) = adv.get(kind).and_then(|v| v.as_object()) {
-                for (name, hash) in map {
-                    if let Some(h) = hash.as_str() {
-                        out.push((format!("{prefix}{name}"), h.to_string()));
-                    }
-                }
-            }
-        }
-        Ok(out)
+        Ok(parse_ref_adv(&adv))
     }
 
     fn get_object(&self, id: &str) -> Result<Vec<u8>> {
@@ -176,18 +169,191 @@ impl Transport for HttpTransport {
     }
 }
 
-const STUB_SCHEMES: [&str; 3] = ["ssh://", "s3://", "azure://"];
+/// Parse a `{branches, tags, head}` advertisement into `(refname, hash)` pairs.
+fn parse_ref_adv(adv: &serde_json::Value) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for (kind, prefix) in [("branches", "refs/heads/"), ("tags", "refs/tags/")] {
+        if let Some(map) = adv.get(kind).and_then(|v| v.as_object()) {
+            for (name, hash) in map {
+                if let Some(h) = hash.as_str() {
+                    out.push((format!("{prefix}{name}"), h.to_string()));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Transport over a child process speaking the length-framed stdio protocol
+/// (server side: `mcagit serve-stdio`). The ssh transport is this over `ssh`.
+pub struct StdioTransport {
+    pipe: Mutex<Pipe>,
+}
+
+struct Pipe {
+    stdin: ChildStdin,
+    stdout: BufReader<ChildStdout>,
+    child: Child,
+}
+
+impl StdioTransport {
+    /// Spawn `program args…` (stdin/stdout piped) and speak the framed protocol.
+    pub fn spawn(program: &str, args: &[String]) -> Result<Self> {
+        let mut child = Command::new(program)
+            .args(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .map_err(|e| RepoError::Other(format!("spawn {program}: {e}")))?;
+        let stdin = child.stdin.take().expect("piped stdin");
+        let stdout = BufReader::new(child.stdout.take().expect("piped stdout"));
+        Ok(Self {
+            pipe: Mutex::new(Pipe {
+                stdin,
+                stdout,
+                child,
+            }),
+        })
+    }
+
+    fn call(&self, head: &str, body: &[u8]) -> Result<(String, Vec<u8>)> {
+        let mut guard = self.pipe.lock().unwrap();
+        let p = &mut *guard;
+        crate::serve::write_msg(&mut p.stdin, head, body).map_err(stdio_err)?;
+        crate::serve::read_msg(&mut p.stdout)
+            .map_err(stdio_err)?
+            .ok_or_else(|| RepoError::Other("remote closed the connection".into()))
+    }
+}
+
+impl Drop for StdioTransport {
+    fn drop(&mut self) {
+        if let Ok(mut guard) = self.pipe.lock() {
+            let p = &mut *guard;
+            let _ = crate::serve::write_msg(&mut p.stdin, "quit", b"");
+            let _ = p.child.kill();
+            let _ = p.child.wait();
+        }
+    }
+}
+
+fn stdio_err<E: std::fmt::Display>(e: E) -> RepoError {
+    RepoError::Other(format!("ssh transport: {e}"))
+}
+fn stdio_status(st: &str, body: &[u8]) -> RepoError {
+    RepoError::Other(format!(
+        "remote error ({st}): {}",
+        String::from_utf8_lossy(body)
+    ))
+}
+
+impl Transport for StdioTransport {
+    fn list_refs(&self) -> Result<Vec<(String, String)>> {
+        let (st, body) = self.call("list-refs", &[])?;
+        if st != "ok" {
+            return Err(stdio_status(&st, &body));
+        }
+        let adv: serde_json::Value = serde_json::from_slice(&body).map_err(stdio_err)?;
+        Ok(parse_ref_adv(&adv))
+    }
+    fn get_object(&self, id: &str) -> Result<Vec<u8>> {
+        let (st, body) = self.call(&format!("get {id}"), &[])?;
+        match st.as_str() {
+            "ok" => Ok(body),
+            "none" => Err(RepoError::Other(format!("no such object {id}"))),
+            _ => Err(stdio_status(&st, &body)),
+        }
+    }
+    fn missing(&self, ids: &[String]) -> Result<Vec<String>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let body = serde_json::to_vec(ids).map_err(stdio_err)?;
+        let (st, b) = self.call("missing", &body)?;
+        if st != "ok" {
+            return Err(stdio_status(&st, &b));
+        }
+        serde_json::from_slice(&b).map_err(stdio_err)
+    }
+    fn put_object(&self, content: &[u8]) -> Result<()> {
+        let id = blake3::hash(content).to_hex().to_string();
+        let (st, b) = self.call(&format!("put {id}"), content)?;
+        if st != "ok" {
+            return Err(stdio_status(&st, &b));
+        }
+        Ok(())
+    }
+    fn set_branch(&self, branch: &str, hash: &str) -> Result<()> {
+        let body =
+            serde_json::json!({ "old": serde_json::Value::Null, "new": hash, "force": true });
+        let payload = serde_json::to_vec(&body).map_err(stdio_err)?;
+        let (st, b) = self.call(&format!("set-ref {branch}"), &payload)?;
+        if st != "ok" {
+            return Err(stdio_status(&st, &b));
+        }
+        Ok(())
+    }
+}
+
+/// Build an ssh stdio transport for `ssh://[user@]host[:port]/path`: runs
+/// `ssh [-p port] [user@]host mcagit serve-stdio /path` and speaks the protocol
+/// over the pipe. Override the ssh client with `MCAGIT_SSH` and the remote
+/// binary with `MCAGIT_REMOTE_BIN`.
+fn connect_ssh(url: &str) -> Result<StdioTransport> {
+    let rest = url
+        .strip_prefix("ssh://")
+        .ok_or_else(|| RepoError::Other("not an ssh url".into()))?;
+    let (authority, path) = rest
+        .split_once('/')
+        .ok_or_else(|| RepoError::Other("ssh url needs a /path: ssh://host/path".into()))?;
+    let (host, port) = match authority.rsplit_once(':') {
+        Some((h, p)) if !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()) => (h, Some(p)),
+        _ => (authority, None),
+    };
+    if host.is_empty() {
+        return Err(RepoError::Other("ssh url has no host".into()));
+    }
+    // A host beginning with '-' would be parsed by ssh as an option (e.g.
+    // `-oProxyCommand=…` → arbitrary command execution). Reject it.
+    if host.starts_with('-') {
+        return Err(RepoError::Other("ssh host may not start with '-'".into()));
+    }
+    let ssh = std::env::var("MCAGIT_SSH")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "ssh".into());
+    let remote_bin = std::env::var("MCAGIT_REMOTE_BIN")
+        .ok()
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "mcagit".into());
+    let mut args: Vec<String> = Vec::new();
+    if let Some(p) = port {
+        args.push("-p".into());
+        args.push(p.to_string());
+    }
+    args.push(host.to_string());
+    args.push(remote_bin);
+    args.push("serve-stdio".into());
+    args.push(format!("/{path}"));
+    StdioTransport::spawn(&ssh, &args)
+}
+
+const STUB_SCHEMES: [&str; 2] = ["s3://", "azure://"];
 
 /// Dispatch a remote URL/path to a transport: `http(s)://` → [`HttpTransport`],
-/// a local filesystem path → [`LocalTransport`]. ssh/cloud are not yet built.
+/// `ssh://` → [`StdioTransport`] over ssh, a local path → [`LocalTransport`].
+/// Cloud (s3/azure) is not yet built.
 pub fn connect(url_or_path: &str) -> Result<Box<dyn Transport>> {
     let lower = url_or_path.to_ascii_lowercase();
     if lower.starts_with("http://") || lower.starts_with("https://") {
         return Ok(Box::new(HttpTransport::new(url_or_path)));
     }
+    if lower.starts_with("ssh://") {
+        return Ok(Box::new(connect_ssh(url_or_path)?));
+    }
     if let Some(scheme) = STUB_SCHEMES.iter().find(|s| lower.starts_with(**s)) {
         return Err(RepoError::Other(format!(
-            "remote transport not yet implemented: {scheme} — use http(s):// or a local path"
+            "remote transport not yet implemented: {scheme} — use http(s)://, ssh://, or a local path"
         )));
     }
     Ok(Box::new(LocalTransport::open(Path::new(url_or_path))?))
@@ -364,10 +530,11 @@ mod tests {
 
     #[test]
     fn scheme_dispatch() {
-        // http(s) construct a transport (no request made yet); ssh/cloud stubbed.
+        // http(s) construct a transport (no request made yet); cloud stubbed.
+        // (ssh:// spawns the ssh client — exercised by the e2e, not here.)
         assert!(connect("http://x/y").is_ok());
         assert!(connect("https://x/y").is_ok());
-        for url in ["ssh://h/p", "s3://b/k", "azure://a/c"] {
+        for url in ["s3://b/k", "azure://a/c"] {
             assert!(connect(url).is_err(), "{url} should be unimplemented");
         }
     }

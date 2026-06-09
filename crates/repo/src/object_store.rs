@@ -3,7 +3,7 @@
 //! *uncompressed* content means identical content dedups regardless of how it
 //! was compressed on disk.
 
-use crate::Result;
+use crate::{RepoError, Result};
 use arc_swap::ArcSwap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -123,6 +123,9 @@ impl ObjectStore {
 
     /// Read and decompress the object with id `id`.
     pub fn read(&self, id: &str) -> Result<Vec<u8>> {
+        if !is_object_id(id) {
+            return Err(RepoError::Other(format!("invalid object id: {id}")));
+        }
         {
             let packs = self.packs.load();
             for pack in packs.iter() {
@@ -138,7 +141,7 @@ impl ObjectStore {
 
     /// True if an object with id `id` is present (in a pack or loose).
     pub fn exists(&self, id: &str) -> bool {
-        if id.len() < 3 {
+        if !is_object_id(id) {
             return false;
         }
         if self.packs.load().iter().any(|p| p.contains(id)) {
@@ -147,6 +150,13 @@ impl ObjectStore {
         let (sub, rest) = id.split_at(2);
         self.dir.join(sub).join(rest).exists()
     }
+}
+
+/// A well-formed object id: 64 lowercase hex chars (a blake3 digest). Validated
+/// before an id is ever used to build a filesystem path, so an untrusted id
+/// (from the network/transport) can't traverse out of the object store.
+fn is_object_id(id: &str) -> bool {
+    id.len() == 64 && id.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
 #[cfg(test)]
