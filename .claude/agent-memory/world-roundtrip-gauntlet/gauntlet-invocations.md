@@ -179,6 +179,25 @@ python3 -c "import json; d=json.load(open('$SCRATCH/test-repo/chunkcache.json'))
 - @{n} errors if n >= number of reflog entries (expected, not a bug)
 - Branch creation does NOT append a reflog entry; only commits/updates do
 
+## SSH/Stdio Transport Setup (ce73f40)
+
+The SSH transport in crates/repo/src/remote.rs uses two env vars:
+- `MCAGIT_SSH` — overrides the `ssh` binary (set to a wrapper script for local testing)
+- `MCAGIT_REMOTE_BIN` — overrides `mcagit` on the remote (set to `mcagit` for local testing)
+
+Command it builds: `$MCAGIT_SSH [-p port] <host> $MCAGIT_REMOTE_BIN serve-stdio /<path>`
+
+Fake-ssh wrapper pattern (ignore host arg, run local mcagit serve-stdio):
+```bash
+#!/bin/bash
+ARGS=("$@"); IDX=0
+if [[ "${ARGS[$IDX]}" == "-p" ]]; then IDX=$((IDX+2)); fi
+# ARGS[IDX]=host, IDX+1=remote_bin, IDX+2=serve-stdio, IDX+3=path
+exec /path/to/mcagit "${ARGS[$((IDX+2))]}" "${ARGS[$((IDX+3))]}"
+```
+SSH URL for local test: `ssh://fakehost<abs-path>` e.g. `ssh://fakehost/tmp/origin-repo`
+(connect_ssh strips `ssh://`, splits on first `/` to get authority=fakehost, path=rest)
+
 ## Observed Timings (Rust, macOS, Release build, 2026-06-09, commit 4073347)
 - Build: ~instant (incremental, pre-built)
 - Extract Older->Newer: ~instant (18 file entries, 4712 ops, exit 0)

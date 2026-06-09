@@ -21,8 +21,9 @@ const MAX_OBJECT_SIZE: u64 = 512 * 1024 * 1024;
 /// N entries each near [`MAX_OBJECT_SIZE`] forces N × 512 MiB of allocation
 /// from a tiny (well-compressing) wire body — an amplification bomb. Legitimate
 /// push batches are bounded far below this on the client (~128 MiB raw), so the
-/// cap only ever trips on a hostile pack.
-const MAX_PACK_TOTAL: u64 = 512 * 1024 * 1024;
+/// cap only ever trips on a hostile pack. Also the ceiling a fetch client allows for a
+/// `getpack` HTTP response body — the actual decompression guard is [`for_each`] on ingest.
+pub(crate) const MAX_PACK_TOTAL: u64 = 512 * 1024 * 1024;
 
 /// Build a framed pack body from `(id, content)` pairs.
 pub fn build(objects: &[(String, Vec<u8>)]) -> Result<Vec<u8>> {

@@ -69,6 +69,17 @@ Branch reflog starts counting from the FIRST UPDATE (not from branch creation). 
 created pointing at commit X and then 2 commits are made: @{0}=tip, @{1}=prior tip.
 The creation point (X) is NOT in the reflog for the branch — consistent with git behavior.
 
+## Rust Implementation — Transport Gauntlet Results (2026-06-09, commit ce73f40, branch fix/issue-43-41-small-gaps)
+
+All transport checks PASSED. Batched-fetch change (ce73f40) does not break world reproduction:
+- Path clone (2 commits, Older+Newer): PASS — checkout each commit, diff vs original = exit 0; fsck 0 corrupt/missing
+- Path fetch (3rd commit added to origin, fetched into clone1): PASS — "1 objects" fetched; checkout + diff exit 0; fsck 0 corrupt/missing (4390 objects)
+- SSH/stdio transport (MCAGIT_SSH=fake-ssh wrapper, MCAGIT_REMOTE_BIN=mcagit): PASS — clone of 3-commit origin; all 3 commits checkout cleanly + diff exit 0; fsck 0 corrupt/missing
+- HTTP transport (serve + push + clone + fetch): PASS — 4390 objects pushed; clone checked out HEAD and commit 2, both diff exit 0; fetch of 4th commit + checkout + diff exit 0; fsck 0 corrupt/missing (4391 objects after 4th commit)
+- cargo test --all: 160 tests, 0 failed
+
+Note on "1 objects" in fetch output: when the 3rd commit re-uses chunks already in the clone (Older content is same as commit 1), fetch only transfers the new commit object itself (not leaves that already exist). Correct behavior — dedup working.
+
 ## Rust Implementation — Extended Gauntlet Results (2026-06-09, commit 4073347, branch feat/dotnet-parity)
 
 All 5 cases PASSED. No bugs found in new transport/snapshot/gc features:

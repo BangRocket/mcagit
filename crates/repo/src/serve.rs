@@ -235,24 +235,42 @@ pub(crate) fn op_get(dir: &Path, hash: &str) -> Option<Vec<u8>> {
     Repository::open(dir).ok()?.objects().read(hash).ok()
 }
 
-/// Most object ids one `getpack` request may ask for — a DoS bound on how big
-/// a pack the server will assemble (and hold) for one client request. The
-/// client batches its leaf requests well below this.
+/// Most object ids one `getpack` request may ask for — a first DoS bound on a
+/// request. The real guard is the byte cap below; the client batches its leaf
+/// requests well under both.
 const MAX_GETPACK_IDS: usize = 100_000;
 
 /// `body` is a JSON `[id,…]`; reply with a wire pack of the subset present.
 /// Ids are validated to the object-id shape by the store before any path is
-/// built (a bad id is simply absent from the pack); the request count is
-/// bounded so a client can't make the server assemble an unbounded pack.
+/// built (a bad id is simply absent from the pack); the request count and the
+/// total assembled size are both bounded so a client can't make the server
+/// hold an unbounded pack in memory (symmetric with the streamed ingest cap).
 pub(crate) fn op_get_pack(dir: &Path, body: &[u8]) -> std::result::Result<Vec<u8>, String> {
     let ids: Vec<String> = serde_json::from_slice(body).map_err(|e| e.to_string())?;
     if ids.len() > MAX_GETPACK_IDS {
         return Err("too many ids in one getpack request".into());
     }
     let repo = Repository::open(dir).map_err(|e| e.to_string())?;
+    assemble_pack(&repo, &ids, crate::wirepack::MAX_PACK_TOTAL)
+}
+
+/// Read each present id and pack it, stopping with an error the moment the
+/// running total of decompressed bytes would exceed `max_bytes` — so the server
+/// never accumulates more than one batch's worth (≈ the cap) in RAM, however
+/// many ids a client asks for.
+fn assemble_pack(
+    repo: &Repository,
+    ids: &[String],
+    max_bytes: u64,
+) -> std::result::Result<Vec<u8>, String> {
     let mut objects = Vec::with_capacity(ids.len());
-    for id in &ids {
+    let mut total: u64 = 0;
+    for id in ids {
         if let Ok(content) = repo.objects().read(id) {
+            total = total.saturating_add(content.len() as u64);
+            if total > max_bytes {
+                return Err("getpack response would exceed the size cap".into());
+            }
             objects.push((id.clone(), content));
         }
     }
@@ -463,6 +481,26 @@ mod tests {
 
         // malformed request body errors
         assert!(op_get_pack(dir, b"not json").is_err());
+    }
+
+    #[test]
+    fn assemble_pack_bounds_total_assembled_size() {
+        let d = tempfile::tempdir().unwrap();
+        let dir = d.path();
+        let mut ids = Vec::new();
+        for i in 0..3u8 {
+            let content = vec![i; 100]; // three distinct 100-byte objects
+            let id = blake3::hash(&content).to_hex().to_string();
+            op_put(dir, &id, &content).unwrap();
+            ids.push(id);
+        }
+        let repo = Repository::open(dir).unwrap();
+        // a generous cap packs all three
+        let pack = assemble_pack(&repo, &ids, 10_000).unwrap();
+        assert_eq!(crate::wirepack::parse(&pack).unwrap().len(), 3);
+        // a tight cap stops once the running total exceeds it (after object 2)
+        let err = assemble_pack(&repo, &ids, 150).unwrap_err();
+        assert!(err.contains("size cap"), "got: {err}");
     }
 
     #[test]

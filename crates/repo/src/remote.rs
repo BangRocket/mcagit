@@ -161,10 +161,15 @@ impl Transport for HttpTransport {
             return crate::wirepack::build(&[]);
         }
         let url = format!("{}/getpack", self.base);
+        // A pack response is many objects in one body, well past ureq's 10 MiB
+        // default. Raise the read cap to the wire-pack security bound; the real
+        // decompression-bomb guard is `wirepack::for_each` on ingest.
         self.bearer(ureq::post(&url))
             .send_json(ids)
             .map_err(http_err)?
             .body_mut()
+            .with_config()
+            .limit(crate::wirepack::MAX_PACK_TOTAL)
             .read_to_vec()
             .map_err(http_err)
     }
