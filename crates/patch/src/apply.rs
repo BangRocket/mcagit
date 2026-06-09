@@ -231,6 +231,10 @@ fn copy_world(src: &Path, dst: &Path) -> Result<()> {
                     // bulk of a world; patched files are rewritten wholesale,
                     // which breaks the share only for them. Falls back to a
                     // byte copy on filesystems/targets without reflink.
+                    // reflink_or_copy uses create-new semantics, so clear any
+                    // existing target first to preserve fs::copy's overwrite
+                    // (apply into a pre-existing output dir must keep working).
+                    let _ = std::fs::remove_file(&to);
                     reflink_copy::reflink_or_copy(&p, &to)?;
                 }
             }
@@ -323,6 +327,24 @@ mod tests {
                 "{rel} must copy identically"
             );
         }
+    }
+
+    #[test]
+    fn copy_world_overwrites_existing_target() {
+        // reflink_or_copy refuses to clobber an existing file; copy_world must
+        // still overwrite (the old fs::copy did), so apply into a pre-existing
+        // output dir keeps working.
+        let d = tempfile::tempdir().unwrap();
+        let src = d.path().join("src");
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("level.dat"), b"NEW").unwrap();
+
+        let dst = d.path().join("dst");
+        std::fs::create_dir_all(&dst).unwrap();
+        std::fs::write(dst.join("level.dat"), b"STALE-AND-LONGER").unwrap();
+
+        copy_world(&src, &dst).unwrap();
+        assert_eq!(std::fs::read(dst.join("level.dat")).unwrap(), b"NEW");
     }
 
     #[test]
