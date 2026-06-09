@@ -28,6 +28,35 @@ impl Manifest {
     pub fn from_json(s: &str) -> Result<Self> {
         Ok(serde_json::from_str(s)?)
     }
+
+    /// A sparse view keeping only region files for the selected `(x, z)` region
+    /// coordinates (matched on the `r.X.Z.mca` filename, across `region/`,
+    /// `entities/`, `poi/`), plus all loose NBT, blobs, and empty dirs — those
+    /// are small and a world needs `level.dat` et al. to be usable. Used by a
+    /// sparse checkout to materialize only part of a huge world.
+    pub fn select_regions(&self, want: &std::collections::HashSet<(i32, i32)>) -> Manifest {
+        let regions = self
+            .regions
+            .iter()
+            .filter(|(rel, _)| region_coord(rel).is_some_and(|c| want.contains(&c)))
+            .map(|(rel, chunks)| (rel.clone(), chunks.clone()))
+            .collect();
+        Manifest {
+            regions,
+            nbt: self.nbt.clone(),
+            blobs: self.blobs.clone(),
+            empty_dirs: self.empty_dirs.clone(),
+        }
+    }
+}
+
+/// Parse the `(x, z)` region coordinate from a region rel path whose filename is
+/// `r.X.Z.mca` (e.g. `region/r.-1.0.mca` → `(-1, 0)`).
+pub fn region_coord(rel: &str) -> Option<(i32, i32)> {
+    let name = rel.rsplit('/').next().unwrap_or(rel);
+    let stem = name.strip_prefix("r.")?.strip_suffix(".mca")?;
+    let (x, z) = stem.split_once('.')?;
+    Some((x.parse().ok()?, z.parse().ok()?))
 }
 
 /// A commit: a snapshot (`tree`) plus history and metadata.
@@ -146,6 +175,35 @@ mod tests {
         let json = m.to_json().unwrap();
         assert!(json.contains("emptyDirs"));
         assert_eq!(Manifest::from_json(&json).unwrap(), m);
+    }
+
+    #[test]
+    fn region_coord_parses_and_select_filters() {
+        assert_eq!(region_coord("region/r.0.0.mca"), Some((0, 0)));
+        assert_eq!(region_coord("entities/r.-1.2.mca"), Some((-1, 2)));
+        assert_eq!(region_coord("region/r.3.-4.mca"), Some((3, -4)));
+        assert_eq!(region_coord("level.dat"), None);
+        assert_eq!(region_coord("region/notaregion.mca"), None);
+
+        let mut m = Manifest::default();
+        for rel in ["region/r.0.0.mca", "region/r.1.0.mca", "entities/r.0.0.mca"] {
+            let mut c = BTreeMap::new();
+            c.insert("0,0".into(), "aa".into());
+            m.regions.insert(rel.into(), c);
+        }
+        m.nbt.insert("level.dat".into(), "bb".into());
+        m.empty_dirs.push("playerdata".into());
+
+        let want: std::collections::HashSet<(i32, i32)> = [(0, 0)].into_iter().collect();
+        let sparse = m.select_regions(&want);
+        // both r.0.0.mca (region + entities) kept, r.1.0.mca dropped
+        assert_eq!(sparse.regions.len(), 2);
+        assert!(sparse.regions.contains_key("region/r.0.0.mca"));
+        assert!(sparse.regions.contains_key("entities/r.0.0.mca"));
+        assert!(!sparse.regions.contains_key("region/r.1.0.mca"));
+        // loose nbt + empty dirs are always kept (a world needs level.dat)
+        assert!(sparse.nbt.contains_key("level.dat"));
+        assert_eq!(sparse.empty_dirs, vec!["playerdata".to_string()]);
     }
 
     #[test]

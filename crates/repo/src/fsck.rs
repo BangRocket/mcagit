@@ -12,6 +12,9 @@ pub struct FsckReport {
     pub corrupt: Vec<String>,
     pub missing: Vec<String>,
     pub unreachable: usize,
+    /// Leaf objects absent because this is a partial clone — backfilled on
+    /// demand, so not counted as missing.
+    pub promised: usize,
 }
 
 impl FsckReport {
@@ -38,6 +41,9 @@ pub fn fsck(repo: &Repository) -> Result<FsckReport> {
         }
     }
 
+    // In a partial clone, leaf objects are intentionally absent (backfilled on
+    // demand), so their absence is "promised", not "missing".
+    let partial = repo.is_partial();
     let mut reachable: HashSet<String> = HashSet::new();
     let mut stack = tips(repo);
     while let Some(c) = stack.pop() {
@@ -61,7 +67,11 @@ pub fn fsck(repo: &Repository) -> Result<FsckReport> {
             Ok(m) => {
                 for id in manifest_ids(&m) {
                     if !store.exists(&id) {
-                        report.missing.push(id.clone());
+                        if partial {
+                            report.promised += 1;
+                        } else {
+                            report.missing.push(id.clone());
+                        }
                     }
                     reachable.insert(id);
                 }
@@ -97,7 +107,10 @@ pub(crate) fn tips(repo: &Repository) -> Vec<String> {
     tips
 }
 
-pub(crate) fn manifest_ids(m: &Manifest) -> Vec<String> {
+/// Every leaf object id a manifest references (chunk objects, loose NBT, blobs)
+/// — i.e. all the content a partial clone backfills, distinct from the
+/// commit/tree skeleton.
+pub fn manifest_ids(m: &Manifest) -> Vec<String> {
     let mut ids = Vec::new();
     for chunks in m.regions.values() {
         for id in chunks.values() {
@@ -118,6 +131,34 @@ mod tests {
     fn tiny_world(world: &Path) {
         std::fs::create_dir_all(world).unwrap();
         std::fs::write(world.join("icon.png"), b"PNGDATA").unwrap();
+    }
+
+    #[test]
+    fn partial_repo_tolerates_absent_leaves() {
+        let d = tempfile::tempdir().unwrap();
+        let repo = Repository::init(&d.path().join("repo")).unwrap();
+        let world = d.path().join("world");
+        std::fs::create_dir_all(&world).unwrap();
+        std::fs::write(world.join("a.bin"), b"alpha").unwrap();
+        std::fs::write(world.join("b.bin"), b"beta").unwrap();
+        // hash_only computes the manifest WITHOUT storing leaf objects — exactly
+        // a partial clone's skeleton: tree + commit present, leaves absent.
+        let m: Manifest = snapshot::hash_only(&repo, &world).unwrap();
+        assert_eq!(manifest_ids(&m).len(), 2);
+        let tree = repo.write_manifest(&m).unwrap();
+        let c = repo.create_commit(&tree, vec![], "x", "me", "t").unwrap();
+        repo.write_branch("main", &c).unwrap();
+
+        // without the promisor marker, the absent leaves are reported missing
+        let r = fsck(&repo).unwrap();
+        assert!(!r.is_clean(), "absent leaves are corruption in a full repo");
+
+        // with the marker, they're expected: clean, counted as promised
+        repo.write_promisor("path:///origin").unwrap();
+        let r = fsck(&repo).unwrap();
+        assert!(r.is_clean(), "missing={:?}", r.missing);
+        assert_eq!(r.promised, 2);
+        assert!(r.missing.is_empty());
     }
 
     #[test]

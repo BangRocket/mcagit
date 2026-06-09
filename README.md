@@ -46,7 +46,7 @@ crates/
 
 ## Commands
 
-**Version control** — `init · commit [-S] · checkout · status · log [--author/--grep/--since] ·
+**Version control** — `init · commit [-S] · checkout [--region X,Z] · status · log [--author/--grep/--since] ·
 show · diff [--json] · extract · apply [--reverse] · verify · branch · merge · revert ·
 cherry-pick · rebase · stash [push|pop|list|drop] · reset [--soft/--mixed/--hard] · restore ·
 clean · tag [-a/-s/-m/-v/-f/-n] · verify-commit · reflog [branch] · bisect (start|bad|good|skip|reset|log) ·
@@ -62,7 +62,7 @@ history for the first bad commit, checking each suspect out into the worktree.
 using `user.signingkey`; `verify-commit` / `tag -v` exit 0 only when the signer matches
 `gpg.ssh.allowedSignersFile`.
 
-**Remotes** — `clone [--depth N] · push · pull · fetch · ls-remote · remote ·
+**Remotes** — `clone [--depth N] [--filter blob:none] · push · pull · fetch · ls-remote · remote ·
 verify-remote [--deep]` over a **local path**, **`http(s)://`** (served by
 `mcagit serve <dir>`), **`ssh://`** (served by `mcagit serve-stdio <dir>`, spawned over
 `ssh`), or a serverless cloud object store — **`s3://bucket/prefix`** (any S3-compatible
@@ -75,8 +75,14 @@ leaf chunk is pulled in batched packs (one request per ~1000 objects) over the s
 hash-verified, size-bounded ingest — so cloning an active world is a handful of requests,
 not one per chunk. `clone --depth N`
 makes a shallow clone (history grafted at a recorded boundary; tags skipped).
-`verify-remote` walks the remote's history confirming every commit/tree hashes correctly
-and every leaf is present (`--deep` re-downloads and hash-checks the leaves too).
+**`clone --filter blob:none`** makes a *partial* clone — it fetches only the commit/tree
+skeleton (tiny next to the chunk data) and records the origin as a promisor; leaf chunks are
+backfilled on demand. **`checkout --region X,Z`** (repeatable) then materializes only the
+named regions, fetching just those chunks — so you can pull one corner of a multi-GB world
+for DR or inspection. A full `checkout` of a partial clone backfills everything and
+reproduces the world byte-for-byte; `fsck` treats not-yet-fetched leaves as *promised*, not
+missing. `verify-remote` walks the remote's history confirming every commit/tree hashes
+correctly and every leaf is present (`--deep` re-downloads and hash-checks the leaves too).
 
 Cloud buckets need no daemon: the whole repo protocol runs client-side, so a push is a
 handful of bucket writes (a content-addressed pack blob, a CAS-guarded `packs/manifest`,

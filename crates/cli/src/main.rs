@@ -45,6 +45,11 @@ enum Cmd {
         out: Option<PathBuf>,
         #[arg(long)]
         force: bool,
+        /// Sparse checkout: materialize only these region coordinates (repeatable),
+        /// e.g. `--region 0,0 --region -1,2`. Loose files (level.dat etc.) are
+        /// always written. On a partial clone, only the needed chunks are fetched.
+        #[arg(long = "region", value_name = "X,Z")]
+        regions: Vec<String>,
     },
     /// Show changes in the worktree vs HEAD.
     Status,
@@ -198,6 +203,10 @@ enum Cmd {
         /// (records a shallow boundary; tags are skipped).
         #[arg(long)]
         depth: Option<usize>,
+        /// Partial clone: `--filter blob:none` fetches the commit/tree skeleton
+        /// only; leaf chunks are backfilled on demand (e.g. at checkout).
+        #[arg(long)]
+        filter: Option<String>,
     },
     /// Push a branch to a remote (a configured remote name or a URL/path).
     Push {
@@ -427,7 +436,12 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             Ok(ExitCode::SUCCESS)
         }
 
-        Cmd::Checkout { reff, out, force } => {
+        Cmd::Checkout {
+            reff,
+            out,
+            force,
+            regions,
+        } => {
             let repo = open_repo(&cli)?;
             let commit = repo.resolve_ref(reff)?;
             let out = out
@@ -445,8 +459,24 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                     out.display()
                 );
             }
-            let manifest = repo.read_manifest(&repo.read_commit(&commit)?.tree)?;
-            mca_repo::checkout(&repo, &manifest, &out, true)?;
+            let mut manifest = repo.read_manifest(&repo.read_commit(&commit)?.tree)?;
+            // Sparse checkout: keep only the requested region coordinates.
+            if !regions.is_empty() {
+                let want = parse_region_coords(regions)?;
+                manifest = manifest.select_regions(&want);
+            }
+            // Partial clone: backfill the leaf objects this checkout needs.
+            if repo.is_partial() {
+                let need = mca_repo::fsck::manifest_ids(&manifest);
+                let n = mca_repo::remote::backfill(&repo, &need)?;
+                if n > 0 {
+                    eprintln!("backfilled {n} objects from the promisor remote");
+                }
+            }
+            // A sparse checkout would prune the regions it omits; only prune on a
+            // full checkout so `--region` doesn't delete the rest of a worktree.
+            let prune = regions.is_empty();
+            mca_repo::checkout(&repo, &manifest, &out, prune)?;
             let old_head = repo.head_commit();
             if repo.read_branch(reff).is_some() {
                 repo.set_head_to_branch(reff)?;
@@ -701,6 +731,9 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                 r.missing.len(),
                 r.unreachable
             );
+            if r.promised > 0 {
+                eprintln!("  {} leaf objects promised (partial clone)", r.promised);
+            }
             Ok(if r.is_clean() {
                 ExitCode::SUCCESS
             } else {
@@ -1070,13 +1103,27 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             Ok(ExitCode::SUCCESS)
         }
 
-        Cmd::Clone { src, dst, depth } => {
-            mca_repo::remote::clone_depth(src, dst, depth.unwrap_or(0))?;
-            eprintln!(
-                "Cloned {src} -> {}{}",
-                dst.display(),
-                depth.map(|d| format!(" (depth {d})")).unwrap_or_default()
-            );
+        Cmd::Clone {
+            src,
+            dst,
+            depth,
+            filter,
+        } => {
+            let suffix = match filter.as_deref() {
+                Some("blob:none") => {
+                    if depth.is_some() {
+                        bail!("--filter and --depth cannot be combined");
+                    }
+                    mca_repo::remote::clone_partial(src, dst)?;
+                    " (partial: blob:none)".to_string()
+                }
+                Some(other) => bail!("unsupported filter: {other} (only blob:none)"),
+                None => {
+                    mca_repo::remote::clone_depth(src, dst, depth.unwrap_or(0))?;
+                    depth.map(|d| format!(" (depth {d})")).unwrap_or_default()
+                }
+            };
+            eprintln!("Cloned {src} -> {}{suffix}", dst.display());
             Ok(ExitCode::SUCCESS)
         }
 
@@ -1433,6 +1480,18 @@ fn resolve_world(cli: &Cli, world: &Option<PathBuf>) -> anyhow::Result<PathBuf> 
     repo.worktree()
         .map(PathBuf::from)
         .ok_or_else(|| anyhow!("no world given and no worktree bound; pass --world <path>"))
+}
+
+/// Parse `--region X,Z` values into a coordinate set for a sparse checkout.
+fn parse_region_coords(specs: &[String]) -> anyhow::Result<std::collections::HashSet<(i32, i32)>> {
+    specs
+        .iter()
+        .map(|s| {
+            s.split_once(',')
+                .and_then(|(x, z)| Some((x.trim().parse().ok()?, z.trim().parse().ok()?)))
+                .ok_or_else(|| anyhow!("bad --region {s:?}: expected X,Z (e.g. 0,0 or -1,2)"))
+        })
+        .collect()
 }
 
 fn print_block_entities(hits: Vec<mca_query::BlockEntityHit>, json: bool) -> anyhow::Result<()> {

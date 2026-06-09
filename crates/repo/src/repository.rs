@@ -641,6 +641,35 @@ impl Repository {
         Ok(self.read_commit(commit)?.parents)
     }
 
+    // ---- promisor (partial clone) ----
+    // A `--filter=blob:none` clone fetches the commit/tree skeleton but not the
+    // leaf chunk/nbt/blob objects; `<repo>/promisor` records the remote URL that
+    // backfills them lazily. With the marker present, intentionally-absent leaf
+    // objects are expected, not corruption.
+
+    fn promisor_path(&self) -> PathBuf {
+        self.dir.join("promisor")
+    }
+
+    /// True if this is a partial clone (leaf objects fetched on demand).
+    pub fn is_partial(&self) -> bool {
+        self.promisor_path().is_file()
+    }
+
+    /// The remote URL that backfills missing leaf objects, if partial.
+    pub fn promisor_remote(&self) -> Option<String> {
+        std::fs::read_to_string(self.promisor_path())
+            .ok()
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+    }
+
+    /// Mark this repo partial, backfilled from `remote_url`.
+    pub fn write_promisor(&self, remote_url: &str) -> Result<()> {
+        std::fs::write(self.promisor_path(), format!("{remote_url}\n"))?;
+        Ok(())
+    }
+
     fn first_parent(&self, h: &str) -> Result<String> {
         self.read_commit(h)?
             .parents

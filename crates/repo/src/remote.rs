@@ -568,6 +568,67 @@ fn fetch_reachable(local: &Repository, t: &dyn Transport, tip: &str) -> Result<u
     Ok(copied)
 }
 
+/// Fetch only the commit/tree skeleton reachable from `tip` — every commit and
+/// its tree (manifest) object, but **no** leaf chunk/nbt/blob objects. The basis
+/// of a partial (`--filter=blob:none`) clone; leaves are backfilled on demand.
+fn fetch_skeleton(local: &Repository, t: &dyn Transport, tip: &str) -> Result<usize> {
+    use std::collections::HashSet;
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut stack = vec![tip.to_string()];
+    let mut copied = 0usize;
+    while let Some(c) = stack.pop() {
+        if !seen.insert(c.clone()) {
+            continue;
+        }
+        if !local.objects().exists(&c) {
+            local.objects().write(&t.get_object(&c)?)?;
+            copied += 1;
+        }
+        if let Some(tag) = local.read_tag_object(&c) {
+            stack.push(tag.object);
+            continue;
+        }
+        if let Ok(commit) = local.read_commit(&c) {
+            if !local.objects().exists(&commit.tree) {
+                local.objects().write(&t.get_object(&commit.tree)?)?;
+                copied += 1;
+            }
+            // deliberately do NOT fetch manifest leaves — that's the whole point
+            for p in local.parents_of(&c)? {
+                stack.push(p);
+            }
+        }
+    }
+    if copied > 0 {
+        local.objects().reload_packs();
+    }
+    Ok(copied)
+}
+
+/// Fetch any of `ids` the partial clone is missing from its promisor remote, in
+/// batched packs (the same hash-verified, size-bounded ingest as fetch). Call
+/// before materializing a partial clone (checkout/diff/verify). Returns the
+/// number of objects backfilled; a no-op (and no network) if nothing's missing.
+pub fn backfill(local: &Repository, ids: &[String]) -> Result<usize> {
+    let missing: Vec<String> = ids
+        .iter()
+        .filter(|id| !local.objects().exists(id))
+        .cloned()
+        .collect();
+    if missing.is_empty() {
+        return Ok(0);
+    }
+    let url = local.promisor_remote().ok_or_else(|| {
+        RepoError::Other("missing objects but this is not a partial clone".into())
+    })?;
+    let t = connect(&url)?;
+    let copied = fetch_leaves(local, t.as_ref(), &missing)?;
+    if copied > 0 {
+        local.objects().reload_packs();
+    }
+    Ok(copied)
+}
+
 /// Fetch `ids` (objects `local` is known to lack) in batched packs, ingesting
 /// each pack streamed and hash-verified. Errors loudly if the remote omits a
 /// requested object — a broken remote must not yield a silently-incomplete tree.
@@ -704,6 +765,42 @@ fn fetch_checked(t: &dyn Transport, id: &str) -> Option<Option<Vec<u8>>> {
 /// and tag, set an `origin` remote, and check out the default branch.
 pub fn clone(url_or_path: &str, dst: &Path) -> Result<Repository> {
     clone_depth(url_or_path, dst, 0)
+}
+
+/// Partial clone (`--filter=blob:none`): fetch every branch/tag's commit+tree
+/// skeleton but no leaf objects, mark the repo partial (recording the origin as
+/// its promisor), and check out nothing. Leaf objects are backfilled on demand
+/// (e.g. by `checkout`, which calls [`backfill`]). High value for huge worlds:
+/// the metadata graph is tiny next to the chunk data.
+pub fn clone_partial(url_or_path: &str, dst: &Path) -> Result<Repository> {
+    let t = connect(url_or_path)?;
+    let dest = Repository::init(dst)?;
+    let refs = t.list_refs()?;
+    let mut branches: Vec<(String, String)> = Vec::new();
+    for (refname, hash) in &refs {
+        if let Some(b) = refname.strip_prefix("refs/heads/") {
+            fetch_skeleton(&dest, t.as_ref(), hash)?;
+            dest.write_branch(b, hash)?;
+            branches.push((b.to_string(), hash.clone()));
+        }
+    }
+    for (refname, hash) in &refs {
+        if let Some(tag) = refname.strip_prefix("refs/tags/") {
+            fetch_skeleton(&dest, t.as_ref(), hash)?;
+            dest.write_tag(tag, hash)?;
+        }
+    }
+    dest.set_remote_url("origin", url_or_path)?;
+    dest.write_promisor(url_or_path)?;
+    let default = branches
+        .iter()
+        .find(|(b, _)| b == "main" || b == "master")
+        .or_else(|| branches.first())
+        .map(|(b, _)| b.clone());
+    if let Some(b) = default {
+        dest.set_head_to_branch(&b)?;
+    }
+    Ok(dest)
 }
 
 /// [`clone`] with an optional history depth. `depth > 0` fetches at most that
@@ -1072,6 +1169,47 @@ mod tests {
             assert!(local.objects().exists(&id), "leaf {id} fetched");
         }
         assert!(local.objects().exists(&c) && local.objects().exists(&tree));
+    }
+
+    #[test]
+    fn partial_clone_fetches_skeleton_then_backfills_on_demand() {
+        let tmp = tempfile::tempdir().unwrap();
+        let origin = Repository::init(&tmp.path().join("origin")).unwrap();
+        origin.set_head_to_branch("main").unwrap();
+
+        let w = tmp.path().join("world");
+        std::fs::create_dir_all(&w).unwrap();
+        for i in 0..6 {
+            std::fs::write(w.join(format!("f{i}.bin")), format!("leaf-{i}")).unwrap();
+        }
+        let m = snapshot::snapshot(&origin, &w).unwrap();
+        let leaves = crate::fsck::manifest_ids(&m);
+        let tree = origin.write_manifest(&m).unwrap();
+        let c = origin.create_commit(&tree, vec![], "w", "me", "0").unwrap();
+        origin.write_branch("main", &c).unwrap();
+
+        // partial clone: skeleton present, leaves absent, marked partial
+        let dst = tmp.path().join("clone");
+        let local = clone_partial(origin.dir().to_str().unwrap(), &dst).unwrap();
+        assert!(local.is_partial());
+        assert!(local.objects().exists(&c) && local.objects().exists(&tree));
+        for id in &leaves {
+            assert!(!local.objects().exists(id), "leaf {id} not fetched yet");
+        }
+        // fsck is clean despite the absent leaves
+        let r = crate::fsck::fsck(&local).unwrap();
+        assert!(r.is_clean() && r.promised == leaves.len());
+
+        // backfill brings the leaves in (batched via get_pack)
+        let copied = backfill(&local, &leaves).unwrap();
+        assert_eq!(copied, leaves.len());
+        for id in &leaves {
+            assert!(local.objects().exists(id), "leaf {id} backfilled");
+        }
+        // checkout now reproduces the world
+        let out = tmp.path().join("out");
+        checkout(&local, &m, &out, false).unwrap();
+        assert_eq!(std::fs::read(out.join("f3.bin")).unwrap(), b"leaf-3");
     }
 
     #[test]
