@@ -410,6 +410,11 @@ fn fetch_reachable(local: &Repository, t: &dyn Transport, tip: &str) -> Result<u
             local.objects().write(&t.get_object(&c)?)?;
             copied += 1;
         }
+        // An annotated tag object: fetch through it to its target commit.
+        if let Some(tag) = local.read_tag_object(&c) {
+            stack.push(tag.object);
+            continue;
+        }
         if let Ok(commit) = local.read_commit(&c) {
             if !local.objects().exists(&commit.tree) {
                 local.objects().write(&t.get_object(&commit.tree)?)?;
@@ -526,6 +531,32 @@ mod tests {
         let n = push(&local, t.as_ref(), "main").unwrap();
         assert!(n > 0);
         assert_eq!(origin.read_branch("main").as_deref(), Some(c3.as_str()));
+    }
+
+    #[test]
+    fn clone_carries_annotated_tags() {
+        let tmp = tempfile::tempdir().unwrap();
+        let origin = Repository::init(&tmp.path().join("origin")).unwrap();
+        origin.set_head_to_branch("main").unwrap();
+        let c1 = commit_world(&origin, b"v1", "one");
+        origin
+            .write_annotated_tag(&crate::TagObject {
+                object: c1.clone(),
+                kind: "commit".into(),
+                tag: "v1".into(),
+                tagger: "me".into(),
+                time: "t".into(),
+                message: "release".into(),
+                signature: None,
+            })
+            .unwrap();
+
+        let local = clone(origin.dir().to_str().unwrap(), &tmp.path().join("clone")).unwrap();
+        // the tag ref, the tag object, and the commit behind it all arrived
+        let tag = local.read_annotated_tag("v1").expect("annotated tag");
+        assert_eq!(tag.object, c1);
+        assert_eq!(local.resolve_ref("v1").unwrap(), c1);
+        assert!(local.objects().exists(&c1));
     }
 
     #[test]

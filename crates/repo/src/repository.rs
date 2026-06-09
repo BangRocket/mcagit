@@ -1,7 +1,7 @@
 //! The bare, external repository: object store + refs/HEAD + config, plus
 //! commit/manifest storage and revision resolution.
 
-use crate::manifest::{CommitObject, Manifest};
+use crate::manifest::{CommitObject, Manifest, TagObject};
 use crate::object_store::ObjectStore;
 use crate::{RepoError, Result};
 use std::path::{Path, PathBuf};
@@ -10,6 +10,9 @@ pub struct Repository {
     dir: PathBuf,
     objects: ObjectStore,
 }
+
+/// A signing callback: signable payload → armored signature.
+pub type SignFn = dyn Fn(&str) -> Result<String>;
 
 /// A ref name safe to use as a path component under `refs/`: rejects traversal
 /// (`..`, a leading `/` or `.`, a trailing `/`, backslashes, NUL) while allowing
@@ -293,6 +296,44 @@ impl Repository {
         Ok(())
     }
 
+    /// Stores an annotated tag object and points `refs/tags/<name>` at it.
+    /// Returns the tag object's hash.
+    pub fn write_annotated_tag(&self, tag: &TagObject) -> Result<String> {
+        let hash = self.objects.write(tag.to_json()?.as_bytes())?;
+        self.write_tag(&tag.tag, &hash)?;
+        Ok(hash)
+    }
+
+    /// The tag object a tag ref points at, or `None` for a lightweight tag (or
+    /// an absent one).
+    pub fn read_annotated_tag(&self, name: &str) -> Option<TagObject> {
+        let target = self.read_tag(name)?;
+        let bytes = self.objects.read(&target).ok()?;
+        TagObject::try_from_json(&String::from_utf8_lossy(&bytes))
+    }
+
+    /// The stored object at `hash` parsed as a tag object, if it is one.
+    pub fn read_tag_object(&self, hash: &str) -> Option<TagObject> {
+        let bytes = self.objects.read(hash).ok()?;
+        TagObject::try_from_json(&String::from_utf8_lossy(&bytes))
+    }
+
+    /// Follows a chain of annotated tag objects down to the commit it names.
+    /// A hash that isn't stored (or isn't a tag) is returned as-is.
+    pub fn peel_to_commit(&self, hash: &str) -> Result<String> {
+        let mut h = hash.to_string();
+        for _ in 0..100 {
+            let Ok(bytes) = self.objects.read(&h) else {
+                return Ok(h); // not present — let the caller surface the error
+            };
+            match TagObject::try_from_json(&String::from_utf8_lossy(&bytes)) {
+                Some(tag) => h = tag.object,
+                None => return Ok(h),
+            }
+        }
+        Err(RepoError::Other("tag chain too deep (cycle?)".into()))
+    }
+
     pub fn tags(&self) -> Vec<String> {
         let mut out = Vec::new();
         if let Ok(entries) = std::fs::read_dir(self.dir.join("refs").join("tags")) {
@@ -358,7 +399,23 @@ impl Repository {
         author: &str,
         time: &str,
     ) -> Result<String> {
-        self.write_commit(&CommitObject {
+        self.create_commit_signed(tree, parents, message, author, time, None)
+    }
+
+    /// Like [`Repository::create_commit`], optionally signing the commit. The
+    /// signature is computed over the payload with the signature field cleared,
+    /// then stored in the object — so the object hash covers the signature
+    /// (git's model: a signed commit is its own object).
+    pub fn create_commit_signed(
+        &self,
+        tree: &str,
+        parents: Vec<String>,
+        message: &str,
+        author: &str,
+        time: &str,
+        sign: Option<&SignFn>,
+    ) -> Result<String> {
+        let mut commit = CommitObject {
             tree: tree.to_string(),
             parents,
             message: message.to_string(),
@@ -366,7 +423,12 @@ impl Repository {
             time: time.to_string(),
             committer: None,
             commit_time: None,
-        })
+            signature: None,
+        };
+        if let Some(signer) = sign {
+            commit.signature = Some(signer(&commit.signable_payload()?)?);
+        }
+        self.write_commit(&commit)
     }
 
     // ---- revision resolution ----
@@ -413,7 +475,8 @@ impl Repository {
             return Ok(h);
         }
         if let Some(h) = self.read_tag(base) {
-            return Ok(h);
+            // An annotated tag ref points at a tag object — peel to its commit.
+            return self.peel_to_commit(&h);
         }
         if base.len() >= 4 && base.chars().all(|c| c.is_ascii_hexdigit()) {
             if self.objects.exists(base) {
@@ -505,6 +568,60 @@ mod tests {
         let commit = repo.read_commit(&c2).unwrap();
         assert_eq!(commit.message, "second");
         assert_eq!(commit.parents, vec![c1]);
+    }
+
+    #[test]
+    fn annotated_tags_store_peel_and_resolve() {
+        let d = tempfile::tempdir().unwrap();
+        let repo = Repository::init(d.path()).unwrap();
+        let tree = repo.write_manifest(&Manifest::default()).unwrap();
+        let c = repo.create_commit(&tree, vec![], "rel", "me", "t").unwrap();
+        repo.write_branch("main", &c).unwrap();
+
+        let tag = TagObject {
+            object: c.clone(),
+            kind: "commit".into(),
+            tag: "v1".into(),
+            tagger: "me".into(),
+            time: "t".into(),
+            message: "first release".into(),
+            signature: None,
+        };
+        let th = repo.write_annotated_tag(&tag).unwrap();
+        assert_ne!(th, c); // the ref holds the tag object, not the commit
+        assert_eq!(repo.read_tag("v1").as_deref(), Some(th.as_str()));
+        assert_eq!(
+            repo.read_annotated_tag("v1").unwrap().message,
+            "first release"
+        );
+
+        // resolution peels to the commit (so checkout/log/`v1~0` work)
+        assert_eq!(repo.resolve_ref("v1").unwrap(), c);
+        assert_eq!(repo.peel_to_commit(&th).unwrap(), c);
+
+        // a lightweight tag is not an annotated tag
+        repo.write_tag("lw", &c).unwrap();
+        assert!(repo.read_annotated_tag("lw").is_none());
+        assert_eq!(repo.resolve_ref("lw").unwrap(), c);
+    }
+
+    #[test]
+    fn signed_commit_payload_roundtrip() {
+        let d = tempfile::tempdir().unwrap();
+        let repo = Repository::init(d.path()).unwrap();
+        let tree = repo.write_manifest(&Manifest::default()).unwrap();
+        let sign = |payload: &str| Ok(format!("SIG({})", payload.len()));
+        let c = repo
+            .create_commit_signed(&tree, vec![], "m", "me", "t", Some(&sign))
+            .unwrap();
+        let commit = repo.read_commit(&c).unwrap();
+        let sig = commit.signature.clone().unwrap();
+        assert!(sig.starts_with("SIG("));
+        // the signature covers the payload-without-signature
+        assert_eq!(
+            sig,
+            format!("SIG({})", commit.signable_payload().unwrap().len())
+        );
     }
 
     #[test]

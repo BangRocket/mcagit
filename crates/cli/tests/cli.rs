@@ -188,3 +188,135 @@ fn plumbing_tag_revparse_lstree() {
         .unwrap();
     assert!(String::from_utf8(lt.stdout).unwrap().contains("r.0.0.mca"));
 }
+
+#[cfg(unix)]
+#[test]
+fn hooks_gate_commit() {
+    use std::os::unix::fs::PermissionsExt;
+    let d = tempfile::tempdir().unwrap();
+    let repo = d.path().join("repo");
+    let world = d.path().join("world");
+    region_world(&world, 1);
+    assert!(mcagit()
+        .args([
+            "init",
+            repo.to_str().unwrap(),
+            "--worktree",
+            world.to_str().unwrap()
+        ])
+        .status()
+        .unwrap()
+        .success());
+
+    // a failing pre-commit hook aborts the commit
+    let hooks = repo.join("hooks");
+    std::fs::create_dir_all(&hooks).unwrap();
+    std::fs::write(hooks.join("pre-commit"), "#!/bin/sh\nexit 1\n").unwrap();
+    std::fs::set_permissions(
+        hooks.join("pre-commit"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    let st = mcagit()
+        .args(["-C", repo.to_str().unwrap(), "commit", "-m", "blocked"])
+        .status()
+        .unwrap();
+    assert!(!st.success(), "pre-commit failure must abort the commit");
+
+    // with a passing pre-commit, post-commit observes the new commit
+    std::fs::write(hooks.join("pre-commit"), "#!/bin/sh\nexit 0\n").unwrap();
+    let marker = d.path().join("post-ran");
+    std::fs::write(
+        hooks.join("post-commit"),
+        format!("#!/bin/sh\necho ran > {}\n", marker.display()),
+    )
+    .unwrap();
+    std::fs::set_permissions(
+        hooks.join("post-commit"),
+        std::fs::Permissions::from_mode(0o755),
+    )
+    .unwrap();
+    assert!(mcagit()
+        .args(["-C", repo.to_str().unwrap(), "commit", "-m", "ok"])
+        .status()
+        .unwrap()
+        .success());
+    assert!(marker.exists(), "post-commit hook should have run");
+}
+
+#[test]
+fn annotated_tag_create_list_peel() {
+    let d = tempfile::tempdir().unwrap();
+    let repo = d.path().join("repo");
+    let world = d.path().join("world");
+    region_world(&world, 7);
+    assert!(mcagit()
+        .args([
+            "init",
+            repo.to_str().unwrap(),
+            "--worktree",
+            world.to_str().unwrap()
+        ])
+        .status()
+        .unwrap()
+        .success());
+    let out = mcagit()
+        .args(["-C", repo.to_str().unwrap(), "commit", "-m", "c1"])
+        .output()
+        .unwrap();
+    let commit = String::from_utf8(out.stdout).unwrap().trim().to_string();
+
+    assert!(mcagit()
+        .args([
+            "-C",
+            repo.to_str().unwrap(),
+            "tag",
+            "-a",
+            "-m",
+            "first release",
+            "v1",
+        ])
+        .status()
+        .unwrap()
+        .success());
+
+    // rev-parse peels the annotated tag to its commit
+    let rp = mcagit()
+        .args(["-C", repo.to_str().unwrap(), "rev-parse", "v1"])
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8(rp.stdout).unwrap().trim(), commit);
+
+    // -n lists the message; cat-file shows the tag object itself
+    let ls = mcagit()
+        .args(["-C", repo.to_str().unwrap(), "tag", "-n"])
+        .output()
+        .unwrap();
+    assert!(String::from_utf8(ls.stdout)
+        .unwrap()
+        .contains("first release"));
+    let cf = mcagit()
+        .args(["-C", repo.to_str().unwrap(), "cat-file", "v1"])
+        .output()
+        .unwrap();
+    assert!(String::from_utf8(cf.stdout).unwrap().contains("\"tagger\""));
+
+    // an unsigned tag does not verify
+    let st = mcagit()
+        .args(["-C", repo.to_str().unwrap(), "tag", "-v", "v1"])
+        .status()
+        .unwrap();
+    assert_eq!(st.code(), Some(1));
+
+    // duplicate without -f refuses; with -f succeeds
+    let st = mcagit()
+        .args(["-C", repo.to_str().unwrap(), "tag", "v1", &commit])
+        .status()
+        .unwrap();
+    assert_eq!(st.code(), Some(2));
+    assert!(mcagit()
+        .args(["-C", repo.to_str().unwrap(), "tag", "-f", "v1", &commit])
+        .status()
+        .unwrap()
+        .success());
+}

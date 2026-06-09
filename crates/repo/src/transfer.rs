@@ -21,6 +21,11 @@ pub(crate) fn reachable(repo: &Repository, tip: &str) -> Result<Vec<String>> {
             continue;
         }
         out.push(c.clone());
+        // An annotated tag object: include it and walk its target commit.
+        if let Some(tag) = repo.read_tag_object(&c) {
+            stack.push(tag.object);
+            continue;
+        }
         if let Ok(commit) = repo.read_commit(&c) {
             if seen.insert(commit.tree.clone()) {
                 out.push(commit.tree.clone());

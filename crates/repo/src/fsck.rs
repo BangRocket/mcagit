@@ -44,6 +44,11 @@ pub fn fsck(repo: &Repository) -> Result<FsckReport> {
         if !reachable.insert(c.clone()) {
             continue;
         }
+        // An annotated tag object: keep it and walk its target commit.
+        if let Some(tag) = repo.read_tag_object(&c) {
+            stack.push(tag.object);
+            continue;
+        }
         let commit = match repo.read_commit(&c) {
             Ok(c) => c,
             Err(_) => {
@@ -79,6 +84,13 @@ pub(crate) fn tips(repo: &Repository) -> Vec<String> {
     }
     for b in repo.branches() {
         if let Some(h) = repo.read_branch(&b) {
+            tips.push(h);
+        }
+    }
+    // Tags are roots too: a commit (or annotated tag object) referenced only by
+    // a tag must survive gc and count as reachable.
+    for t in repo.tags() {
+        if let Some(h) = repo.read_tag(&t) {
             tips.push(h);
         }
     }

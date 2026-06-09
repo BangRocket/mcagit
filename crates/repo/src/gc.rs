@@ -30,6 +30,11 @@ pub fn gc(repo: &Repository) -> Result<GcReport> {
             continue;
         }
         keep.push(c.clone());
+        // An annotated tag object: keep it and walk its target commit.
+        if let Some(tag) = repo.read_tag_object(&c) {
+            stack.push(tag.object);
+            continue;
+        }
         if let Ok(commit) = repo.read_commit(&c) {
             if seen.insert(commit.tree.clone()) {
                 keep.push(commit.tree.clone());
@@ -144,5 +149,35 @@ mod tests {
         checkout(&repo, &m, &out, false).unwrap();
         let m2 = snapshot::snapshot(&repo, &out).unwrap();
         assert_eq!(repo.write_manifest(&m2).unwrap(), tree);
+    }
+
+    #[test]
+    fn gc_keeps_objects_reachable_only_through_tags() {
+        let d = tempfile::tempdir().unwrap();
+        let repo = Repository::init(&d.path().join("repo")).unwrap();
+        let world = d.path().join("world");
+        tiny_world(&world);
+
+        // a commit referenced ONLY by an annotated tag (no branch)
+        let m = snapshot::snapshot(&repo, &world).unwrap();
+        let tree = repo.write_manifest(&m).unwrap();
+        let c = repo.create_commit(&tree, vec![], "rel", "me", "t").unwrap();
+        let th = repo
+            .write_annotated_tag(&crate::TagObject {
+                object: c.clone(),
+                kind: "commit".into(),
+                tag: "v1".into(),
+                tagger: "me".into(),
+                time: "t".into(),
+                message: "release".into(),
+                signature: None,
+            })
+            .unwrap();
+
+        gc(&repo).unwrap();
+        assert!(repo.objects().exists(&th), "tag object pruned");
+        assert!(repo.objects().exists(&c), "tagged commit pruned");
+        assert!(repo.objects().exists(&tree), "tagged tree pruned");
+        assert_eq!(repo.resolve_ref("v1").unwrap(), c);
     }
 }

@@ -33,6 +33,9 @@ enum Cmd {
     Commit {
         #[arg(short = 'm', long)]
         message: String,
+        /// Sign the commit with SSH (uses `user.signingkey`).
+        #[arg(short = 'S', long)]
+        sign: bool,
         world: Option<PathBuf>,
     },
     /// Materialize a snapshot into a directory (the worktree, or a given path).
@@ -119,13 +122,35 @@ enum Cmd {
     Show { rev: String },
     /// List the files/regions in a snapshot.
     LsTree { rev: String },
-    /// Create, list, or delete tags.
+    /// Create, list, verify, or delete tags (-a/-s/-m create annotated tags).
     Tag {
         name: Option<String>,
         rev: Option<String>,
         #[arg(short = 'd', long)]
         delete: bool,
+        /// Create an annotated tag object (implied by -m / -s).
+        #[arg(short = 'a', long)]
+        annotate: bool,
+        /// Sign the annotated tag with SSH (uses `user.signingkey`).
+        #[arg(short = 's', long)]
+        sign: bool,
+        /// The annotated tag's message.
+        #[arg(short = 'm', long)]
+        message: Option<String>,
+        /// Verify the named tag's SSH signature (exit 0 only when the signer
+        /// matches `gpg.ssh.allowedSignersFile`).
+        #[arg(short = 'v', long)]
+        verify: bool,
+        /// Replace the tag if it already exists.
+        #[arg(short = 'f', long)]
+        force: bool,
+        /// When listing, show each annotated tag's message.
+        #[arg(short = 'n')]
+        show_message: bool,
     },
+    /// Verify a commit's SSH signature (exit 0 only when the signer matches
+    /// `gpg.ssh.allowedSignersFile`).
+    VerifyCommit { rev: String },
     /// Move the current branch to <rev>. --hard also resets the worktree;
     /// --soft/--mixed move the ref only (mcagit has no staging index).
     Reset {
@@ -298,12 +323,19 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             Ok(ExitCode::SUCCESS)
         }
 
-        Cmd::Commit { message, world } => {
+        Cmd::Commit {
+            message,
+            sign,
+            world,
+        } => {
             let repo = open_repo(&cli)?;
             let world = world
                 .clone()
                 .or_else(|| repo.worktree().map(PathBuf::from))
                 .ok_or_else(|| anyhow!("no world given and no worktree bound"))?;
+            if mca_repo::hooks::run(&repo, "pre-commit") != 0 {
+                bail!("pre-commit hook failed; commit aborted");
+            }
             let manifest = snapshot::snapshot(&repo, &world)?;
             let tree = repo.write_manifest(&manifest)?;
             let head = repo.head_commit();
@@ -314,12 +346,20 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                 }
             }
             let parents: Vec<String> = head.clone().into_iter().collect();
-            let commit =
-                repo.create_commit(&tree, parents, message, &author(&repo), &now_secs())?;
+            let sign_fn = signer(&repo, *sign)?;
+            let commit = repo.create_commit_signed(
+                &tree,
+                parents,
+                message,
+                &author(&repo),
+                &now_secs(),
+                sign_fn.as_deref(),
+            )?;
             match repo.current_branch() {
                 Some(b) => repo.write_branch(&b, &commit)?,
                 None => repo.set_head_detached(&commit)?,
             }
+            mca_repo::hooks::run(&repo, "post-commit");
             let files = manifest.regions.len() + manifest.nbt.len() + manifest.blobs.len();
             let chunks: usize = manifest.regions.values().map(|c| c.len()).sum();
             eprintln!(
@@ -711,7 +751,13 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         Cmd::CatFile { id } => {
             use std::io::Write;
             let repo = open_repo(&cli)?;
-            let resolved = repo.resolve_ref(id).unwrap_or_else(|_| id.clone());
+            // A tag name resolves to the tag ref's own target (the tag object
+            // for an annotated tag) so the object itself can be inspected;
+            // everything else goes through normal (peeling) resolution.
+            let resolved = repo
+                .read_tag(id)
+                .or_else(|| repo.resolve_ref(id).ok())
+                .unwrap_or_else(|| id.clone());
             let bytes = repo.objects().read(&resolved)?;
             std::io::stdout().write_all(&bytes)?;
             Ok(ExitCode::SUCCESS)
@@ -733,30 +779,100 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             Ok(ExitCode::SUCCESS)
         }
 
-        Cmd::Tag { name, rev, delete } => {
+        Cmd::Tag {
+            name,
+            rev,
+            delete,
+            annotate,
+            sign,
+            message,
+            verify,
+            force,
+            show_message,
+        } => {
             let repo = open_repo(&cli)?;
-            match (name, rev, *delete) {
-                (Some(n), _, true) => {
-                    repo.delete_tag(n)?;
-                    eprintln!("Deleted tag {n}.");
-                }
-                (Some(n), Some(r), false) => {
-                    let c = repo.resolve_ref(r)?;
-                    repo.write_tag(n, &c)?;
-                    eprintln!("tag {n} -> {}", &c[..10]);
-                }
-                (Some(n), None, false) => {
-                    let c = repo.head_commit().ok_or_else(|| anyhow!("no HEAD"))?;
-                    repo.write_tag(n, &c)?;
-                    eprintln!("tag {n} -> {}", &c[..10]);
-                }
-                (None, _, _) => {
-                    for t in repo.tags() {
-                        println!("{t}");
+            if *delete {
+                let n = name
+                    .as_ref()
+                    .ok_or_else(|| anyhow!("usage: tag -d <name>"))?;
+                repo.delete_tag(n)?;
+                eprintln!("Deleted tag {n}.");
+                return Ok(ExitCode::SUCCESS);
+            }
+            if *verify {
+                let n = name
+                    .as_ref()
+                    .ok_or_else(|| anyhow!("usage: tag -v <name>"))?;
+                let tag = repo
+                    .read_annotated_tag(n)
+                    .ok_or_else(|| anyhow!("{n} is not an annotated tag"))?;
+                return Ok(report_signature(
+                    &repo,
+                    n,
+                    &tag.signable_payload()?,
+                    tag.signature.as_deref(),
+                ));
+            }
+            let Some(n) = name else {
+                for t in repo.tags() {
+                    match (*show_message, repo.read_annotated_tag(&t)) {
+                        (true, Some(at)) => {
+                            println!("{t:<15} {}", at.message.lines().next().unwrap_or(""))
+                        }
+                        _ => println!("{t}"),
                     }
                 }
+                return Ok(ExitCode::SUCCESS);
+            };
+            let commit = match rev {
+                Some(r) => repo.resolve_ref(r)?,
+                None => repo.head_commit().ok_or_else(|| anyhow!("no HEAD"))?,
+            };
+            if repo.read_tag(n).is_some() && !force {
+                bail!("tag already exists: {n} (use -f to overwrite)");
             }
+            let annotated = *sign || *annotate || message.is_some();
+            if !annotated {
+                repo.write_tag(n, &commit)?;
+                eprintln!("tag {n} -> {}", &commit[..10]);
+                return Ok(ExitCode::SUCCESS);
+            }
+            let msg = message
+                .as_ref()
+                .ok_or_else(|| anyhow!("annotated tag requires -m <message>"))?;
+            let mut tag = mca_repo::TagObject {
+                object: commit.clone(),
+                kind: "commit".into(),
+                tag: n.clone(),
+                tagger: author(&repo),
+                time: now_secs(),
+                message: msg.clone(),
+                signature: None,
+            };
+            if *sign {
+                let sign_fn = signer(&repo, true)?.expect("signer present when sign=true");
+                tag.signature = Some(sign_fn(&tag.signable_payload()?)?);
+            }
+            let h = repo.write_annotated_tag(&tag)?;
+            eprintln!(
+                "Created {}annotated tag {n} at {} (tag {})",
+                if *sign { "signed " } else { "" },
+                &commit[..10],
+                &h[..10]
+            );
             Ok(ExitCode::SUCCESS)
+        }
+
+        Cmd::VerifyCommit { rev } => {
+            let repo = open_repo(&cli)?;
+            let h = repo.resolve_ref(rev)?;
+            let c = repo.read_commit(&h)?;
+            Ok(report_signature(
+                &repo,
+                &h[..10],
+                &c.signable_payload()?,
+                c.signature.as_deref(),
+            ))
         }
 
         Cmd::Reset { rev, hard, .. } => {
@@ -1226,6 +1342,58 @@ fn open_repo(cli: &Cli) -> anyhow::Result<Repository> {
     match &cli.repo {
         Some(d) => Ok(Repository::open(d)?),
         None => Ok(Repository::discover(&std::env::current_dir()?)?),
+    }
+}
+
+/// A signing closure when signing is requested (`-S` or `commit.gpgsign`),
+/// else `None`. Errors if signing is requested without `user.signingkey`.
+#[allow(clippy::type_complexity)]
+fn signer(
+    repo: &Repository,
+    flag: bool,
+) -> anyhow::Result<Option<Box<dyn Fn(&str) -> mca_repo::Result<String>>>> {
+    let want = flag
+        || repo
+            .config_get("commit.gpgsign")
+            .is_some_and(|v| v.eq_ignore_ascii_case("true"));
+    if !want {
+        return Ok(None);
+    }
+    let key = repo
+        .config_get("user.signingkey")
+        .ok_or_else(|| anyhow!("signing requested but user.signingkey is not set"))?;
+    Ok(Some(Box::new(move |payload: &str| {
+        mca_repo::sign::sign(payload, &key)
+    })))
+}
+
+/// Verify an SSH signature with the repo's allowed-signers config and report
+/// like git: exit 0 ONLY when the signer is verified against an
+/// allowed-signers file. A merely well-formed signature (check-novalidate) is
+/// NOT trust — exiting 0 there would fool a `… && deploy` gate into trusting
+/// any throwaway key.
+fn report_signature(
+    repo: &Repository,
+    what: &str,
+    payload: &str,
+    signature: Option<&str>,
+) -> ExitCode {
+    let Some(sig) = signature else {
+        eprintln!("{what}: not signed");
+        return ExitCode::from(1);
+    };
+    let allowed = repo.config_get("gpg.ssh.allowedSignersFile");
+    let r = mca_repo::sign::verify(payload, sig, allowed.as_deref());
+    eprintln!("{what}: {}", r.detail);
+    if r.valid && !r.signer_verified {
+        eprintln!(
+            "{what}: signer NOT verified — set gpg.ssh.allowedSignersFile to establish trust; treating as unverified."
+        );
+    }
+    if r.signer_verified {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(1)
     }
 }
 

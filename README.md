@@ -46,10 +46,16 @@ crates/
 
 ## Commands
 
-**Version control** — `init · commit · checkout · status · log [--author/--grep/--since] ·
+**Version control** — `init · commit [-S] · checkout · status · log [--author/--grep/--since] ·
 show · diff [--json] · extract · apply [--reverse] · verify · branch · merge · revert ·
-cherry-pick · rebase · stash · reset [--soft/--mixed/--hard] · restore · clean · tag ·
-config · rev-parse · cat-file · ls-tree · fsck · gc`
+cherry-pick · rebase · stash · reset [--soft/--mixed/--hard] · restore · clean ·
+tag [-a/-s/-m/-v/-f/-n] · verify-commit · config · rev-parse · cat-file · ls-tree · fsck · gc`
+
+**Hooks & signing** — `<repo>/hooks/pre-commit` (non-zero aborts the commit) and
+`post-commit` run with `MCAGIT_DIR`/`MCAGIT_WORKTREE` set. Commits (`commit -S` or
+`config commit.gpgsign true`) and tags (`tag -s`) are SSH-signed via `ssh-keygen -Y`
+using `user.signingkey`; `verify-commit` / `tag -v` exit 0 only when the signer matches
+`gpg.ssh.allowedSignersFile`.
 
 **Remotes** — `clone · push · pull · fetch · ls-remote · remote` over a **local path**,
 **`http(s)://`** (served by `mcagit serve <dir>`), or **`ssh://`** (served by
@@ -115,5 +121,5 @@ end-to-end round-trip checks.
 - **Cloud remotes (S3/Azure)** and **pack-on-the-wire**: local, `http(s)://` (`serve`), and
   `ssh://` (`serve-stdio`) transports are done, but transfer is per-object with uncompressed
   bodies — batched packs, shallow clone, `verify-remote`, and cloud object stores are open.
-- reflog (`HEAD@{n}`), `bisect`, annotated-tag/commit **SSH signing**, a staging index.
+- reflog (`HEAD@{n}`), `bisect`, a staging index.
 - The bare `mcagit A B` diff fallthrough (use `mcagit diff A B`).
