@@ -37,7 +37,7 @@ pub(crate) fn reachable(repo: &Repository, tip: &str) -> Result<Vec<String>> {
                     }
                 }
             }
-            for p in commit.parents {
+            for p in repo.parents_of(&c)? {
                 stack.push(p);
             }
         }

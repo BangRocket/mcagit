@@ -108,6 +108,14 @@ fn handle(root: &Path, token: Option<&str>, mut req: Request) -> Result<()> {
             };
         }
     }
+    // POST /pack — a batched object upload (one wire pack)
+    if method == Method::Post && action == "pack" {
+        let body = read_body(&mut req)?;
+        return match op_put_pack(&dir, &body) {
+            Ok(n) => respond(req, 200, n.to_string().into_bytes()),
+            Err(e) => respond(req, 400, e.into_bytes()),
+        };
+    }
     // POST /refs/heads/<branch>
     if method == Method::Post {
         if let Some(branch) = action.strip_prefix("refs/heads/") {
@@ -153,6 +161,10 @@ fn dispatch(dir: &Path, head: &str, body: &[u8]) -> (&'static str, Vec<u8>) {
         },
         "put" => match op_put(dir, arg, body) {
             Ok(()) => ("ok", Vec::new()),
+            Err(e) => ("err", e.into_bytes()),
+        },
+        "put-pack" => match op_put_pack(dir, body) {
+            Ok(n) => ("ok", n.to_string().into_bytes()),
             Err(e) => ("err", e.into_bytes()),
         },
         "set-ref" => match op_set_ref(dir, arg, body) {
@@ -219,6 +231,19 @@ pub(crate) fn op_put(dir: &Path, hash: &str, content: &[u8]) -> std::result::Res
     let repo = open_or_init(dir).map_err(|e| e.to_string())?;
     repo.objects().write(content).map_err(|e| e.to_string())?;
     Ok(())
+}
+
+/// Ingest a batched wire pack. Every object is hash-verified and every inflate
+/// size-bounded by `wirepack::parse` before anything is stored; auto-creates
+/// the repo (a push to a new name). Returns the number of objects stored.
+pub(crate) fn op_put_pack(dir: &Path, body: &[u8]) -> std::result::Result<usize, String> {
+    let objects = crate::wirepack::parse(body).map_err(|e| e.to_string())?;
+    let repo = open_or_init(dir).map_err(|e| e.to_string())?;
+    let n = objects.len();
+    for (_, content) in objects {
+        repo.objects().write(&content).map_err(|e| e.to_string())?;
+    }
+    Ok(n)
 }
 
 /// Advance a branch from a JSON `{old, new, force}` body (fast-forward guarded).
@@ -335,6 +360,30 @@ mod tests {
         op_set_ref(dir, "main", body.as_bytes()).unwrap();
         let adv: serde_json::Value = serde_json::from_slice(&op_info_refs(dir)).unwrap();
         assert_eq!(adv["branches"]["main"].as_str(), Some(hash.as_str()));
+    }
+
+    #[test]
+    fn op_put_pack_ingests_and_rejects_tampering() {
+        let d = tempfile::tempdir().unwrap();
+        let dir = d.path();
+        let a = b"object alpha".to_vec();
+        let b = b"object beta".to_vec();
+        let objects = vec![
+            (blake3::hash(&a).to_hex().to_string(), a.clone()),
+            (blake3::hash(&b).to_hex().to_string(), b.clone()),
+        ];
+        let body = crate::wirepack::build(&objects).unwrap();
+        assert_eq!(op_put_pack(dir, &body).unwrap(), 2);
+        assert_eq!(op_get(dir, &objects[0].0).as_deref(), Some(&a[..]));
+        assert_eq!(op_get(dir, &objects[1].0).as_deref(), Some(&b[..]));
+
+        // a tampered pack stores nothing
+        let mut bad = body.clone();
+        let n = bad.len();
+        bad[n - 1] ^= 0xff;
+        assert!(op_put_pack(dir, &bad).is_err());
+        // and garbage framing is rejected outright
+        assert!(op_put_pack(dir, b"junk").is_err());
     }
 
     #[test]

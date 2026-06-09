@@ -17,7 +17,7 @@ fn manifest_of(repo: &Repository, commit: &str) -> Result<Manifest> {
 }
 
 fn parent_manifest(repo: &Repository, commit: &str) -> Result<Manifest> {
-    match repo.read_commit(commit)?.parents.first() {
+    match repo.parents_of(commit)?.first() {
         Some(p) => manifest_of(repo, p),
         None => Ok(Manifest::default()),
     }
@@ -78,7 +78,7 @@ pub fn rebase(repo: &Repository, upstream: &str, head: &str, time: &str) -> Resu
             break;
         }
         commits.push(c.clone());
-        cur = repo.read_commit(&c)?.parents.into_iter().next();
+        cur = repo.parents_of(&c)?.into_iter().next();
     }
     commits.reverse();
 

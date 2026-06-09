@@ -26,8 +26,8 @@ fn ancestors(repo: &Repository, start: &str) -> Result<HashSet<String>> {
         if !set.insert(c.clone()) {
             continue;
         }
-        if let Ok(commit) = repo.read_commit(&c) {
-            for p in commit.parents {
+        if repo.read_commit(&c).is_ok() {
+            for p in repo.parents_of(&c)? {
                 stack.push(p);
             }
         }

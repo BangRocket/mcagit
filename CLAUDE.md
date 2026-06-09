@@ -93,7 +93,10 @@ patch → cli`.
   - `snapshot` (commit, parallel), `checkout` (parallel — one flat per-chunk rayon job list,
     then parallel region writes), `verify` (fast single-sided tree-hash accuracy check),
     `status`, `fsck`, `gc`, `merge_base` + 3-way `merge`, `replay` (cherry-pick/revert/rebase),
-    `stash`, `transfer` (path-transport clone/push/pull — copies only missing objects).
+    `stash`, `transfer` (path-transport clone/push/pull — copies only missing objects),
+    `wirepack` (batched push bodies: one zstd-per-object pack per request, hash-verified +
+    inflate-bounded on ingest), shallow clones (`clone --depth`; `<repo>/shallow` boundary,
+    all graph walks go through `Repository::parents_of` which grafts to empty there).
 
 ## Invariants worth preserving
 

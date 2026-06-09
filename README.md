@@ -61,9 +61,13 @@ history for the first bad commit, checking each suspect out into the worktree.
 using `user.signingkey`; `verify-commit` / `tag -v` exit 0 only when the signer matches
 `gpg.ssh.allowedSignersFile`.
 
-**Remotes** — `clone · push · pull · fetch · ls-remote · remote · verify-remote [--deep]`
-over a **local path**, **`http(s)://`** (served by `mcagit serve <dir>`), or **`ssh://`**
-(served by `mcagit serve-stdio <dir>`, spawned over `ssh`). `verify-remote` walks the
+**Remotes** — `clone [--depth N] · push · pull · fetch · ls-remote · remote ·
+verify-remote [--deep]` over a **local path**, **`http(s)://`** (served by
+`mcagit serve <dir>`), or **`ssh://`** (served by `mcagit serve-stdio <dir>`, spawned over
+`ssh`). Pushes travel as **wire packs** — the missing objects batched (zstd-per-object)
+into one request per ~128 MiB instead of a round-trip per object; the server hash-verifies
+every object and bounds every inflate before storing. `clone --depth N` makes a shallow
+clone (history grafted at a recorded boundary; tags skipped). `verify-remote` walks the
 remote's history confirming every commit/tree hashes correctly and every leaf is present
 (`--deep` re-downloads and hash-checks the leaves too).
 
@@ -128,8 +132,7 @@ end-to-end round-trip checks.
 
 ## Not yet implemented
 
-- **Cloud remotes (S3/Azure)** and **pack-on-the-wire**: local, `http(s)://` (`serve`), and
-  `ssh://` (`serve-stdio`) transports are done, but transfer is per-object with uncompressed
-  bodies — batched packs, shallow clone, `verify-remote`, and cloud object stores are open.
+- **Cloud remotes (S3/Azure)** — local, `http(s)://`, and `ssh://` transports are done
+  (with batched wire-pack pushes); serverless cloud object stores are open.
 - A staging index (mcagit is deliberately index-free, like fossil).
 - The bare `mcagit A B` diff fallthrough (use `mcagit diff A B`).

@@ -68,7 +68,7 @@ pub fn fsck(repo: &Repository) -> Result<FsckReport> {
             }
             Err(_) => report.missing.push(commit.tree.clone()),
         }
-        for p in commit.parents {
+        for p in repo.parents_of(&c)? {
             stack.push(p);
         }
     }

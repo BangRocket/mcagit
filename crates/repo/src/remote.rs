@@ -24,6 +24,14 @@ pub trait Transport {
     fn missing(&self, ids: &[String]) -> Result<Vec<String>>;
     /// Store object `content` (its id is `content`-addressed).
     fn put_object(&self, content: &[u8]) -> Result<()>;
+    /// Store many objects in one shot. Network transports override this with
+    /// a single wire-pack request; the default is one round-trip per object.
+    fn put_objects(&self, objects: &[(String, Vec<u8>)]) -> Result<()> {
+        for (_, content) in objects {
+            self.put_object(content)?;
+        }
+        Ok(())
+    }
     /// Point `branch` at `hash` on the remote.
     fn set_branch(&self, branch: &str, hash: &str) -> Result<()>;
     /// Flush buffered state (e.g. reload packs). Default no-op.
@@ -158,6 +166,18 @@ impl Transport for HttpTransport {
         Ok(())
     }
 
+    fn put_objects(&self, objects: &[(String, Vec<u8>)]) -> Result<()> {
+        if objects.is_empty() {
+            return Ok(());
+        }
+        let body = crate::wirepack::build(objects)?;
+        let url = format!("{}/pack", self.base);
+        self.bearer(ureq::post(&url))
+            .send(&body[..])
+            .map_err(http_err)?;
+        Ok(())
+    }
+
     fn set_branch(&self, branch: &str, hash: &str) -> Result<()> {
         let url = format!("{}/refs/heads/{branch}", self.base);
         let body =
@@ -283,6 +303,17 @@ impl Transport for StdioTransport {
         }
         Ok(())
     }
+    fn put_objects(&self, objects: &[(String, Vec<u8>)]) -> Result<()> {
+        if objects.is_empty() {
+            return Ok(());
+        }
+        let body = crate::wirepack::build(objects)?;
+        let (st, b) = self.call("put-pack", &body)?;
+        if st != "ok" {
+            return Err(stdio_status(&st, &b));
+        }
+        Ok(())
+    }
     fn set_branch(&self, branch: &str, hash: &str) -> Result<()> {
         let body =
             serde_json::json!({ "old": serde_json::Value::Null, "new": hash, "force": true });
@@ -365,15 +396,34 @@ pub fn resolve(repo: &Repository, name_or_url: &str) -> String {
         .unwrap_or_else(|| name_or_url.to_string())
 }
 
-/// Push `branch` from `local` over the transport. Returns the number of objects copied.
+/// Per-batch cap on raw (uncompressed) bytes in one wire pack, so pushing a
+/// huge world streams several bounded requests instead of one giant body
+/// (zstd shrinks each well under the transports' framed-body cap).
+const PUSH_BATCH_RAW_BYTES: usize = 128 * 1024 * 1024;
+
+/// Push `branch` from `local` over the transport. Missing objects travel in
+/// batched wire packs (one request per ~128 MiB raw) on transports that
+/// support it. Returns the number of objects copied.
 pub fn push(local: &Repository, t: &dyn Transport, branch: &str) -> Result<usize> {
     let tip = local
         .read_branch(branch)
         .ok_or_else(|| RepoError::BadRef(branch.to_string()))?;
     let ids = crate::transfer::reachable(local, &tip)?;
     let missing = t.missing(&ids)?;
+    let mut batch: Vec<(String, Vec<u8>)> = Vec::new();
+    let mut batch_bytes = 0usize;
     for id in &missing {
-        t.put_object(&local.objects().read(id)?)?;
+        let content = local.objects().read(id)?;
+        batch_bytes += content.len();
+        batch.push((id.clone(), content));
+        if batch_bytes >= PUSH_BATCH_RAW_BYTES {
+            t.put_objects(&batch)?;
+            batch.clear();
+            batch_bytes = 0;
+        }
+    }
+    if !batch.is_empty() {
+        t.put_objects(&batch)?;
     }
     t.set_branch(branch, &tip)?;
     t.finish()?;
@@ -428,7 +478,7 @@ fn fetch_reachable(local: &Repository, t: &dyn Transport, tip: &str) -> Result<u
                     }
                 }
             }
-            for p in commit.parents {
+            for p in local.parents_of(&c)? {
                 stack.push(p);
             }
         }
@@ -551,24 +601,42 @@ fn fetch_checked(t: &dyn Transport, id: &str) -> Option<Option<Vec<u8>>> {
 /// Clone the repo at `url_or_path` into a fresh repo at `dst`: fetch every branch
 /// and tag, set an `origin` remote, and check out the default branch.
 pub fn clone(url_or_path: &str, dst: &Path) -> Result<Repository> {
+    clone_depth(url_or_path, dst, 0)
+}
+
+/// [`clone`] with an optional history depth. `depth > 0` fetches at most that
+/// many commits per branch (BFS, so a commit's first visit is at its minimum
+/// depth), records the pruned commits as the shallow boundary, and skips tags
+/// (they may point into the pruned history).
+pub fn clone_depth(url_or_path: &str, dst: &Path, depth: usize) -> Result<Repository> {
     let t = connect(url_or_path)?;
     let dest = Repository::init(dst)?;
     let refs = t.list_refs()?;
+    let mut boundary: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut branches: Vec<(String, String)> = Vec::new();
     for (refname, hash) in &refs {
         if let Some(b) = refname.strip_prefix("refs/heads/") {
-            fetch_reachable(&dest, t.as_ref(), hash)?;
+            if depth == 0 {
+                fetch_reachable(&dest, t.as_ref(), hash)?;
+            } else {
+                fetch_tip(&dest, t.as_ref(), hash, depth, &mut boundary)?;
+            }
             dest.write_branch(b, hash)?;
             branches.push((b.to_string(), hash.clone()));
         }
     }
-    for (refname, hash) in &refs {
-        if let Some(tag) = refname.strip_prefix("refs/tags/") {
-            fetch_reachable(&dest, t.as_ref(), hash)?;
-            dest.write_tag(tag, hash)?;
+    if depth == 0 {
+        for (refname, hash) in &refs {
+            if let Some(tag) = refname.strip_prefix("refs/tags/") {
+                fetch_reachable(&dest, t.as_ref(), hash)?;
+                dest.write_tag(tag, hash)?;
+            }
         }
     }
     dest.set_remote_url("origin", url_or_path)?;
+    if !boundary.is_empty() {
+        dest.write_shallow(boundary)?;
+    }
     let default = branches
         .iter()
         .find(|(b, _)| b == "main" || b == "master")
@@ -578,6 +646,57 @@ pub fn clone(url_or_path: &str, dst: &Path) -> Result<Repository> {
         dest.set_head_to_branch(&b)?;
     }
     Ok(dest)
+}
+
+/// Fetch a tip to a depth limit (BFS over parents). Commits whose parents are
+/// pruned by the limit go into `boundary`.
+fn fetch_tip(
+    local: &Repository,
+    t: &dyn Transport,
+    tip: &str,
+    depth: usize,
+    boundary: &mut std::collections::HashSet<String>,
+) -> Result<usize> {
+    use std::collections::{HashSet, VecDeque};
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut queue: VecDeque<(String, usize)> = VecDeque::new();
+    queue.push_back((tip.to_string(), 1));
+    let mut copied = 0usize;
+    while let Some((h, d)) = queue.pop_front() {
+        if !seen.insert(h.clone()) {
+            continue; // FIFO levels: the first visit is the minimum depth
+        }
+        if !local.objects().exists(&h) {
+            local.objects().write(&t.get_object(&h)?)?;
+            copied += 1;
+        }
+        let Ok(commit) = local.read_commit(&h) else {
+            continue;
+        };
+        if !local.objects().exists(&commit.tree) {
+            local.objects().write(&t.get_object(&commit.tree)?)?;
+            copied += 1;
+        }
+        if let Ok(m) = local.read_manifest(&commit.tree) {
+            for id in crate::fsck::manifest_ids(&m) {
+                if !local.objects().exists(&id) {
+                    local.objects().write(&t.get_object(&id)?)?;
+                    copied += 1;
+                }
+            }
+        }
+        if d < depth {
+            for p in commit.parents {
+                queue.push_back((p, d + 1));
+            }
+        } else if !commit.parents.is_empty() {
+            boundary.insert(h); // parents pruned → shallow boundary
+        }
+    }
+    if copied > 0 {
+        local.objects().reload_packs();
+    }
+    Ok(copied)
 }
 
 #[cfg(test)]
@@ -591,7 +710,8 @@ mod tests {
         std::fs::write(d.join("level.dat_marker"), contents).unwrap();
         let m = snapshot::snapshot(repo, &d).unwrap();
         let tree = repo.write_manifest(&m).unwrap();
-        let c = repo.create_commit(&tree, vec![], msg, "me", "0").unwrap();
+        let parents: Vec<String> = repo.head_commit().into_iter().collect();
+        let c = repo.create_commit(&tree, parents, msg, "me", "0").unwrap();
         let cur = repo.current_branch().unwrap_or_else(|| "main".into());
         repo.write_branch(&cur, &c).unwrap();
         c
@@ -640,6 +760,99 @@ mod tests {
         let n = push(&local, t.as_ref(), "main").unwrap();
         assert!(n > 0);
         assert_eq!(origin.read_branch("main").as_deref(), Some(c3.as_str()));
+    }
+
+    #[test]
+    fn shallow_clone_limits_history_and_grafts_parents() {
+        let tmp = tempfile::tempdir().unwrap();
+        let origin = Repository::init(&tmp.path().join("origin")).unwrap();
+        origin.set_head_to_branch("main").unwrap();
+        let mut tips = Vec::new();
+        for v in 1..=5 {
+            tips.push(commit_world(
+                &origin,
+                format!("v{v}").as_bytes(),
+                &format!("c{v}"),
+            ));
+        }
+        // a tag deep in history (must be skipped by a shallow clone)
+        origin.write_tag("old", &tips[0]).unwrap();
+
+        let dst = tmp.path().join("shallow");
+        let local = clone_depth(origin.dir().to_str().unwrap(), &dst, 2).unwrap();
+        assert!(local.is_shallow());
+        assert_eq!(local.read_branch("main").as_deref(), Some(tips[4].as_str()));
+        // depth 2: tip + its parent present, grandparent absent
+        assert!(local.objects().exists(&tips[4]));
+        assert!(local.objects().exists(&tips[3]));
+        assert!(
+            !local.objects().exists(&tips[2]),
+            "history past depth pruned"
+        );
+        assert!(local.read_tag("old").is_none(), "tags skipped when shallow");
+
+        // the boundary commit is grafted parentless: walks terminate cleanly
+        assert_eq!(local.parents_of(&tips[3]).unwrap(), Vec::<String>::new());
+        assert_eq!(local.parents_of(&tips[4]).unwrap(), vec![tips[3].clone()]);
+        // fsck sees no missing objects in a shallow clone
+        let r = crate::fsck::fsck(&local).unwrap();
+        assert!(r.is_clean(), "missing={:?}", r.missing);
+        // and the world checks out
+        let m = local
+            .read_manifest(&local.read_commit(&tips[4]).unwrap().tree)
+            .unwrap();
+        let out = tmp.path().join("out");
+        checkout(&local, &m, &out, false).unwrap();
+        assert!(out.join("level.dat_marker").exists());
+    }
+
+    /// A transport wrapper that forbids per-object puts, proving push uses
+    /// the batched wire-pack path.
+    struct BatchOnly<T: Transport>(T);
+    impl<T: Transport> Transport for BatchOnly<T> {
+        fn list_refs(&self) -> Result<Vec<(String, String)>> {
+            self.0.list_refs()
+        }
+        fn get_object(&self, id: &str) -> Result<Vec<u8>> {
+            self.0.get_object(id)
+        }
+        fn missing(&self, ids: &[String]) -> Result<Vec<String>> {
+            self.0.missing(ids)
+        }
+        fn put_object(&self, _content: &[u8]) -> Result<()> {
+            panic!("push must batch via put_objects");
+        }
+        fn put_objects(&self, objects: &[(String, Vec<u8>)]) -> Result<()> {
+            // exercise the real wire encoding both ways
+            let body = crate::wirepack::build(objects).unwrap();
+            for (_, content) in crate::wirepack::parse(&body).unwrap() {
+                self.0.put_object(&content)?;
+            }
+            Ok(())
+        }
+        fn set_branch(&self, branch: &str, hash: &str) -> Result<()> {
+            self.0.set_branch(branch, hash)
+        }
+        fn finish(&self) -> Result<()> {
+            self.0.finish()
+        }
+    }
+
+    #[test]
+    fn push_travels_as_wire_packs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let local = Repository::init(&tmp.path().join("local")).unwrap();
+        local.set_head_to_branch("main").unwrap();
+        let c1 = commit_world(&local, b"v1", "one");
+
+        let remote_dir = tmp.path().join("remote");
+        Repository::init(&remote_dir).unwrap();
+        let t = BatchOnly(LocalTransport::open(&remote_dir).unwrap());
+        let n = push(&local, &t, "main").unwrap();
+        assert!(n > 0);
+        let remote = Repository::open(&remote_dir).unwrap();
+        assert_eq!(remote.read_branch("main").as_deref(), Some(c1.as_str()));
+        assert!(remote.objects().exists(&c1));
     }
 
     #[test]

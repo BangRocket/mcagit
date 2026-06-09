@@ -186,8 +186,15 @@ enum Cmd {
         #[arg(short = 'f')]
         force: bool,
     },
-    /// Clone a repository into <dst> (local path; http/ssh/cloud not yet implemented).
-    Clone { src: String, dst: PathBuf },
+    /// Clone a repository (local path, http(s)://, or ssh://) into <dst>.
+    Clone {
+        src: String,
+        dst: PathBuf,
+        /// Shallow clone: fetch at most this many commits per branch
+        /// (records a shallow boundary; tags are skipped).
+        #[arg(long)]
+        depth: Option<usize>,
+    },
     /// Push a branch to a remote (a configured remote name or a URL/path).
     Push {
         remote: String,
@@ -497,7 +504,7 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                         );
                     }
                 }
-                cur = c.parents.into_iter().next();
+                cur = repo.parents_of(&h)?.into_iter().next();
             }
             Ok(ExitCode::SUCCESS)
         }
@@ -523,7 +530,7 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                 c.author, c.time, c.message
             );
             let m = repo.read_manifest(&c.tree)?;
-            let parent = match c.parents.first() {
+            let parent = match repo.parents_of(&h)?.first() {
                 Some(p) => Some(repo.read_manifest(&repo.read_commit(p)?.tree)?),
                 None => None,
             };
@@ -1046,9 +1053,13 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             Ok(ExitCode::SUCCESS)
         }
 
-        Cmd::Clone { src, dst } => {
-            mca_repo::remote::clone(src, dst)?;
-            eprintln!("Cloned {src} -> {}", dst.display());
+        Cmd::Clone { src, dst, depth } => {
+            mca_repo::remote::clone_depth(src, dst, depth.unwrap_or(0))?;
+            eprintln!(
+                "Cloned {src} -> {}{}",
+                dst.display(),
+                depth.map(|d| format!(" (depth {d})")).unwrap_or_default()
+            );
             Ok(ExitCode::SUCCESS)
         }
 

@@ -46,7 +46,7 @@ pub fn gc(repo: &Repository) -> Result<GcReport> {
                     }
                 }
             }
-            for p in commit.parents {
+            for p in repo.parents_of(&c)? {
                 stack.push(p);
             }
         }

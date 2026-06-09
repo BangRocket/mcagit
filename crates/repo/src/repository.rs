@@ -547,9 +547,53 @@ impl Repository {
         Err(RepoError::BadRef(base.to_string()))
     }
 
-    /// Parents of `commit` (the single graph-walk entry point — later grafted
-    /// to empty at a shallow boundary).
+    // ---- shallow history graft ----
+    // A depth-limited clone records the commits whose parents were
+    // intentionally not fetched in `<repo>/shallow`; every graph walk treats
+    // those commits as parentless so history cleanly ends at the boundary.
+
+    fn shallow_path(&self) -> PathBuf {
+        self.dir.join("shallow")
+    }
+
+    /// Commits whose parents were intentionally not fetched (the shallow
+    /// boundary). Empty for a full clone.
+    pub fn shallow_boundary(&self) -> std::collections::HashSet<String> {
+        std::fs::read_to_string(self.shallow_path())
+            .map(|text| {
+                text.lines()
+                    .map(str::trim)
+                    .filter(|l| !l.is_empty())
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    pub fn is_shallow(&self) -> bool {
+        self.shallow_path().is_file()
+    }
+
+    /// Records the shallow boundary (replacing any prior one); an empty set
+    /// clears it.
+    pub fn write_shallow<I: IntoIterator<Item = String>>(&self, boundary: I) -> Result<()> {
+        let mut set: Vec<String> = boundary.into_iter().collect();
+        set.sort();
+        set.dedup();
+        if set.is_empty() {
+            let _ = std::fs::remove_file(self.shallow_path());
+        } else {
+            std::fs::write(self.shallow_path(), set.join("\n") + "\n")?;
+        }
+        Ok(())
+    }
+
+    /// Parents of `commit` — the single graph-walk entry point, grafted to
+    /// empty at a shallow boundary.
     pub fn parents_of(&self, commit: &str) -> Result<Vec<String>> {
+        if self.is_shallow() && self.shallow_boundary().contains(commit) {
+            return Ok(Vec::new());
+        }
         Ok(self.read_commit(commit)?.parents)
     }
 

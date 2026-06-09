@@ -59,3 +59,4 @@ pub mod remote;
 pub use remote::{connect, verify_remote, Transport, VerifyReport};
 pub mod serve;
 pub use serve::{serve, serve_stdio};
+pub mod wirepack;
