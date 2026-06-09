@@ -114,8 +114,11 @@ enum Cmd {
         #[arg(default_value = "push")]
         action: String,
     },
-    /// Show the HEAD movement log (`HEAD@{n}` resolves against it).
-    Reflog,
+    /// Show a ref's movement log (`HEAD@{n}` / `<branch>@{n}` resolve against it).
+    Reflog {
+        /// Branch to show (default: HEAD).
+        name: Option<String>,
+    },
     /// Binary-search history for the first bad commit.
     Bisect {
         #[command(subcommand)]
@@ -798,15 +801,19 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             }
         }
 
-        Cmd::Reflog => {
+        Cmd::Reflog { name } => {
             let repo = open_repo(&cli)?;
-            for (n, line) in repo.reflog().iter().enumerate() {
+            let (what, entries) = match name.as_deref() {
+                Some(b) => (b, repo.branch_reflog(b)),
+                None => ("HEAD", repo.reflog()),
+            };
+            for (n, line) in entries.iter().enumerate() {
                 // "<from> <to> <message>"
                 let mut parts = line.splitn(3, ' ');
                 let _from = parts.next().unwrap_or("");
                 let to = parts.next().unwrap_or("");
                 let msg = parts.next().unwrap_or("");
-                println!("{} HEAD@{{{n}}}: {msg}", &to[..10.min(to.len())]);
+                println!("{} {what}@{{{n}}}: {msg}", &to[..10.min(to.len())]);
             }
             Ok(ExitCode::SUCCESS)
         }

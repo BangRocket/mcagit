@@ -49,10 +49,11 @@ crates/
 **Version control** — `init · commit [-S] · checkout · status · log [--author/--grep/--since] ·
 show · diff [--json] · extract · apply [--reverse] · verify · branch · merge · revert ·
 cherry-pick · rebase · stash [push|pop|list|drop] · reset [--soft/--mixed/--hard] · restore ·
-clean · tag [-a/-s/-m/-v/-f/-n] · verify-commit · reflog · bisect (start|bad|good|skip|reset|log) ·
+clean · tag [-a/-s/-m/-v/-f/-n] · verify-commit · reflog [branch] · bisect (start|bad|good|skip|reset|log) ·
 config · rev-parse · cat-file · ls-tree · fsck · gc`
 
-`reflog` shows every HEAD movement and powers `HEAD@{n}` revisions; `bisect` binary-searches
+`reflog` shows every HEAD movement and powers `HEAD@{n}` revisions (`reflog <branch>`
+shows a branch's own log and powers `<branch>@{n}`, so a force-moved tip is recoverable); `bisect` binary-searches
 history for the first bad commit, checking each suspect out into the worktree.
 
 **Hooks & signing** — `<repo>/hooks/pre-commit` (non-zero aborts the commit) and

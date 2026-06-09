@@ -233,11 +233,14 @@ impl Repository {
         if !safe_ref_name(name) {
             return Err(RepoError::BadRef(name.to_string()));
         }
+        let old = self.read_branch(name);
         let p = self.branch_path(name);
         if let Some(parent) = p.parent() {
             std::fs::create_dir_all(parent)?;
         }
         std::fs::write(p, format!("{hash}\n"))?;
+        // Every branch move is logged so a force-moved tip stays recoverable.
+        self.append_reflog(&self.branch_log_path(name), old.as_deref(), hash, "update")?;
         Ok(())
     }
 
@@ -246,6 +249,7 @@ impl Repository {
             return Err(RepoError::BadRef(name.to_string()));
         }
         let _ = std::fs::remove_file(self.branch_path(name));
+        let _ = std::fs::remove_file(self.branch_log_path(name));
         Ok(())
     }
 
@@ -376,11 +380,21 @@ impl Repository {
         }
     }
 
-    // ---- reflog (logs/HEAD) ----
+    // ---- reflogs (logs/HEAD + logs/refs/heads/<branch>) ----
 
-    /// Append a HEAD movement to the reflog: `<from|zeros> <to> <message>`.
-    pub fn record_head(&self, from: Option<&str>, to: &str, message: &str) -> Result<()> {
-        let p = self.dir.join("logs").join("HEAD");
+    fn head_log_path(&self) -> PathBuf {
+        self.dir.join("logs").join("HEAD")
+    }
+    fn branch_log_path(&self, name: &str) -> PathBuf {
+        self.dir
+            .join("logs")
+            .join("refs")
+            .join("heads")
+            .join(name)
+    }
+
+    /// Append a ref movement to a reflog: `<from|zeros> <to> <message>`.
+    fn append_reflog(&self, p: &Path, from: Option<&str>, to: &str, message: &str) -> Result<()> {
         if let Some(parent) = p.parent() {
             std::fs::create_dir_all(parent)?;
         }
@@ -395,9 +409,8 @@ impl Repository {
         Ok(())
     }
 
-    /// Reflog entries, most recent first (`<from> <to> <message>` lines).
-    pub fn reflog(&self) -> Vec<String> {
-        std::fs::read_to_string(self.dir.join("logs").join("HEAD"))
+    fn read_reflog(p: &Path) -> Vec<String> {
+        std::fs::read_to_string(p)
             .map(|text| {
                 let mut lines: Vec<String> = text
                     .lines()
@@ -410,18 +423,44 @@ impl Repository {
             .unwrap_or_default()
     }
 
-    /// The commit HEAD pointed at `n` reflog entries ago (`HEAD@{n}`).
-    /// `HEAD@{0}` is the most recent recorded position.
-    pub fn reflog_commit_at(&self, n: usize) -> Result<String> {
-        let entries = self.reflog();
-        let line = entries
-            .get(n)
-            .ok_or_else(|| RepoError::BadRef(format!("reflog for HEAD has no entry @{{{n}}}")))?;
+    fn reflog_at(entries: &[String], what: &str, n: usize) -> Result<String> {
+        let line = entries.get(n).ok_or_else(|| {
+            RepoError::BadRef(format!("reflog for {what} has no entry @{{{n}}}"))
+        })?;
         line.split(' ')
             .nth(1)
             .filter(|h| !h.is_empty())
             .map(str::to_string)
             .ok_or_else(|| RepoError::BadRef(format!("malformed reflog entry @{{{n}}}")))
+    }
+
+    /// Append a HEAD movement to the reflog: `<from|zeros> <to> <message>`.
+    pub fn record_head(&self, from: Option<&str>, to: &str, message: &str) -> Result<()> {
+        self.append_reflog(&self.head_log_path(), from, to, message)
+    }
+
+    /// HEAD reflog entries, most recent first (`<from> <to> <message>` lines).
+    pub fn reflog(&self) -> Vec<String> {
+        Self::read_reflog(&self.head_log_path())
+    }
+
+    /// Branch reflog entries, most recent first (empty if never moved).
+    pub fn branch_reflog(&self, name: &str) -> Vec<String> {
+        if !safe_ref_name(name) {
+            return Vec::new();
+        }
+        Self::read_reflog(&self.branch_log_path(name))
+    }
+
+    /// The commit HEAD pointed at `n` reflog entries ago (`HEAD@{n}`).
+    /// `HEAD@{0}` is the most recent recorded position.
+    pub fn reflog_commit_at(&self, n: usize) -> Result<String> {
+        Self::reflog_at(&self.reflog(), "HEAD", n)
+    }
+
+    /// The commit `name` pointed at `n` branch-reflog entries ago (`name@{n}`).
+    pub fn branch_reflog_commit_at(&self, name: &str, n: usize) -> Result<String> {
+        Self::reflog_at(&self.branch_reflog(name), name, n)
     }
 
     // ---- objects: commits + manifests ----
@@ -522,6 +561,16 @@ impl Repository {
             if let Some(n) = rest.strip_suffix('}') {
                 let n: usize = n.parse().map_err(|_| RepoError::BadRef(base.to_string()))?;
                 return self.reflog_commit_at(n);
+            }
+        }
+        // <branch>@{n}: the nth-previous tip from that branch's reflog.
+        if let Some((name, rest)) = base.split_once("@{") {
+            if let Some(n) = rest.strip_suffix('}') {
+                if self.read_branch(name).is_some() || !self.branch_reflog(name).is_empty() {
+                    let n: usize =
+                        n.parse().map_err(|_| RepoError::BadRef(base.to_string()))?;
+                    return self.branch_reflog_commit_at(name, n);
+                }
             }
         }
         if base.is_empty() || base == "HEAD" {
@@ -703,6 +752,35 @@ mod tests {
         assert!(repo.resolve_ref("HEAD@{9}").is_err());
         // combines with ancestry operators
         assert_eq!(repo.resolve_ref("HEAD@{0}~1").unwrap(), c1);
+    }
+
+    #[test]
+    fn branch_reflog_records_moves_and_resolves_at_n() {
+        let d = tempfile::tempdir().unwrap();
+        let repo = Repository::init(d.path()).unwrap();
+        let tree = repo.write_manifest(&Manifest::default()).unwrap();
+        let c1 = repo.create_commit(&tree, vec![], "one", "me", "t").unwrap();
+        repo.write_branch("main", &c1).unwrap();
+        let c2 = repo
+            .create_commit(&tree, vec![c1.clone()], "two", "me", "t")
+            .unwrap();
+        repo.write_branch("main", &c2).unwrap();
+
+        let log = repo.branch_reflog("main");
+        assert_eq!(log.len(), 2, "every branch move is recorded");
+        // most recent first: c1 → c2, then zeros → c1
+        assert!(log[0].starts_with(&format!("{c1} {c2}")));
+        assert!(log[1].starts_with(&format!("{} {c1}", "0".repeat(64))));
+
+        // a force-moved tip is recoverable via <branch>@{n}
+        assert_eq!(repo.resolve_ref("main@{0}").unwrap(), c2);
+        assert_eq!(repo.resolve_ref("main@{1}").unwrap(), c1);
+        assert!(repo.resolve_ref("main@{9}").is_err());
+        assert_eq!(repo.resolve_ref("main@{0}~1").unwrap(), c1);
+
+        // deleting the branch removes its log (git behavior)
+        repo.delete_branch("main").unwrap();
+        assert!(repo.branch_reflog("main").is_empty());
     }
 
     #[test]
