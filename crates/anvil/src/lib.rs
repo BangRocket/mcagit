@@ -17,6 +17,8 @@ pub enum AnvilError {
     DecompressionBomb(u64),
     #[error("bad region file name (expected r.X.Z.mca): {0}")]
     BadRegionName(String),
+    #[error("external chunk (.mcc) exceeds {0} bytes")]
+    ExternalChunkTooLarge(u64),
 }
 
 /// Crate result alias.

@@ -9,6 +9,11 @@ use std::path::Path;
 const SECTOR: usize = 4096;
 const MAX_INLINE_SECTORS: usize = 255; // sector count is a single header byte
 
+/// Cap on an external `.mcc` body read — the *compressed* payload, whose
+/// inflate is separately bounded ([`crate::compression`]); mirrors that bound
+/// so a hostile `.mcc` can't become an unbounded read into memory.
+pub const MAX_EXTERNAL_CHUNK: u64 = 128 * 1024 * 1024;
+
 /// Writes a valid region file from a set of chunks. Chunks are laid out sorted
 /// by region index; oversized chunks (> 255 sectors) spill to an external
 /// `c.X.Z.mcc` next to the region with the `0x80` bit set.
@@ -145,10 +150,20 @@ impl RegionFile {
 
             let payload: Vec<u8> = if external {
                 // Oversized chunk: body lives in c.X.Z.mcc beside the region.
+                // Bound the read like the inline path — a hostile/corrupt .mcc
+                // must not become an unbounded read into memory. Erroring (not
+                // skipping) keeps a real oversized chunk from being silently
+                // dropped from a snapshot.
                 let dir = path.parent().unwrap_or_else(|| Path::new("."));
                 let mcc = dir.join(format!("c.{}.{}.mcc", pos.x, pos.z));
-                match std::fs::read(&mcc) {
-                    Ok(b) => b,
+                match std::fs::metadata(&mcc) {
+                    Ok(meta) if meta.len() > MAX_EXTERNAL_CHUNK => {
+                        return Err(AnvilError::ExternalChunkTooLarge(MAX_EXTERNAL_CHUNK));
+                    }
+                    Ok(_) => match std::fs::read(&mcc) {
+                        Ok(b) => b,
+                        Err(_) => continue, // raced away — nothing to read
+                    },
                     Err(_) => continue, // external body missing — nothing to read
                 }
             } else {
@@ -281,6 +296,31 @@ mod tests {
         assert!(got.external);
         assert_eq!(got.compression, ChunkCompression::None);
         assert_eq!(got.payload, big.payload);
+    }
+
+    #[test]
+    fn oversized_mcc_is_rejected_not_read() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("r.0.0.mca");
+        let big = RawChunk {
+            pos: ChunkPos::new(1, 2),
+            compression: ChunkCompression::None,
+            payload: vec![0xAB; 1_100_000],
+            external: false,
+            timestamp: 5,
+        };
+        RegionWriter::write(&path, std::slice::from_ref(&big)).unwrap();
+        // Grow the external body past the cap (sparse — no real disk use).
+        let mcc = std::fs::OpenOptions::new()
+            .write(true)
+            .open(dir.path().join("c.1.2.mcc"))
+            .unwrap();
+        mcc.set_len(MAX_EXTERNAL_CHUNK + 1).unwrap();
+
+        assert!(matches!(
+            RegionFile::open(&path),
+            Err(AnvilError::ExternalChunkTooLarge(_))
+        ));
     }
 
     #[test]
