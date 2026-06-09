@@ -122,7 +122,9 @@ patch → cli`.
   Only type 127 (Custom) is opaque — a region containing one falls back to a raw blob.
 - **Untrusted input is confined.** Manifest keys / patch paths / network-supplied names are
   path-confined before being materialized to disk; thread depth limits through recursive NBT
-  walks; size-bound every inflate of untrusted bytes. A received wire pack is streamed
+  walks; size-bound every inflate of untrusted bytes. External `.mcc` chunk bodies are read
+  only if a *regular* file under the cap (a symlink to a special file like `/dev/zero` reports
+  len 0 and would otherwise read unbounded). A received wire pack is streamed
   object-by-object — each hash-verified, each inflate per-object-bounded, and the pack's
   *total* decoded size capped (no N-object amplification); the HTTP body read is capped too.
   Bucket-advertised pack ids (a hostile bucket) are pinned to the 64-hex object-id shape
