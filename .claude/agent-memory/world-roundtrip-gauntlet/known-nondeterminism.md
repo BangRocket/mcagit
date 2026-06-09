@@ -9,7 +9,7 @@ metadata:
 
 ## Checkout vs Original: Byte-Level Differences Are Expected
 
-When comparing `checkout_newer` vs `New_World_Newer` at byte level, 23 of 36 files differ. This is CORRECT and expected. The diff tool reports "No differences" (semantic equivalence).
+When comparing `checkout_newer` vs `New_World_Newer` at byte level, many files differ. This is CORRECT and expected. The diff tool reports "No differences" (semantic equivalence) which is the authoritative test.
 
 ### Why bytes differ:
 1. **Region files (.mca)**: chunks are re-encoded with ZLib at Optimal compression. The resulting ZLib stream differs from Minecraft's original stream even for identical NBT content.
@@ -22,11 +22,20 @@ When comparing `checkout_newer` vs `New_World_Newer` at byte level, 23 of 36 fil
 - Icon files, datapacks, advancements, stats (raw blobs) — stored as-is.
 
 ### Authoritative test: semantic diff
-The `mcagit` diff tool is the authoritative check. "No differences" exit 0 = pass.
-Byte-level `Get-FileHash` comparison is informational only.
+The `mcagit diff` tool is the authoritative check. "No differences" + exit 0 = PASS.
+Byte-level comparison is informational only.
 
-## GC Idempotency: Second Run Rewrites Pack
+## Second Commit On Unchanged World: "nothing to commit"
+When running commit on a world that matches HEAD (same content in worktree), the chunk cache
+fast-path kicks in and the tool outputs "nothing to commit — world matches HEAD" with exit 0.
+This is correct and expected behavior (not an error).
 
-After 1st GC, `ObjectStore.StoredSize(hash)` returns 0 for all objects (they're in the pack, not loose). The second GC sorts by `StoredSize` (all 0) then by hash, producing a different sort order than the 1st GC's size-based sort. This produces a different PackId → second GC writes a new pack even though content is identical. Third GC is idempotent (pack already exists at the hash-sorted PackId).
+## Head Detachment After Checkout HEAD~1
+After running `checkout HEAD~1`, HEAD becomes a detached hash pointing to the older commit.
+Running `status` then correctly shows modifications if the worktree still has newer content.
+This is expected. Reattach with `printf "ref: refs/heads/main\n" > repo/HEAD`.
 
-This is a known inefficiency, not a data loss bug.
+## HEAD~1 Resolution Error on Detached-First-Commit HEAD
+When HEAD is a raw detached hash pointing to the FIRST commit (no parent), running
+`verify HEAD~1` fails with "bad revision: <hash>: no parent". This is correct behavior.
+Always use `HEAD~1` when HEAD is attached to a branch, or use the explicit hash directly.

@@ -376,6 +376,54 @@ impl Repository {
         }
     }
 
+    // ---- reflog (logs/HEAD) ----
+
+    /// Append a HEAD movement to the reflog: `<from|zeros> <to> <message>`.
+    pub fn record_head(&self, from: Option<&str>, to: &str, message: &str) -> Result<()> {
+        let p = self.dir.join("logs").join("HEAD");
+        if let Some(parent) = p.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        use std::io::Write;
+        let mut f = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(p)?;
+        let from = from.unwrap_or(&"0".repeat(64)).to_string();
+        let message = message.replace('\n', " ");
+        writeln!(f, "{from} {to} {message}")?;
+        Ok(())
+    }
+
+    /// Reflog entries, most recent first (`<from> <to> <message>` lines).
+    pub fn reflog(&self) -> Vec<String> {
+        std::fs::read_to_string(self.dir.join("logs").join("HEAD"))
+            .map(|text| {
+                let mut lines: Vec<String> = text
+                    .lines()
+                    .filter(|l| !l.trim().is_empty())
+                    .map(str::to_string)
+                    .collect();
+                lines.reverse();
+                lines
+            })
+            .unwrap_or_default()
+    }
+
+    /// The commit HEAD pointed at `n` reflog entries ago (`HEAD@{n}`).
+    /// `HEAD@{0}` is the most recent recorded position.
+    pub fn reflog_commit_at(&self, n: usize) -> Result<String> {
+        let entries = self.reflog();
+        let line = entries
+            .get(n)
+            .ok_or_else(|| RepoError::BadRef(format!("reflog for HEAD has no entry @{{{n}}}")))?;
+        line.split(' ')
+            .nth(1)
+            .filter(|h| !h.is_empty())
+            .map(str::to_string)
+            .ok_or_else(|| RepoError::BadRef(format!("malformed reflog entry @{{{n}}}")))
+    }
+
     // ---- objects: commits + manifests ----
 
     pub fn write_manifest(&self, m: &Manifest) -> Result<String> {
@@ -466,6 +514,16 @@ impl Repository {
     }
 
     fn resolve_base(&self, base: &str) -> Result<String> {
+        // HEAD@{n} / @{n}: the nth-previous HEAD value from the reflog.
+        if let Some(rest) = base
+            .strip_prefix("HEAD@{")
+            .or_else(|| base.strip_prefix("@{"))
+        {
+            if let Some(n) = rest.strip_suffix('}') {
+                let n: usize = n.parse().map_err(|_| RepoError::BadRef(base.to_string()))?;
+                return self.reflog_commit_at(n);
+            }
+        }
         if base.is_empty() || base == "HEAD" {
             return self
                 .head_commit()
@@ -487,6 +545,12 @@ impl Repository {
             }
         }
         Err(RepoError::BadRef(base.to_string()))
+    }
+
+    /// Parents of `commit` (the single graph-walk entry point — later grafted
+    /// to empty at a shallow boundary).
+    pub fn parents_of(&self, commit: &str) -> Result<Vec<String>> {
+        Ok(self.read_commit(commit)?.parents)
     }
 
     fn first_parent(&self, h: &str) -> Result<String> {
@@ -568,6 +632,33 @@ mod tests {
         let commit = repo.read_commit(&c2).unwrap();
         assert_eq!(commit.message, "second");
         assert_eq!(commit.parents, vec![c1]);
+    }
+
+    #[test]
+    fn reflog_records_and_resolves_head_at_n() {
+        let d = tempfile::tempdir().unwrap();
+        let repo = Repository::init(d.path()).unwrap();
+        let tree = repo.write_manifest(&Manifest::default()).unwrap();
+        let c1 = repo.create_commit(&tree, vec![], "one", "me", "t").unwrap();
+        repo.write_branch("main", &c1).unwrap();
+        repo.record_head(None, &c1, "commit: one").unwrap();
+        let c2 = repo
+            .create_commit(&tree, vec![c1.clone()], "two", "me", "t")
+            .unwrap();
+        repo.write_branch("main", &c2).unwrap();
+        repo.record_head(Some(&c1), &c2, "commit: two").unwrap();
+
+        let log = repo.reflog();
+        assert_eq!(log.len(), 2);
+        assert!(log[0].contains("commit: two"), "most recent first");
+
+        assert_eq!(repo.reflog_commit_at(0).unwrap(), c2);
+        assert_eq!(repo.reflog_commit_at(1).unwrap(), c1);
+        assert_eq!(repo.resolve_ref("HEAD@{1}").unwrap(), c1);
+        assert_eq!(repo.resolve_ref("@{0}").unwrap(), c2);
+        assert!(repo.resolve_ref("HEAD@{9}").is_err());
+        // combines with ancestry operators
+        assert_eq!(repo.resolve_ref("HEAD@{0}~1").unwrap(), c1);
     }
 
     #[test]

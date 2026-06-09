@@ -39,10 +39,12 @@ cargo run -p mcagit -- <args>                # run the CLI
 leading `-C <repo>`). Exit codes follow git: `0` = identical/clean, `1` = differences/conflicts,
 `2` = error. `commit` prints the new commit hash to stdout (scriptable). Subcommands:
 `init · commit [-S] · checkout · status · log · diff [--json] · extract · apply [--reverse] ·
-verify · branch · merge · fsck · gc · revert · cherry-pick · rebase · stash · rev-parse ·
-cat-file · ls-tree · tag [-a/-s/-m/-v/-f/-n] · verify-commit · reset [--hard] · restore ·
-clean · clone · push · pull · fetch · ls-remote · remote · serve · serve-stdio · config ·
-players · find · inspect · where-changed · region · poi · render`.
+verify · branch · merge · fsck · gc · revert · cherry-pick · rebase · stash [drop] · reflog ·
+bisect · rev-parse · cat-file · ls-tree · tag [-a/-s/-m/-v/-f/-n] · verify-commit ·
+reset [--hard] · restore · clean · clone · push · pull · fetch · ls-remote · remote ·
+verify-remote [--deep] · serve · serve-stdio · config · players · find · inspect ·
+where-changed · region · poi · render`.
+Every HEAD move records a reflog entry (`logs/HEAD`; `HEAD@{n}` resolves against it).
 Hooks (`<repo>/hooks/pre-commit`, `post-commit`) gate/follow `commit`; SSH signing
 (`crates/repo/src/sign.rs`, `ssh-keygen -Y`, namespace `mcagit`) covers commits and
 annotated tags — `verify-commit`/`tag -v` exit 0 only on an allowed-signers match.

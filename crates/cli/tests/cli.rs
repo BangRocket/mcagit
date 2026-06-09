@@ -320,3 +320,186 @@ fn annotated_tag_create_list_peel() {
         .unwrap()
         .success());
 }
+
+/// Build a world whose single chunk holds `v`, distinct per commit.
+fn commit_value(repo: &Path, world: &Path, v: i32) -> String {
+    region_world(world, v);
+    let out = mcagit()
+        .args([
+            "-C",
+            repo.to_str().unwrap(),
+            "commit",
+            "-m",
+            &format!("v{v}"),
+        ])
+        .output()
+        .unwrap();
+    assert!(out.status.success());
+    String::from_utf8(out.stdout).unwrap().trim().to_string()
+}
+
+#[test]
+fn reflog_and_head_at_n() {
+    let d = tempfile::tempdir().unwrap();
+    let repo = d.path().join("repo");
+    let world = d.path().join("world");
+    region_world(&world, 0);
+    assert!(mcagit()
+        .args([
+            "init",
+            repo.to_str().unwrap(),
+            "--worktree",
+            world.to_str().unwrap()
+        ])
+        .status()
+        .unwrap()
+        .success());
+    let c1 = commit_value(&repo, &world, 1);
+    let _c2 = commit_value(&repo, &world, 2);
+
+    let rl = mcagit()
+        .args(["-C", repo.to_str().unwrap(), "reflog"])
+        .output()
+        .unwrap();
+    let text = String::from_utf8(rl.stdout).unwrap();
+    assert!(text.contains("HEAD@{0}: commit: v2"), "{text}");
+    assert!(text.contains("HEAD@{1}: commit: v1"), "{text}");
+
+    let rp = mcagit()
+        .args(["-C", repo.to_str().unwrap(), "rev-parse", "HEAD@{1}"])
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8(rp.stdout).unwrap().trim(), c1);
+}
+
+#[test]
+fn bisect_finds_first_bad_commit() {
+    let d = tempfile::tempdir().unwrap();
+    let repo = d.path().join("repo");
+    let world = d.path().join("world");
+    region_world(&world, 0);
+    assert!(mcagit()
+        .args([
+            "init",
+            repo.to_str().unwrap(),
+            "--worktree",
+            world.to_str().unwrap()
+        ])
+        .status()
+        .unwrap()
+        .success());
+
+    // 6 commits; the "regression" is v >= 4 (commit index 3)
+    let mut commits = Vec::new();
+    for v in 1..=6 {
+        commits.push(commit_value(&repo, &world, v));
+    }
+    let run = |args: &[&str]| {
+        let mut full = vec!["-C", repo.to_str().unwrap(), "bisect"];
+        full.extend_from_slice(args);
+        mcagit().args(&full).output().unwrap()
+    };
+
+    let out = run(&["start", &commits[5], &commits[0]]);
+    assert!(out.status.success());
+
+    // Drive: the worktree at each step holds the checked-out suspect; decide
+    // by reading which commit HEAD is on.
+    let mut answer = String::new();
+    for _ in 0..10 {
+        let head = mcagit()
+            .args(["-C", repo.to_str().unwrap(), "rev-parse", "HEAD"])
+            .output()
+            .unwrap();
+        let h = String::from_utf8(head.stdout).unwrap().trim().to_string();
+        let idx = commits.iter().position(|c| *c == h).unwrap();
+        let verdict = if idx >= 3 { "bad" } else { "good" };
+        let out = run(&[verdict]);
+        assert!(out.status.success());
+        let text = String::from_utf8(out.stdout).unwrap();
+        if text.contains("is the first bad commit") {
+            answer = text;
+            break;
+        }
+    }
+    assert!(
+        answer.contains(&commits[3]),
+        "expected {} in:\n{answer}",
+        commits[3]
+    );
+
+    // reset returns to main and clears the session
+    assert!(run(&["reset"]).status.success());
+    let head = mcagit()
+        .args(["-C", repo.to_str().unwrap(), "rev-parse", "HEAD"])
+        .output()
+        .unwrap();
+    assert_eq!(
+        String::from_utf8(head.stdout).unwrap().trim(),
+        commits[5],
+        "back on main's tip"
+    );
+}
+
+#[test]
+fn verify_remote_detects_corruption() {
+    let d = tempfile::tempdir().unwrap();
+    let repo = d.path().join("repo");
+    let world = d.path().join("world");
+    region_world(&world, 3);
+    assert!(mcagit()
+        .args([
+            "init",
+            repo.to_str().unwrap(),
+            "--worktree",
+            world.to_str().unwrap()
+        ])
+        .status()
+        .unwrap()
+        .success());
+    commit_value(&repo, &world, 4);
+
+    // clone to a "remote" path, then verify-remote against it: ok
+    let remote = d.path().join("remote");
+    assert!(mcagit()
+        .args(["clone", repo.to_str().unwrap(), remote.to_str().unwrap()])
+        .status()
+        .unwrap()
+        .success());
+    assert!(mcagit()
+        .args([
+            "-C",
+            repo.to_str().unwrap(),
+            "verify-remote",
+            remote.to_str().unwrap(),
+        ])
+        .status()
+        .unwrap()
+        .success());
+
+    // vandalize one loose object on the remote → verify-remote --deep exits 1
+    let mut corrupted = false;
+    for sub in std::fs::read_dir(remote.join("objects")).unwrap().flatten() {
+        if sub.file_name().to_string_lossy().len() == 2 && sub.path().is_dir() {
+            if let Some(f) = std::fs::read_dir(sub.path()).unwrap().flatten().next() {
+                std::fs::write(f.path(), b"vandalized").unwrap();
+                corrupted = true;
+            }
+        }
+        if corrupted {
+            break;
+        }
+    }
+    assert!(corrupted, "expected a loose object to corrupt");
+    let st = mcagit()
+        .args([
+            "-C",
+            repo.to_str().unwrap(),
+            "verify-remote",
+            remote.to_str().unwrap(),
+            "--deep",
+        ])
+        .status()
+        .unwrap();
+    assert_eq!(st.code(), Some(1), "corruption must be detected");
+}

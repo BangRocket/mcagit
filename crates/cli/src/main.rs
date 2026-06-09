@@ -109,10 +109,25 @@ enum Cmd {
     CherryPick { commit: String },
     /// Replay current commits onto <upstream>.
     Rebase { upstream: String },
-    /// Shelve/restore the worktree: stash [push|pop|list].
+    /// Shelve/restore the worktree: stash [push|pop|list|drop].
     Stash {
         #[arg(default_value = "push")]
         action: String,
+    },
+    /// Show the HEAD movement log (`HEAD@{n}` resolves against it).
+    Reflog,
+    /// Binary-search history for the first bad commit.
+    Bisect {
+        #[command(subcommand)]
+        action: BisectCmd,
+    },
+    /// Walk a remote's history verifying object presence (+ integrity with --deep).
+    VerifyRemote {
+        #[arg(default_value = "origin")]
+        remote: String,
+        /// Also download and hash-check every leaf object.
+        #[arg(long)]
+        deep: bool,
     },
     /// Resolve a revision to its object id.
     RevParse { rev: String },
@@ -283,6 +298,25 @@ enum Cmd {
 }
 
 #[derive(Subcommand)]
+enum BisectCmd {
+    /// Start a session: `bisect start [<bad> [<good>...]]`.
+    Start {
+        bad: Option<String>,
+        good: Vec<String>,
+    },
+    /// Mark a commit (default HEAD) as bad.
+    Bad { rev: Option<String> },
+    /// Mark commits (default HEAD) as good.
+    Good { revs: Vec<String> },
+    /// Skip a commit (default HEAD) — untestable, exclude it.
+    Skip { rev: Option<String> },
+    /// End the session and return to where you started.
+    Reset,
+    /// Print the session log.
+    Log,
+}
+
+#[derive(Subcommand)]
 enum RemoteCmd {
     /// Add a remote with a name and URL/path.
     Add { name: String, url: String },
@@ -359,6 +393,7 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                 Some(b) => repo.write_branch(&b, &commit)?,
                 None => repo.set_head_detached(&commit)?,
             }
+            repo.record_head(head.as_deref(), &commit, &format!("commit: {message}"))?;
             mca_repo::hooks::run(&repo, "post-commit");
             let files = manifest.regions.len() + manifest.nbt.len() + manifest.blobs.len();
             let chunks: usize = manifest.regions.values().map(|c| c.len()).sum();
@@ -392,11 +427,17 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             }
             let manifest = repo.read_manifest(&repo.read_commit(&commit)?.tree)?;
             mca_repo::checkout(&repo, &manifest, &out, true)?;
+            let old_head = repo.head_commit();
             if repo.read_branch(reff).is_some() {
                 repo.set_head_to_branch(reff)?;
             } else {
                 repo.set_head_detached(&commit)?;
             }
+            repo.record_head(
+                old_head.as_deref(),
+                &commit,
+                &format!("checkout: moving to {reff}"),
+            )?;
             eprintln!(
                 "Checked out {reff} ({}) into {}",
                 &commit[..10],
@@ -612,6 +653,7 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                         Some(b) => repo.write_branch(&b, &t)?,
                         None => repo.set_head_detached(&t)?,
                     }
+                    repo.record_head(Some(&ours), &t, &format!("merge {branch}"))?;
                     if let Some(wt) = repo.worktree() {
                         let m = repo.read_manifest(&repo.read_commit(&t)?.tree)?;
                         mca_repo::checkout(&repo, &m, std::path::Path::new(&wt), true)?;
@@ -659,7 +701,7 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             let target = repo.resolve_ref(commit)?;
             match mca_repo::revert(&repo, &head, &target, &author(&repo), &now_secs())? {
                 mca_repo::ReplayOutcome::Done(c) => {
-                    advance(&repo, &c)?;
+                    advance(&repo, &c, &format!("revert: {commit}"))?;
                     eprintln!("Reverted -> {}", &c[..10]);
                     Ok(ExitCode::SUCCESS)
                 }
@@ -676,7 +718,7 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             let pick = repo.resolve_ref(commit)?;
             match mca_repo::cherry_pick(&repo, &head, &pick, &now_secs())? {
                 mca_repo::ReplayOutcome::Done(c) => {
-                    advance(&repo, &c)?;
+                    advance(&repo, &c, &format!("cherry-pick: {commit}"))?;
                     eprintln!("Cherry-picked -> {}", &c[..10]);
                     Ok(ExitCode::SUCCESS)
                 }
@@ -693,7 +735,7 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             let up = repo.resolve_ref(upstream)?;
             match mca_repo::rebase(&repo, &up, &head, &now_secs())? {
                 mca_repo::ReplayOutcome::Done(c) => {
-                    advance(&repo, &c)?;
+                    advance(&repo, &c, &format!("rebase onto {upstream}"))?;
                     eprintln!("Rebased -> {}", &c[..10]);
                     Ok(ExitCode::SUCCESS)
                 }
@@ -738,7 +780,60 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                     }
                     Ok(ExitCode::SUCCESS)
                 }
+                "drop" => {
+                    match mca_repo::stash::drop_top(&repo)? {
+                        Some(s) => eprintln!("dropped {}", &s[..10]),
+                        None => eprintln!("stash empty"),
+                    }
+                    Ok(ExitCode::SUCCESS)
+                }
                 other => Err(anyhow!("unknown stash action: {other}")),
+            }
+        }
+
+        Cmd::Reflog => {
+            let repo = open_repo(&cli)?;
+            for (n, line) in repo.reflog().iter().enumerate() {
+                // "<from> <to> <message>"
+                let mut parts = line.splitn(3, ' ');
+                let _from = parts.next().unwrap_or("");
+                let to = parts.next().unwrap_or("");
+                let msg = parts.next().unwrap_or("");
+                println!("{} HEAD@{{{n}}}: {msg}", &to[..10.min(to.len())]);
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+
+        Cmd::Bisect { action } => bisect_cmd(&cli, action),
+
+        Cmd::VerifyRemote { remote, deep } => {
+            let repo = open_repo(&cli)?;
+            let url = mca_repo::remote::resolve(&repo, remote);
+            let t = mca_repo::connect(&url)?;
+            let r = mca_repo::verify_remote(t.as_ref(), *deep)?;
+            eprintln!(
+                "{remote}: {} branch(es), {} commit(s), {} object(s) checked{}",
+                r.branches,
+                r.commits,
+                r.objects,
+                if *deep { " (deep)" } else { "" }
+            );
+            for m in &r.missing {
+                eprintln!("  missing: {m}");
+            }
+            for c in &r.corrupt {
+                eprintln!("  corrupt: {c}");
+            }
+            if r.is_ok() {
+                eprintln!("{remote}: ok");
+                Ok(ExitCode::SUCCESS)
+            } else {
+                eprintln!(
+                    "{remote}: {} missing, {} corrupt",
+                    r.missing.len(),
+                    r.corrupt.len()
+                );
+                Ok(ExitCode::from(1))
             }
         }
 
@@ -878,10 +973,16 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         Cmd::Reset { rev, hard, .. } => {
             let repo = open_repo(&cli)?;
             let target = repo.resolve_ref(rev)?;
+            let old_head = repo.head_commit();
             match repo.current_branch() {
                 Some(b) => repo.write_branch(&b, &target)?,
                 None => repo.set_head_detached(&target)?,
             }
+            repo.record_head(
+                old_head.as_deref(),
+                &target,
+                &format!("reset: moving to {rev}"),
+            )?;
             if *hard {
                 if let Some(wt) = repo.worktree() {
                     let m = repo.read_manifest(&repo.read_commit(&target)?.tree)?;
@@ -991,7 +1092,11 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             let (tip, copied) = mca_repo::remote::fetch(&repo, t.as_ref(), &branch)?;
             repo.write_remote_ref(remote, &branch, &tip)?;
             // Fast-forward the local branch and, if it's current, the worktree.
+            let old_head = repo.head_commit();
             repo.write_branch(&branch, &tip)?;
+            if repo.current_branch().as_deref() == Some(branch.as_str()) {
+                repo.record_head(old_head.as_deref(), &tip, &format!("pull: {remote}"))?;
+            }
             if repo.current_branch().as_deref() == Some(branch.as_str()) {
                 if let Some(wt) = repo.worktree() {
                     let m = repo.read_manifest(&repo.read_commit(&tip)?.tree)?;
@@ -1319,11 +1424,13 @@ fn print_block_entities(hits: Vec<mca_query::BlockEntityHit>, json: bool) -> any
     Ok(())
 }
 
-fn advance(repo: &Repository, target: &str) -> anyhow::Result<()> {
+fn advance(repo: &Repository, target: &str, log_message: &str) -> anyhow::Result<()> {
+    let old_head = repo.head_commit();
     match repo.current_branch() {
         Some(b) => repo.write_branch(&b, target)?,
         None => repo.set_head_detached(target)?,
     }
+    repo.record_head(old_head.as_deref(), target, log_message)?;
     if let Some(wt) = repo.worktree() {
         let m = repo.read_manifest(&repo.read_commit(target)?.tree)?;
         mca_repo::checkout(repo, &m, std::path::Path::new(&wt), true)?;
@@ -1342,6 +1449,136 @@ fn open_repo(cli: &Cli) -> anyhow::Result<Repository> {
     match &cli.repo {
         Some(d) => Ok(Repository::open(d)?),
         None => Ok(Repository::discover(&std::env::current_dir()?)?),
+    }
+}
+
+fn bisect_cmd(cli: &Cli, action: &BisectCmd) -> anyhow::Result<ExitCode> {
+    use mca_repo::bisect;
+    let repo = open_repo(cli)?;
+    let require_session = || -> anyhow::Result<()> {
+        if !bisect::in_bisect(&repo) {
+            bail!("not bisecting (run `bisect start`)");
+        }
+        Ok(())
+    };
+    match action {
+        BisectCmd::Start { bad, good } => {
+            let original = repo
+                .current_branch()
+                .or_else(|| repo.head_commit())
+                .ok_or_else(|| anyhow!("no commits to bisect"))?;
+            bisect::start(&repo, &original)?;
+            bisect::append_log(&repo, "# bisect start")?;
+            if let Some(b) = bad {
+                let b = repo.resolve_ref(b)?;
+                bisect::set_bad(&repo, &b)?;
+                bisect::append_log(&repo, &format!("bad {b}"))?;
+            }
+            for g in good {
+                let g = repo.resolve_ref(g)?;
+                bisect::add_good(&repo, &g)?;
+                bisect::append_log(&repo, &format!("good {g}"))?;
+            }
+            bisect_advance(&repo)
+        }
+        BisectCmd::Bad { rev } => {
+            require_session()?;
+            let b = match rev {
+                Some(r) => repo.resolve_ref(r)?,
+                None => repo.head_commit().ok_or_else(|| anyhow!("no HEAD"))?,
+            };
+            bisect::set_bad(&repo, &b)?;
+            bisect::append_log(&repo, &format!("bad {b}"))?;
+            bisect_advance(&repo)
+        }
+        BisectCmd::Good { revs } => {
+            require_session()?;
+            let goods: Vec<String> = if revs.is_empty() {
+                vec![repo.head_commit().ok_or_else(|| anyhow!("no HEAD"))?]
+            } else {
+                revs.iter()
+                    .map(|r| repo.resolve_ref(r))
+                    .collect::<Result<_, _>>()?
+            };
+            for g in goods {
+                bisect::add_good(&repo, &g)?;
+                bisect::append_log(&repo, &format!("good {g}"))?;
+            }
+            bisect_advance(&repo)
+        }
+        BisectCmd::Skip { rev } => {
+            require_session()?;
+            let s = match rev {
+                Some(r) => repo.resolve_ref(r)?,
+                None => repo.head_commit().ok_or_else(|| anyhow!("no HEAD"))?,
+            };
+            bisect::add_skip(&repo, &s)?;
+            bisect::append_log(&repo, &format!("skip {s}"))?;
+            bisect_advance(&repo)
+        }
+        BisectCmd::Reset => {
+            require_session()?;
+            let orig = bisect::original(&repo).ok_or_else(|| anyhow!("no bisect start point"))?;
+            // Restore HEAD to the original branch (or detached commit) and the
+            // worktree to match.
+            let commit = match repo.read_branch(&orig) {
+                Some(tip) => {
+                    repo.set_head_to_branch(&orig)?;
+                    tip
+                }
+                None => {
+                    repo.set_head_detached(&orig)?;
+                    orig.clone()
+                }
+            };
+            if let Some(wt) = repo.worktree() {
+                let m = repo.read_manifest(&repo.read_commit(&commit)?.tree)?;
+                mca_repo::checkout(&repo, &m, std::path::Path::new(&wt), true)?;
+            }
+            bisect::clear(&repo)?;
+            eprintln!("Bisect reset; back at {orig}.");
+            Ok(ExitCode::SUCCESS)
+        }
+        BisectCmd::Log => {
+            for line in bisect::log_lines(&repo) {
+                println!("{line}");
+            }
+            Ok(ExitCode::SUCCESS)
+        }
+    }
+}
+
+/// Recompute the bisect state and check out the next suspect (detached).
+fn bisect_advance(repo: &Repository) -> anyhow::Result<ExitCode> {
+    use mca_repo::bisect;
+    match bisect::compute(repo)? {
+        bisect::State::NeedMarks => {
+            eprintln!(
+                "bisect: mark at least one bad and one good commit (`bisect bad` / `bisect good`)."
+            );
+            Ok(ExitCode::SUCCESS)
+        }
+        bisect::State::Done { first_bad } => {
+            let c = repo.read_commit(&first_bad)?;
+            println!("{first_bad} is the first bad commit");
+            println!("    {}", c.message);
+            Ok(ExitCode::SUCCESS)
+        }
+        bisect::State::Step { next, remaining } => {
+            if let Some(wt) = repo.worktree() {
+                let m = repo.read_manifest(&repo.read_commit(&next)?.tree)?;
+                mca_repo::checkout(repo, &m, std::path::Path::new(&wt), true)?;
+                let old_head = repo.head_commit();
+                repo.set_head_detached(&next)?;
+                repo.record_head(old_head.as_deref(), &next, "bisect: testing")?;
+            }
+            let steps = (remaining.max(1) as f64).log2().floor() as usize;
+            eprintln!(
+                "Bisecting: {remaining} revisions left to test after this (roughly {steps} steps); testing {}",
+                &next[..10]
+            );
+            Ok(ExitCode::SUCCESS)
+        }
     }
 }
 

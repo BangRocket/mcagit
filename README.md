@@ -48,8 +48,12 @@ crates/
 
 **Version control** — `init · commit [-S] · checkout · status · log [--author/--grep/--since] ·
 show · diff [--json] · extract · apply [--reverse] · verify · branch · merge · revert ·
-cherry-pick · rebase · stash · reset [--soft/--mixed/--hard] · restore · clean ·
-tag [-a/-s/-m/-v/-f/-n] · verify-commit · config · rev-parse · cat-file · ls-tree · fsck · gc`
+cherry-pick · rebase · stash [push|pop|list|drop] · reset [--soft/--mixed/--hard] · restore ·
+clean · tag [-a/-s/-m/-v/-f/-n] · verify-commit · reflog · bisect (start|bad|good|skip|reset|log) ·
+config · rev-parse · cat-file · ls-tree · fsck · gc`
+
+`reflog` shows every HEAD movement and powers `HEAD@{n}` revisions; `bisect` binary-searches
+history for the first bad commit, checking each suspect out into the worktree.
 
 **Hooks & signing** — `<repo>/hooks/pre-commit` (non-zero aborts the commit) and
 `post-commit` run with `MCAGIT_DIR`/`MCAGIT_WORKTREE` set. Commits (`commit -S` or
@@ -57,9 +61,11 @@ tag [-a/-s/-m/-v/-f/-n] · verify-commit · config · rev-parse · cat-file · l
 using `user.signingkey`; `verify-commit` / `tag -v` exit 0 only when the signer matches
 `gpg.ssh.allowedSignersFile`.
 
-**Remotes** — `clone · push · pull · fetch · ls-remote · remote` over a **local path**,
-**`http(s)://`** (served by `mcagit serve <dir>`), or **`ssh://`** (served by
-`mcagit serve-stdio <dir>`, spawned over `ssh`).
+**Remotes** — `clone · push · pull · fetch · ls-remote · remote · verify-remote [--deep]`
+over a **local path**, **`http(s)://`** (served by `mcagit serve <dir>`), or **`ssh://`**
+(served by `mcagit serve-stdio <dir>`, spawned over `ssh`). `verify-remote` walks the
+remote's history confirming every commit/tree hashes correctly and every leaf is present
+(`--deep` re-downloads and hash-checks the leaves too).
 
 **World inspection & render** — `players · find <entity|block-entity|sign> [id] ·
 inspect <x y z> · where-changed <old> <new>` (the grief detector) `· region <file.mca> ·
@@ -125,5 +131,5 @@ end-to-end round-trip checks.
 - **Cloud remotes (S3/Azure)** and **pack-on-the-wire**: local, `http(s)://` (`serve`), and
   `ssh://` (`serve-stdio`) transports are done, but transfer is per-object with uncompressed
   bodies — batched packs, shallow clone, `verify-remote`, and cloud object stores are open.
-- reflog (`HEAD@{n}`), `bisect`, a staging index.
+- A staging index (mcagit is deliberately index-free, like fossil).
 - The bare `mcagit A B` diff fallthrough (use `mcagit diff A B`).

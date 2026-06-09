@@ -439,6 +439,115 @@ fn fetch_reachable(local: &Repository, t: &dyn Transport, tip: &str) -> Result<u
     Ok(copied)
 }
 
+/// What `verify_remote` found while walking the remote's history.
+#[derive(Debug, Default)]
+pub struct VerifyReport {
+    pub branches: usize,
+    pub commits: usize,
+    /// Total objects considered (commits + trees + leaves).
+    pub objects: usize,
+    pub missing: Vec<String>,
+    pub corrupt: Vec<String>,
+}
+
+impl VerifyReport {
+    pub fn is_ok(&self) -> bool {
+        self.missing.is_empty() && self.corrupt.is_empty()
+    }
+}
+
+/// Walk every branch's history on the remote, confirming each commit/tree
+/// decodes to its hash and every referenced leaf object is present. With
+/// `deep`, also fetch + hash-check each leaf (downloads everything). Catches
+/// partial uploads / bit-rot offsite.
+pub fn verify_remote(t: &dyn Transport, deep: bool) -> Result<VerifyReport> {
+    let refs = t.list_refs()?;
+    let mut report = VerifyReport::default();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut leaves: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut stack: Vec<String> = Vec::new();
+    for (refname, hash) in &refs {
+        if refname.starts_with("refs/heads/") {
+            report.branches += 1;
+            stack.push(hash.clone());
+        }
+    }
+
+    while let Some(h) = stack.pop() {
+        if !seen.insert(h.clone()) {
+            continue;
+        }
+        let Some(content) = fetch_checked(t, &h) else {
+            report.missing.push(format!("{h} (commit)"));
+            continue;
+        };
+        let Some(content) = content else {
+            report.corrupt.push(format!("{h} (commit)"));
+            continue;
+        };
+        let text = String::from_utf8_lossy(&content);
+        // An annotated tag in branch history can't occur, but a tag object at
+        // a tip is possible if a branch was pointed at one; peel it.
+        if let Some(tag) = crate::manifest::TagObject::try_from_json(&text) {
+            stack.push(tag.object);
+            continue;
+        }
+        let Ok(commit) = crate::manifest::CommitObject::from_json(&text) else {
+            report.corrupt.push(format!("{h} (commit)"));
+            continue;
+        };
+        report.commits += 1;
+
+        match fetch_checked(t, &commit.tree) {
+            None => report.missing.push(format!(
+                "{} (tree of {})",
+                commit.tree,
+                &h[..10.min(h.len())]
+            )),
+            Some(None) => report.corrupt.push(format!("{} (tree)", commit.tree)),
+            Some(Some(tree_bytes)) => {
+                match crate::Manifest::from_json(&String::from_utf8_lossy(&tree_bytes)) {
+                    Ok(m) => leaves.extend(crate::fsck::manifest_ids(&m)),
+                    Err(_) => report.corrupt.push(format!("{} (tree)", commit.tree)),
+                }
+            }
+        }
+        for p in commit.parents {
+            stack.push(p);
+        }
+    }
+
+    if deep {
+        for leaf in &leaves {
+            match fetch_checked(t, leaf) {
+                None => report.missing.push(leaf.clone()),
+                Some(None) => report.corrupt.push(leaf.clone()),
+                Some(Some(_)) => {}
+            }
+        }
+    } else {
+        // one batched presence check instead of a fetch per leaf
+        let ids: Vec<String> = leaves.iter().cloned().collect();
+        report.missing.extend(t.missing(&ids)?);
+    }
+
+    report.objects = seen.len() + leaves.len();
+    report.missing.sort();
+    report.corrupt.sort();
+    Ok(report)
+}
+
+/// Fetch one object: `None` = missing, `Some(None)` = present but corrupt
+/// (hash mismatch), `Some(Some(bytes))` = good.
+#[allow(clippy::option_option)]
+fn fetch_checked(t: &dyn Transport, id: &str) -> Option<Option<Vec<u8>>> {
+    let bytes = t.get_object(id).ok()?;
+    if blake3::hash(&bytes).to_hex().as_str() != id {
+        return Some(None);
+    }
+    Some(Some(bytes))
+}
+
 /// Clone the repo at `url_or_path` into a fresh repo at `dst`: fetch every branch
 /// and tag, set an `origin` remote, and check out the default branch.
 pub fn clone(url_or_path: &str, dst: &Path) -> Result<Repository> {
