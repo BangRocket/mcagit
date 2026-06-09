@@ -48,6 +48,18 @@ All 5 gauntlet cases PASSED. No bugs found in:
 - GC → checkout → verify
 - Chunk cache resilience (delete / corrupt)
 
+## Rust Implementation — Extended Gauntlet Results (2026-06-09, commit 4073347, branch feat/dotnet-parity)
+
+All 5 cases PASSED. No bugs found in new transport/snapshot/gc features:
+- Case 1: Extract → apply → diff (forward + reverse) — PASS
+- Case 2: Commit → checkout → verify (2-commit, Older then Newer) — PASS
+- Case 3: HTTP transport round-trip (serve/push/clone/checkout/verify) — PASS
+  - streaming wire-pack ingest: 4389 objects pushed and cloned correctly
+- Case 4: Shallow clone --depth 1 (3-commit repo, log terminates, checkout reproduces tip) — PASS
+- Case 5: GC with annotated tag reachability (tag -a on HEAD~1, gc, checkout v1, verify + diff) — PASS
+  - gc kept 4390 objects (tag object counted, not pruned), pruned 0
+  - fsck post-gc: 0 corrupt, 0 missing, 0 unreachable
+
 ### Note: ChunkCache.Save Not Atomic (Rust, low severity)
 - `crates/repo/src/chunk_cache.rs` — concurrent commit processes could corrupt chunkcache.json.
 - On next load, corrupt cache is silently discarded (performance penalty only, no correctness impact).

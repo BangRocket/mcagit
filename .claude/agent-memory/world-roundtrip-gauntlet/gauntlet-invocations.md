@@ -80,12 +80,72 @@ cp -R "$SCRATCH/New_World_Newer" "$SCRATCH/worktree"
 "$CLI" -C "$SCRATCH/test-repo" fsck
 ```
 
-## Chunk Cache Integrity (Case 5)
+## Case 3: HTTP Transport Round-Trip (wire-pack push + clone)
 ```sh
-# 5a: Delete cache, run status (should report correctly, not crash)
+mkdir -p "$SCRATCH/hubdir"
+"$CLI" serve "$SCRATCH/hubdir" --addr 127.0.0.1:5097 > "$SCRATCH/serve.log" 2>&1 &
+SERVER_PID=$!
+sleep 1  # wait for bind
+# Push
+"$CLI" -C "$SCRATCH/test-repo" push http://127.0.0.1:5097/r/w main
+# Clone
+"$CLI" clone http://127.0.0.1:5097/r/w "$SCRATCH/http-clone"
+# Checkout + verify
+"$CLI" -C "$SCRATCH/http-clone" checkout HEAD "$SCRATCH/http-checkout"
+"$CLI" -C "$SCRATCH/http-clone" verify HEAD "$SCRATCH/http-checkout"   # exit 0
+"$CLI" diff "$SCRATCH/http-checkout" "$SCRATCH/New_World_Newer"          # exit 0
+kill $SERVER_PID
+```
+- `serve <root> --addr 127.0.0.1:5097` — serves repos under `/r/<name>/`; (open writes)
+- push prints "pushed main -> <url> (N objects)"; clone prints "Cloned <url> -> <dst>"
+- Streaming wire-pack ingest: 4389 objects pushed+cloned cleanly (commit 4073347)
+
+## Case 4: Shallow Clone (--depth 1)
+```sh
+# 3-commit local repo
+cp -R "$SCRATCH/New_World_Older" "$SCRATCH/shallow-wt"
+"$CLI" init "$SCRATCH/shallow-repo" --worktree "$SCRATCH/shallow-wt"
+"$CLI" -C "$SCRATCH/shallow-repo" commit -m "commit 1"
+rm -rf "$SCRATCH/shallow-wt" && cp -R "$SCRATCH/New_World_Newer" "$SCRATCH/shallow-wt"
+"$CLI" -C "$SCRATCH/shallow-repo" commit -m "commit 2"
+rm -rf "$SCRATCH/shallow-wt" && cp -R "$SCRATCH/New_World_Older" "$SCRATCH/shallow-wt"
+"$CLI" -C "$SCRATCH/shallow-repo" commit -m "commit 3"
+# Shallow clone
+"$CLI" clone "$SCRATCH/shallow-repo" "$SCRATCH/shallow-clone" --depth 1
+# Log terminates at boundary (only 1 entry shown)
+"$CLI" -C "$SCRATCH/shallow-clone" log    # exit 0, shows only tip commit
+"$CLI" -C "$SCRATCH/shallow-clone" checkout HEAD "$SCRATCH/shallow-checkout"
+"$CLI" -C "$SCRATCH/shallow-clone" verify HEAD "$SCRATCH/shallow-checkout"  # exit 0
+"$CLI" diff "$SCRATCH/shallow-checkout" "$SCRATCH/New_World_Older"            # exit 0
+```
+- clone --depth prints "Cloned ... (depth 1)"
+- log on shallow clone shows only the tip commit (boundary respected)
+
+## Case 5: GC with Annotated Tag Reachability
+```sh
+# Create annotated tag on HEAD~1 (requires HEAD attached to branch, not detached)
+"$CLI" -C "$SCRATCH/test-repo" tag -a -m "release message" v1 HEAD~1
+# tag -n lists annotated tags with message
+"$CLI" -C "$SCRATCH/test-repo" tag -n
+# GC — annotated-tag objects must survive (object count = commits + trees + blobs + TAG OBJECT)
+"$CLI" -C "$SCRATCH/test-repo" gc   # "gc: kept N objects, pruned 0"
+# Checkout the tagged commit
+"$CLI" -C "$SCRATCH/test-repo" checkout v1 "$SCRATCH/gc_tag_checkout"
+"$CLI" -C "$SCRATCH/test-repo" verify v1 "$SCRATCH/gc_tag_checkout"   # exit 0
+"$CLI" diff "$SCRATCH/gc_tag_checkout" "$SCRATCH/New_World_Older"      # exit 0
+# fsck confirms 0 corrupt/missing/unreachable
+"$CLI" -C "$SCRATCH/test-repo" fsck
+```
+- tag object hash is distinct from the commit hash; `Created annotated tag v1 at <commit> (tag <tagobj>)`
+- After gc: object count = 4390 (4389 data objects + 1 annotated tag object), pruned 0
+- `verify v1 <dir>` resolves the annotated tag -> commit -> tree correctly
+
+## Chunk Cache Integrity
+```sh
+# Delete cache, run status (should report correctly, not crash)
 rm "$SCRATCH/test-repo/chunkcache.json"
 "$CLI" -C "$SCRATCH/test-repo" status   # exits 0 if clean, 1 if modifications
-# 5b: Corrupt cache, run status + commit (should not crash; corrupt cache silently discarded)
+# Corrupt cache, run status + commit (should not crash; corrupt cache silently discarded)
 printf 'NOT_VALID_JSON{{{garbage bytes\x00\xff\xfe' > "$SCRATCH/test-repo/chunkcache.json"
 "$CLI" -C "$SCRATCH/test-repo" status
 "$CLI" -C "$SCRATCH/test-repo" commit -m "commit with corrupt cache"
@@ -105,23 +165,24 @@ python3 -c "import json; d=json.load(open('$SCRATCH/test-repo/chunkcache.json'))
 - Second commit on unchanged world: "nothing to commit — world matches HEAD" — exit 0 (cache fast path).
 - Corrupt/missing chunkcache.json: silently discarded, operations continue, cache regenerated on commit.
 
-## Observed Timings (Rust, macOS, Release build, 2026-06-09)
-- Build: ~15s (incremental from clean-ish state)
-- Extract Older→Newer: ~instant (18 file entries, 4712 ops, exit 0)
+## Observed Timings (Rust, macOS, Release build, 2026-06-09, commit 4073347)
+- Build: ~instant (incremental, pre-built)
+- Extract Older->Newer: ~instant (18 file entries, 4712 ops, exit 0)
 - Apply forward: ~instant (4712 ops, exit 0)
 - Diff applied_forward vs Newer: ~instant (No differences, exit 0)
 - Apply --reverse: ~instant (4712 ops, exit 0)
 - Diff applied_reverse vs Older: ~instant (No differences, exit 0)
 - Commit Older (cold): ~instant (32 files, 2601 chunks, exit 0)
-- Commit same world (warm cache): ~instant ("nothing to commit", exit 0)
 - Commit Newer (warm cache, partial hits): ~instant (36 files, 2652 chunks, exit 0)
 - Checkout HEAD: ~instant
 - Verify: ~instant
-- GC: ~instant (kept 4389 objects, pruned 0)
+- GC: ~instant (kept 4389-4390 objects, pruned 0; +1 when annotated tag present)
 - Fsck: ~instant (0 corrupt, 0 missing, 0 unreachable)
+- HTTP push (4389 objects): ~instant; HTTP clone: ~instant
+- Shallow clone --depth 1 from 3-commit local repo: ~instant
 
 ## Fixture Sizes
 - New_World_Older: 32 files, 2601 chunks (4 region/.mca, 4 entities/.mca, various .dat, blobs)
 - New_World_Newer: 36 files, 2652 chunks (same + 4 poi/ region files)
 - Forward patch: 18 file entries, 4712 ops
-- Post-GC object count: 4389 objects
+- Post-GC object count: 4389 objects (4390 with 1 annotated tag)

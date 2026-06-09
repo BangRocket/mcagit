@@ -94,6 +94,10 @@ pub struct BucketTransport {
     index: Mutex<Option<HashMap<String, String>>>,
 }
 
+/// Upper bound on pack ids in `packs/manifest` (one pack per push; this is far
+/// above any real repo, but bounds a hostile bucket's clone-time round-trips).
+const MAX_MANIFEST_PACKS: usize = 1_000_000;
+
 fn is_object_id(id: &str) -> bool {
     id.len() == 64 && id.bytes().all(|b| b.is_ascii_hexdigit())
 }
@@ -137,7 +141,17 @@ impl BucketTransport {
         }
         let mut map = HashMap::new();
         if let Some((data, _)) = self.bucket.get(&self.key("packs/manifest"))? {
-            for pack_id in lines(&data) {
+            let pack_ids = lines(&data);
+            // A hostile bucket could advertise millions of pack ids to force one
+            // download per id (a slow-DoS on clone). Real repos keep a pack per
+            // push; cap well above that.
+            if pack_ids.len() > MAX_MANIFEST_PACKS {
+                return Err(RepoError::Other(format!(
+                    "packs/manifest lists {} packs (> {MAX_MANIFEST_PACKS} cap)",
+                    pack_ids.len()
+                )));
+            }
+            for pack_id in pack_ids {
                 require_valid_pack_id(&pack_id)?; // manifest is attacker-controlled
                 if let Some((pack, _)) = self.bucket.get(&self.key(&format!("packs/{pack_id}")))? {
                     for (id, _) in crate::wirepack::parse(&pack)? {

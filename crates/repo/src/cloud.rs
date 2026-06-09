@@ -29,6 +29,12 @@ fn net_err<E: std::fmt::Display>(e: E) -> RepoError {
     RepoError::Other(format!("cloud transport: {e}"))
 }
 
+/// Body-read cap for bucket downloads. ureq defaults to 10 MiB, which a normal
+/// pack blob (a push batches up to ~128 MiB raw) blows past — so a real cloud
+/// push would be unfetchable. Match the wire-pack framing cap; the pack itself
+/// is still hash-verified and total-size-bounded by `wirepack` on ingest.
+const MAX_DOWNLOAD: u64 = 512 * 1024 * 1024;
+
 // ---- S3 (AWS Signature V4) ----
 
 /// An [`Bucket`] over any S3-compatible store (AWS, R2, B2, MinIO). Credentials
@@ -195,7 +201,12 @@ impl Bucket for S3Bucket {
                     .unwrap_or("")
                     .trim_matches('"')
                     .to_string();
-                let data = resp.body_mut().read_to_vec().map_err(net_err)?;
+                let data = resp
+                    .body_mut()
+                    .with_config()
+                    .limit(MAX_DOWNLOAD)
+                    .read_to_vec()
+                    .map_err(net_err)?;
                 Ok(Some((data, etag)))
             }
             Err(ureq::Error::StatusCode(404)) => Ok(None),
@@ -366,7 +377,12 @@ impl Bucket for AzureBucket {
                     .unwrap_or("")
                     .trim_matches('"')
                     .to_string();
-                let data = resp.body_mut().read_to_vec().map_err(net_err)?;
+                let data = resp
+                    .body_mut()
+                    .with_config()
+                    .limit(MAX_DOWNLOAD)
+                    .read_to_vec()
+                    .map_err(net_err)?;
                 Ok(Some((data, etag)))
             }
             Err(ureq::Error::StatusCode(404)) => Ok(None),
