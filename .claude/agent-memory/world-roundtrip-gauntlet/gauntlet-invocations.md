@@ -198,6 +198,45 @@ exec /path/to/mcagit "${ARGS[$((IDX+2))]}" "${ARGS[$((IDX+3))]}"
 SSH URL for local test: `ssh://fakehost<abs-path>` e.g. `ssh://fakehost/tmp/origin-repo`
 (connect_ssh strips `ssh://`, splits on first `/` to get authority=fakehost, path=rest)
 
+## Case 6: Partial Clone + Sparse/Full Checkout (feat/partial-clone, 2026-06-09)
+
+### Partial Clone
+```sh
+# Commit a world first (see Invariant 3 setup)
+"$CLI" clone "$SCRATCH/origin-repo" "$SCRATCH/pclone" --filter blob:none
+# Output: "Cloned <src> -> <dst> (partial: blob:none)"
+# promisor file: $SCRATCH/pclone/promisor (contains origin path)
+# Object count before checkout: 2 (commit + root manifest)
+# fsck reports: "checked 2 objects — 0 corrupt, 0 missing, 0 unreachable\n  2625 leaf objects promised (partial clone)"
+```
+
+### Full Checkout on Partial Clone (backfills all)
+```sh
+"$CLI" -C "$SCRATCH/pclone" checkout HEAD "$SCRATCH/full-out"
+# Output: "backfilled 2615 objects from the promisor remote\nChecked out HEAD ..."
+# diff vs original: No differences (exit 0)
+# fsck afterward: 0 missing, 0 promised (all backfilled)
+```
+
+### Sparse Checkout (--region X,Z)
+```sh
+# Fresh partial clone
+"$CLI" clone "$SCRATCH/origin-repo" "$SCRATCH/pclone2" --filter blob:none
+"$CLI" -C "$SCRATCH/pclone2" checkout HEAD "$SCRATCH/sparse-out" --region 0,0
+# Output: "backfilled 664 objects from the promisor remote\nChecked out HEAD ..."
+# Materializes: region/r.0.0.mca, entities/r.0.0.mca, all loose files (level.dat etc)
+# Does NOT materialize: region/r.-1.-1.mca, r.-1.0.mca, r.0.-1.mca
+# 664/2615 = ~25% of a full checkout
+# Sanity check the mca: "$CLI" region "$SCRATCH/sparse-out/region/r.0.0.mca"  (exit 0, 650 chunks)
+```
+
+### Key Behaviors
+- Full clone has no promisor file; partial clone has one containing the origin path
+- fsck on partial clone: "N leaf objects promised (partial clone)" — not "missing"
+- After full checkout of partial: promised drops to 0, object count matches full clone (2617)
+- Sparse checkout: region/r.X.Z.mca + entities/r.X.Z.mca for requested coords; ALL loose files always included
+- Full clone fsck: "checked 2617 objects — 0 corrupt, 0 missing, 0 unreachable"
+
 ## Observed Timings (Rust, macOS, Release build, 2026-06-09, commit 4073347)
 - Build: ~instant (incremental, pre-built)
 - Extract Older->Newer: ~instant (18 file entries, 4712 ops, exit 0)
@@ -213,6 +252,9 @@ SSH URL for local test: `ssh://fakehost<abs-path>` e.g. `ssh://fakehost/tmp/orig
 - Fsck: ~instant (0 corrupt, 0 missing, 0 unreachable)
 - HTTP push (4389 objects): ~instant; HTTP clone: ~instant
 - Shallow clone --depth 1 from 3-commit local repo: ~instant
+- Partial clone --filter blob:none: ~instant (2 objects transferred)
+- Full checkout on partial clone (backfills 2615 objects): ~instant
+- Sparse checkout --region 0,0 (backfills 664 objects): ~instant
 
 ## Fixture Sizes
 - New_World_Older: 32 files, 2601 chunks (4 region/.mca, 4 entities/.mca, various .dat, blobs)
