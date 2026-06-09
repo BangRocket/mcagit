@@ -30,30 +30,52 @@ crates/
   nbt/     mca-nbt    NBT model, big-endian read/write (modified-UTF8), canonical bytes,
                       list-element identity, the path language, lossless type-tagged JSON
   anvil/   mca-anvil  region (r.X.Z.mca) read/write, chunk codecs (zlib/gzip/none/lz4),
-                      external .mcc, standalone .dat load/save
+                      external .mcc, standalone .dat, paletted block_states/biomes decode
   diff/    mca-diff   one comparer -> DiffSink trait; ChangeSink (display); WorldDiffer
-                      (parallel, byte-identical fast paths); text + json formats
+                      (parallel, byte-identical fast paths); coordinate-level block edits;
+                      text + json formats
   patch/   mca-patch  .mcapatch model; extract; apply (3-way guarded, reversible)
+  query/   mca-query  read-only world inspection: players, find entities/block-entities/
+                      signs, inspect a coord, where-changed (grief), region/poi, PNG map render
   repo/    mca-repo   content-addressed store (blake3 + zstd), packfiles + pack-at-commit,
-                      parallel commit, parallel checkout, verify, status, fsck, gc,
-                      merge-base + 3-way merge, cherry-pick/revert/rebase, stash,
-                      path-transport clone/push/pull
-  cli/     mcagit     the binary (28 subcommands)
+                      parallel commit/checkout, verify, status, fsck, gc, merge-base +
+                      3-way merge, cherry-pick/revert/rebase, stash; transports: local path,
+                      http (serve), ssh (serve-stdio)
+  cli/     mcagit     the binary
 ```
 
 ## Commands
 
-`init · commit · checkout · status · log · diff [--json] · extract · apply [--reverse] ·
-verify · branch · merge · fsck · gc · revert · cherry-pick · rebase · stash · rev-parse ·
-cat-file · ls-tree · tag · reset [--hard] · restore · clean · clone · push · pull`
+**Version control** — `init · commit · checkout · status · log [--author/--grep/--since] ·
+show · diff [--json] · extract · apply [--reverse] · verify · branch · merge · revert ·
+cherry-pick · rebase · stash · reset [--soft/--mixed/--hard] · restore · clean · tag ·
+config · rev-parse · cat-file · ls-tree · fsck · gc`
+
+**Remotes** — `clone · push · pull · fetch · ls-remote · remote` over a **local path**,
+**`http(s)://`** (served by `mcagit serve <dir>`), or **`ssh://`** (served by
+`mcagit serve-stdio <dir>`, spawned over `ssh`).
+
+**World inspection & render** — `players · find <entity|block-entity|sign> [id] ·
+inspect <x y z> · where-changed <old> <new>` (the grief detector) `· region <file.mca> ·
+poi · render <world> -o map.png`
 
 ```sh
 mcagit init repo.mcagit --worktree ./World
 mcagit -C repo.mcagit commit -m "before raid"
 mcagit -C repo.mcagit checkout HEAD~1 ./restored
-mcagit -C repo.mcagit verify HEAD ./restored      # fast tree-hash accuracy check
-mcagit diff ./WorldA ./WorldB
+mcagit -C repo.mcagit verify HEAD ./restored        # fast tree-hash accuracy check
+mcagit diff ./WorldA ./WorldB                        # shows @x,y,z block changes per chunk
 mcagit -C repo.mcagit gc --threads 8
+
+# inspect + grief-detect
+mcagit inspect 2 -48 15 --world ./World              # block + properties + biome + block-entity
+mcagit where-changed ./WorldBefore ./WorldAfter      # air -> snow_block, … per coordinate
+mcagit render ./World -o map.png                     # top-down surface map
+
+# self-hosted remotes
+mcagit serve /srv/worlds --addr 0.0.0.0:5080         # hub: clone/push http://host/r/<name>
+mcagit push http://host:5080/r/myworld main
+mcagit clone ssh://user@host/srv/worlds/myworld ./myworld
 ```
 
 ## Performance
@@ -90,8 +112,8 @@ end-to-end round-trip checks.
 
 ## Not yet implemented
 
-- **Network/cloud remotes**: http/ssh/stdio transports, `serve`, S3/Azure. The object-copy
-  core is done + tested via **path transport** (local clone/push/pull); networked transports
-  layer byte-moving on top.
-- reflog (`HEAD@{n}`), `bisect`, annotated-tag/commit **SSH signing**.
+- **Cloud remotes (S3/Azure)** and **pack-on-the-wire**: local, `http(s)://` (`serve`), and
+  `ssh://` (`serve-stdio`) transports are done, but transfer is per-object with uncompressed
+  bodies — batched packs, shallow clone, `verify-remote`, and cloud object stores are open.
+- reflog (`HEAD@{n}`), `bisect`, annotated-tag/commit **SSH signing**, a staging index.
 - The bare `mcagit A B` diff fallthrough (use `mcagit diff A B`).
