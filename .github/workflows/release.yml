@@ -1,0 +1,116 @@
+name: release
+
+# Cross-platform release binaries. Push a tag (e.g. `v0.8.0`) to build the
+# `mcagit` binary for each target, archive it, generate SHA256SUMS, and attach
+# everything to a GitHub Release. `workflow_dispatch` builds the same artifacts
+# without publishing a Release (handy for testing the pipeline off a branch).
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write   # create the GitHub Release + upload assets
+  id-token: write   # OIDC for Azure login (Windows signing, when enabled)
+
+jobs:
+  build:
+    name: build ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            archive: tar.gz
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive: zip
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            archive: tar.gz
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            archive: tar.gz
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release -p mcagit --target ${{ matrix.target }}
+
+      - name: Stage
+        shell: bash
+        run: |
+          set -eu
+          bin=mcagit
+          [ "${{ matrix.os }}" = "windows-latest" ] && bin=mcagit.exe
+          name="mcagit-${{ github.ref_name }}-${{ matrix.target }}"
+          mkdir -p "pkg/$name"
+          cp "target/${{ matrix.target }}/release/$bin" "pkg/$name/"
+          cp README.md LICENSE "pkg/$name/"
+          echo "PKG_NAME=$name" >> "$GITHUB_ENV"
+
+      # Windows code signing via Azure Artifact Signing (see issue #39).
+      # Inert until the repo variable ENABLE_WINDOWS_SIGNING is "true" and the
+      # Azure account + OIDC credentials/vars below are configured.
+      - name: Azure login
+        if: ${{ matrix.os == 'windows-latest' && vars.ENABLE_WINDOWS_SIGNING == 'true' }}
+        uses: azure/login@v3
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+      - name: Sign Windows binary (Azure Artifact Signing)
+        if: ${{ matrix.os == 'windows-latest' && vars.ENABLE_WINDOWS_SIGNING == 'true' }}
+        uses: azure/artifact-signing-action@v2
+        with:
+          endpoint: ${{ vars.AZURE_SIGNING_ENDPOINT }}            # e.g. https://eus.codesigning.azure.net/
+          signing-account-name: ${{ vars.AZURE_SIGNING_ACCOUNT }}
+          certificate-profile-name: ${{ vars.AZURE_SIGNING_PROFILE }}
+          files-folder: ${{ github.workspace }}/pkg/${{ env.PKG_NAME }}
+          files-folder-filter: exe
+          file-digest: SHA256
+          timestamp-rfc3161: http://timestamp.acs.microsoft.com
+          timestamp-digest: SHA256
+
+      - name: Archive
+        shell: bash
+        run: |
+          set -eu
+          mkdir -p dist
+          cd pkg
+          if [ "${{ matrix.archive }}" = "zip" ]; then
+            7z a "../dist/${PKG_NAME}.zip" "$PKG_NAME" >/dev/null
+          else
+            tar czf "../dist/${PKG_NAME}.tar.gz" "$PKG_NAME"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    name: publish release
+    needs: build
+    runs-on: ubuntu-latest
+    # Only publish a GitHub Release for an actual tag push.
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        run: cd dist && sha256sum * | tee SHA256SUMS
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+          fail_on_unmatched_files: true
