@@ -805,6 +805,7 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                         let m = repo.read_manifest(&repo.read_commit(&t)?.tree)?;
                         mca_repo::checkout(&repo, &m, std::path::Path::new(&wt), true)?;
                     }
+                    mca_repo::index::clear(&repo)?; // merge rewrote the worktree
                     eprintln!("Merge complete -> {}", &t[..10]);
                     Ok(ExitCode::SUCCESS)
                 }
@@ -910,7 +911,10 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                         .worktree()
                         .ok_or_else(|| anyhow!("no worktree bound"))?;
                     match mca_repo::stash::pop(&repo, std::path::Path::new(&wt))? {
-                        Some(s) => eprintln!("popped {}", &s[..10]),
+                        Some(s) => {
+                            eprintln!("popped {}", &s[..10]);
+                            mca_repo::index::clear(&repo)?; // worktree rewritten → index clean
+                        }
                         None => eprintln!("stash empty"),
                     }
                     Ok(ExitCode::SUCCESS)
@@ -925,7 +929,10 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                         &author(&repo),
                         &now_secs(),
                     )? {
-                        Some(s) => eprintln!("stashed {}", &s[..10]),
+                        Some(s) => {
+                            eprintln!("stashed {}", &s[..10]);
+                            mca_repo::index::clear(&repo)?; // worktree rewritten → index clean
+                        }
                         None => eprintln!("nothing to stash"),
                     }
                     Ok(ExitCode::SUCCESS)
@@ -1647,6 +1654,7 @@ fn advance(repo: &Repository, target: &str, log_message: &str) -> anyhow::Result
         let m = repo.read_manifest(&repo.read_commit(target)?.tree)?;
         mca_repo::checkout(repo, &m, std::path::Path::new(&wt), true)?;
     }
+    mca_repo::index::clear(repo)?; // replay (revert/cherry-pick/rebase) → clean index
     Ok(())
 }
 

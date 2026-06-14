@@ -778,3 +778,45 @@ fn reset_clears_the_index() {
         "worktree change remains:\n{text}"
     );
 }
+
+#[test]
+fn stash_clears_the_index() {
+    let d = tempfile::tempdir().unwrap();
+    let repo = d.path().join("repo");
+    let world = d.path().join("world");
+    build_world(&world);
+    let r = repo.to_str().unwrap();
+    assert!(mcagit()
+        .args(["init", r, "--worktree", world.to_str().unwrap()])
+        .status()
+        .unwrap()
+        .success());
+    assert!(mcagit()
+        .args(["-C", r, "commit", "-a", "-m", "seed"])
+        .status()
+        .unwrap()
+        .success());
+
+    // modify and stage a tracked file
+    std::fs::write(world.join("icon.png"), b"CHANGED").unwrap();
+    assert!(mcagit()
+        .args(["-C", r, "add", "icon.png"])
+        .status()
+        .unwrap()
+        .success());
+    assert!(
+        repo.join("index").exists(),
+        "precondition: something is staged"
+    );
+
+    // stash rewrites the worktree → the index must be cleared
+    assert!(mcagit()
+        .args(["-C", r, "stash", "push"])
+        .status()
+        .unwrap()
+        .success());
+    assert!(
+        !repo.join("index").exists(),
+        "stash push must clear the index"
+    );
+}
