@@ -24,11 +24,17 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Create a repo, optionally binding a world as the worktree.
+    /// Create a repo. Default: embedded `<dir>/.mcagit/` with the worktree bound
+    /// to `<dir>`. `--worktree` binds an external world (bare layout in `<dir>`);
+    /// `--bare` makes a bare repo with no worktree.
     Init {
         dir: Option<PathBuf>,
-        #[arg(long)]
+        /// Bind an external worktree (bare layout: metadata directly in <dir>).
+        #[arg(long, conflicts_with = "bare")]
         worktree: Option<PathBuf>,
+        /// Bare repo: metadata directly in <dir>, no worktree, no `.mcagit/`.
+        #[arg(long)]
+        bare: bool,
     },
     /// Snapshot a world (the bound worktree, or a given path).
     Commit {
@@ -363,17 +369,36 @@ fn main() -> ExitCode {
 
 fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     match &cli.cmd {
-        Cmd::Init { dir, worktree } => {
+        Cmd::Init {
+            dir,
+            worktree,
+            bare,
+        } => {
             let dir = dir
                 .clone()
                 .or_else(|| cli.repo.clone())
                 .unwrap_or_else(|| PathBuf::from("."));
-            let repo = Repository::init(&dir)?;
             if let Some(w) = worktree {
+                // External worktree → bare/flat layout in `dir`.
+                let repo = Repository::init(&dir)?;
                 let w = std::fs::canonicalize(w).unwrap_or_else(|_| w.clone());
                 repo.set_worktree(&w.to_string_lossy())?;
+                eprintln!(
+                    "Initialized mcagit repository in {} (worktree {})",
+                    dir.display(),
+                    w.display()
+                );
+            } else if *bare {
+                Repository::init(&dir)?;
+                eprintln!("Initialized bare mcagit repository in {}", dir.display());
+            } else {
+                // Default: embedded `.mcagit/` with the worktree = dir.
+                Repository::init_embedded(&dir)?;
+                eprintln!(
+                    "Initialized mcagit repository in {} (.mcagit/)",
+                    dir.display()
+                );
             }
-            eprintln!("Initialized empty mcagit repository in {}", dir.display());
             Ok(ExitCode::SUCCESS)
         }
 
