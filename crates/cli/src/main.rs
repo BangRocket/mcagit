@@ -516,7 +516,11 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                 bail!("nothing specified — give a pathspec or use -A");
             }
             let n = mca_repo::index::add_paths(&repo, &world, &specs)?;
-            eprintln!("staged {n} path(s)");
+            if n > 0 {
+                eprintln!("staged {n} path(s)");
+            } else {
+                eprintln!("nothing to stage — already up to date");
+            }
             Ok(ExitCode::SUCCESS)
         }
 
@@ -561,6 +565,9 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             // full checkout so `--region` doesn't delete the rest of a worktree.
             let prune = regions.is_empty();
             mca_repo::checkout(&repo, &manifest, &out, prune)?;
+            if is_worktree {
+                mca_repo::index::clear(&repo)?; // worktree rewritten → index no longer valid
+            }
             let old_head = repo.head_commit();
             if repo.read_branch(reff).is_some() {
                 repo.set_head_to_branch(reff)?;
@@ -1309,6 +1316,7 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                 if let Some(wt) = repo.worktree() {
                     let m = repo.read_manifest(&repo.read_commit(&tip)?.tree)?;
                     mca_repo::checkout(&repo, &m, std::path::Path::new(&wt), true)?;
+                    mca_repo::index::clear(&repo)?; // worktree fast-forwarded → index stale
                 }
             }
             eprintln!("pulled {branch} from {remote} ({copied} objects)");
@@ -1755,6 +1763,7 @@ fn bisect_cmd(cli: &Cli, action: &BisectCmd) -> anyhow::Result<ExitCode> {
             if let Some(wt) = repo.worktree() {
                 let m = repo.read_manifest(&repo.read_commit(&commit)?.tree)?;
                 mca_repo::checkout(&repo, &m, std::path::Path::new(&wt), true)?;
+                mca_repo::index::clear(&repo)?; // bisect reset rewrote the worktree → clear index
             }
             bisect::clear(&repo)?;
             eprintln!("Bisect reset; back at {orig}.");
@@ -1789,6 +1798,7 @@ fn bisect_advance(repo: &Repository) -> anyhow::Result<ExitCode> {
             if let Some(wt) = repo.worktree() {
                 let m = repo.read_manifest(&repo.read_commit(&next)?.tree)?;
                 mca_repo::checkout(repo, &m, std::path::Path::new(&wt), true)?;
+                mca_repo::index::clear(repo)?; // bisect rewrote the worktree → clear index
                 let old_head = repo.head_commit();
                 repo.set_head_detached(&next)?;
                 repo.record_head(old_head.as_deref(), &next, "bisect: testing")?;

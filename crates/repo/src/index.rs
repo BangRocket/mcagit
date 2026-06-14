@@ -112,7 +112,9 @@ pub fn add_paths(repo: &Repository, world_dir: &Path, specs: &[String]) -> Resul
     }
 
     let changed = changed_entry_count(&before, &idx);
-    if changed > 0 {
+    if idx == head_tree(repo)? {
+        clear(repo)?; // result ≡ HEAD → clean index is the file's absence
+    } else if changed > 0 {
         write(repo, &idx)?;
     }
     Ok(changed)
@@ -248,6 +250,29 @@ mod tests {
         let n = add_paths(&repo, &w, &["a.bin".to_string()]).unwrap();
         assert_eq!(n, 0);
         assert!(read(&repo).unwrap().unwrap().blobs.contains_key("a.bin"));
+    }
+
+    #[test]
+    fn add_reverting_to_head_clears_the_index() {
+        let (d, repo) = repo();
+        let world = d.path().join("world");
+        std::fs::create_dir_all(&world).unwrap();
+        std::fs::write(world.join("a.bin"), b"v1").unwrap();
+        // commit v1 as HEAD
+        let m = snapshot::snapshot(&repo, &world).unwrap();
+        let tree = repo.write_manifest(&m).unwrap();
+        let c = repo.create_commit(&tree, vec![], "x", "me", "t").unwrap();
+        repo.write_branch("main", &c).unwrap();
+        // stage v2, then revert the worktree to v1 and re-add
+        std::fs::write(world.join("a.bin"), b"v2").unwrap();
+        add_paths(&repo, &world, &["a.bin".to_string()]).unwrap();
+        assert!(read(&repo).unwrap().is_some(), "v2 staged");
+        std::fs::write(world.join("a.bin"), b"v1").unwrap();
+        add_paths(&repo, &world, &["a.bin".to_string()]).unwrap();
+        assert!(
+            read(&repo).unwrap().is_none(),
+            "re-adding HEAD-equal content clears the index"
+        );
     }
 
     #[test]

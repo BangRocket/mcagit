@@ -820,3 +820,53 @@ fn stash_clears_the_index() {
         "stash push must clear the index"
     );
 }
+
+#[test]
+fn checkout_clears_the_index() {
+    let d = tempfile::tempdir().unwrap();
+    let repo = d.path().join("repo");
+    let world = d.path().join("world");
+    build_world(&world);
+    let r = repo.to_str().unwrap();
+    assert!(mcagit()
+        .args(["init", r, "--worktree", world.to_str().unwrap()])
+        .status()
+        .unwrap()
+        .success());
+    assert!(mcagit()
+        .args(["-C", r, "commit", "-a", "-m", "seed"])
+        .status()
+        .unwrap()
+        .success());
+    // stage a change
+    std::fs::write(world.join("icon.png"), b"CHANGED").unwrap();
+    assert!(mcagit()
+        .args(["-C", r, "add", "icon.png"])
+        .status()
+        .unwrap()
+        .success());
+    assert!(
+        repo.join("index").exists(),
+        "precondition: something staged"
+    );
+    // checking out the current commit back into the bound worktree must clear the index
+    let head = String::from_utf8(
+        mcagit()
+            .args(["-C", r, "rev-parse", "HEAD"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap()
+    .trim()
+    .to_string();
+    assert!(mcagit()
+        .args(["-C", r, "checkout", &head])
+        .status()
+        .unwrap()
+        .success());
+    assert!(
+        !repo.join("index").exists(),
+        "checkout into the worktree must clear the index"
+    );
+}
