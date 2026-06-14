@@ -90,7 +90,7 @@ pub fn checkout(repo: &Repository, manifest: &Manifest, out_dir: &Path, prune: b
     }
 
     if prune {
-        prune_extra(out_dir, manifest)?;
+        prune_extra(out_dir, manifest, Some(repo.dir()))?;
     }
     Ok(())
 }
@@ -122,19 +122,29 @@ fn parse_pos(s: &str) -> Result<ChunkPos> {
     Ok(ChunkPos::new(x, z))
 }
 
-fn prune_extra(out_dir: &Path, m: &Manifest) -> Result<()> {
+fn prune_extra(out_dir: &Path, m: &Manifest, repo_dir: Option<&Path>) -> Result<()> {
     let mut keep: HashSet<&String> = HashSet::new();
     keep.extend(m.regions.keys());
     keep.extend(m.nbt.keys());
     keep.extend(m.blobs.keys());
-    for entry in walkdir::WalkDir::new(out_dir)
+    let root = std::fs::canonicalize(out_dir).unwrap_or_else(|_| out_dir.to_path_buf());
+    // Never delete the repo's own metadata when it lives inside `out_dir`
+    // (embedded `.mcagit/` layout).
+    let repo_prefix =
+        repo_dir.map(|d| std::fs::canonicalize(d).unwrap_or_else(|_| d.to_path_buf()));
+    for entry in walkdir::WalkDir::new(&root)
         .into_iter()
         .filter_map(|e| e.ok())
     {
+        if let Some(rp) = &repo_prefix {
+            if entry.path().starts_with(rp) {
+                continue;
+            }
+        }
         if entry.file_type().is_file() {
             let rel = entry
                 .path()
-                .strip_prefix(out_dir)
+                .strip_prefix(&root)
                 .unwrap_or(entry.path())
                 .to_string_lossy()
                 .replace('\\', "/");
@@ -207,5 +217,41 @@ mod tests {
         let base = Path::new("/tmp/out");
         assert!(confine(base, "../escape").is_err());
         assert!(confine(base, "region/r.0.0.mca").is_ok());
+    }
+
+    #[test]
+    fn prune_preserves_embedded_repo_dir() {
+        let d = tempfile::tempdir().unwrap();
+        let world = d.path().join("world");
+        // embedded repo: metadata at world/.mcagit, worktree = world
+        let repo = Repository::init_embedded(&world).unwrap();
+        std::fs::write(world.join("keep.bin"), b"keep").unwrap();
+
+        // snapshot excludes .mcagit, so the manifest holds only keep.bin
+        let m = snapshot::snapshot(&repo, &world).unwrap();
+
+        // an untracked extra file that prune SHOULD remove
+        std::fs::write(world.join("extra.bin"), b"extra").unwrap();
+
+        // checkout with prune INTO the worktree (the dangerous case)
+        checkout(&repo, &m, &world, true).unwrap();
+
+        assert!(
+            world.join(".mcagit").join("HEAD").is_file(),
+            ".mcagit/HEAD must survive prune"
+        );
+        assert!(
+            world.join(".mcagit").join("objects").is_dir(),
+            ".mcagit/objects must survive prune"
+        );
+        assert!(
+            Repository::open(&world).is_ok(),
+            "repo still opens after prune"
+        );
+        assert!(
+            !world.join("extra.bin").exists(),
+            "untracked extra is pruned"
+        );
+        assert!(world.join("keep.bin").exists(), "tracked file is kept");
     }
 }
