@@ -52,6 +52,16 @@ pub fn gc(repo: &Repository) -> Result<GcReport> {
         }
     }
 
+    // The staging index is a reachability root: objects staged but not yet
+    // committed must survive gc.
+    if let Some(m) = crate::index::read(repo)? {
+        for id in manifest_ids(&m) {
+            if store.exists(&id) && seen.insert(id.clone()) {
+                keep.push(id);
+            }
+        }
+    }
+
     let pack_dir = store.pack_dir();
     let old_pack_ids = list_pack_ids(&pack_dir);
 
@@ -149,6 +159,44 @@ mod tests {
         checkout(&repo, &m, &out, false).unwrap();
         let m2 = snapshot::snapshot(&repo, &out).unwrap();
         assert_eq!(repo.write_manifest(&m2).unwrap(), tree);
+    }
+
+    #[test]
+    fn gc_keeps_objects_referenced_only_by_the_index() {
+        let d = tempfile::tempdir().unwrap();
+        let repo = Repository::init(&d.path().join("repo")).unwrap();
+        let world = d.path().join("world");
+        std::fs::create_dir_all(&world).unwrap();
+        std::fs::write(world.join("staged.bin"), b"staged-only").unwrap();
+
+        // stage the file but never commit it
+        crate::index::add_paths(&repo, &world, &["staged.bin".into()]).unwrap();
+        let idx = crate::index::read(&repo).unwrap().unwrap();
+        let staged_id = idx.blobs.get("staged.bin").unwrap().clone();
+        assert!(repo.objects().exists(&staged_id));
+
+        gc(&repo).unwrap();
+        assert!(
+            repo.objects().exists(&staged_id),
+            "object referenced only by the index must survive gc"
+        );
+        // and the index still resolves
+        assert_eq!(
+            crate::index::read(&repo).unwrap().unwrap().blobs["staged.bin"],
+            staged_id
+        );
+
+        // after gc, committing the staged file and checking it out still round-trips
+        let idx = crate::index::read(&repo).unwrap().unwrap();
+        let tree = repo.write_manifest(&idx).unwrap();
+        let c = repo.create_commit(&tree, vec![], "x", "me", "t").unwrap();
+        repo.write_branch("main", &c).unwrap();
+        let out = d.path().join("out");
+        crate::checkout(&repo, &idx, &out, false).unwrap();
+        assert_eq!(
+            std::fs::read(out.join("staged.bin")).unwrap(),
+            b"staged-only"
+        );
     }
 
     #[test]
