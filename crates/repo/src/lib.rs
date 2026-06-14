@@ -34,6 +34,7 @@ pub use manifest::{CommitObject, Manifest, TagObject};
 pub mod bisect;
 pub mod chunk_cache;
 pub mod hooks;
+pub mod pathspec;
 pub mod repository;
 pub mod sign;
 pub use repository::Repository;
