@@ -764,7 +764,7 @@ fn fetch_checked(t: &dyn Transport, id: &str) -> Option<Option<Vec<u8>>> {
 /// Clone the repo at `url_or_path` into a fresh repo at `dst`: fetch every branch
 /// and tag, set an `origin` remote, and check out the default branch.
 pub fn clone(url_or_path: &str, dst: &Path) -> Result<Repository> {
-    clone_depth(url_or_path, dst, 0)
+    clone_depth(url_or_path, dst, 0, false)
 }
 
 /// Partial clone (`--filter=blob:none`): fetch every branch/tag's commit+tree
@@ -772,9 +772,13 @@ pub fn clone(url_or_path: &str, dst: &Path) -> Result<Repository> {
 /// its promisor), and check out nothing. Leaf objects are backfilled on demand
 /// (e.g. by `checkout`, which calls [`backfill`]). High value for huge worlds:
 /// the metadata graph is tiny next to the chunk data.
-pub fn clone_partial(url_or_path: &str, dst: &Path) -> Result<Repository> {
+pub fn clone_partial(url_or_path: &str, dst: &Path, embedded: bool) -> Result<Repository> {
     let t = connect(url_or_path)?;
-    let dest = Repository::init(dst)?;
+    let dest = if embedded {
+        Repository::init_embedded(dst)?
+    } else {
+        Repository::init(dst)?
+    };
     let refs = t.list_refs()?;
     let mut branches: Vec<(String, String)> = Vec::new();
     for (refname, hash) in &refs {
@@ -807,9 +811,18 @@ pub fn clone_partial(url_or_path: &str, dst: &Path) -> Result<Repository> {
 /// many commits per branch (BFS, so a commit's first visit is at its minimum
 /// depth), records the pruned commits as the shallow boundary, and skips tags
 /// (they may point into the pruned history).
-pub fn clone_depth(url_or_path: &str, dst: &Path, depth: usize) -> Result<Repository> {
+pub fn clone_depth(
+    url_or_path: &str,
+    dst: &Path,
+    depth: usize,
+    embedded: bool,
+) -> Result<Repository> {
     let t = connect(url_or_path)?;
-    let dest = Repository::init(dst)?;
+    let dest = if embedded {
+        Repository::init_embedded(dst)?
+    } else {
+        Repository::init(dst)?
+    };
     let refs = t.list_refs()?;
     let mut boundary: std::collections::HashSet<String> = std::collections::HashSet::new();
     let mut branches: Vec<(String, String)> = Vec::new();
@@ -978,7 +991,7 @@ mod tests {
         origin.write_tag("old", &tips[0]).unwrap();
 
         let dst = tmp.path().join("shallow");
-        let local = clone_depth(origin.dir().to_str().unwrap(), &dst, 2).unwrap();
+        let local = clone_depth(origin.dir().to_str().unwrap(), &dst, 2, false).unwrap();
         assert!(local.is_shallow());
         assert_eq!(local.read_branch("main").as_deref(), Some(tips[4].as_str()));
         // depth 2: tip + its parent present, grandparent absent
@@ -1190,7 +1203,7 @@ mod tests {
 
         // partial clone: skeleton present, leaves absent, marked partial
         let dst = tmp.path().join("clone");
-        let local = clone_partial(origin.dir().to_str().unwrap(), &dst).unwrap();
+        let local = clone_partial(origin.dir().to_str().unwrap(), &dst, false).unwrap();
         assert!(local.is_partial());
         assert!(local.objects().exists(&c) && local.objects().exists(&tree));
         for id in &leaves {

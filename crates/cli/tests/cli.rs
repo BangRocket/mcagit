@@ -459,10 +459,16 @@ fn verify_remote_detects_corruption() {
         .success());
     commit_value(&repo, &world, 4);
 
-    // clone to a "remote" path, then verify-remote against it: ok
+    // clone to a "remote" path (bare so that remote.join("objects") is the flat layout),
+    // then verify-remote against it: ok
     let remote = d.path().join("remote");
     assert!(mcagit()
-        .args(["clone", repo.to_str().unwrap(), remote.to_str().unwrap()])
+        .args([
+            "clone",
+            repo.to_str().unwrap(),
+            remote.to_str().unwrap(),
+            "--bare"
+        ])
         .status()
         .unwrap()
         .success());
@@ -550,6 +556,58 @@ fn init_embedded_layout_and_discovery() {
     assert!(
         text.contains("level.dat"),
         "world content committed:\n{text}"
+    );
+}
+
+#[test]
+fn clone_creates_embedded_worktree_and_checks_out() {
+    let d = tempfile::tempdir().unwrap();
+    let src = d.path().join("src");
+    let srcworld = d.path().join("srcworld");
+    build_world(&srcworld);
+
+    // a bare source repo bound to an external world, with one commit
+    assert!(mcagit()
+        .args([
+            "init",
+            src.to_str().unwrap(),
+            "--worktree",
+            srcworld.to_str().unwrap()
+        ])
+        .status()
+        .unwrap()
+        .success());
+    assert!(mcagit()
+        .args(["-C", src.to_str().unwrap(), "commit", "-m", "seed"])
+        .status()
+        .unwrap()
+        .success());
+
+    // clone into a fresh dir → embedded .mcagit + auto-checkout
+    let dst = d.path().join("dst");
+    assert!(mcagit()
+        .args(["clone", src.to_str().unwrap(), dst.to_str().unwrap()])
+        .status()
+        .unwrap()
+        .success());
+    assert!(
+        dst.join(".mcagit").join("HEAD").is_file(),
+        "embedded .mcagit at dst"
+    );
+    assert!(
+        dst.join("level.dat").is_file(),
+        "auto-checkout materialized the world"
+    );
+
+    // After a clean auto-checkout the worktree matches HEAD → status is clean (exit 0).
+    let st = mcagit()
+        .current_dir(&dst)
+        .args(["status"])
+        .status()
+        .unwrap();
+    assert!(
+        st.success(),
+        "status from the embedded worktree should be clean (exit 0): {st:?}"
     );
 }
 

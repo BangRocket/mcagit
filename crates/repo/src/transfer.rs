@@ -62,9 +62,13 @@ fn copy_objects(src: &Repository, dst: &Repository, ids: &[String]) -> Result<us
 }
 
 /// Clone `src` into a fresh repo at `dst`: copy all branch/tag objects + refs.
-pub fn clone_local(src: &Path, dst: &Path) -> Result<Repository> {
+pub fn clone_local(src: &Path, dst: &Path, embedded: bool) -> Result<Repository> {
     let source = Repository::open(src)?;
-    let dest = Repository::init(dst)?;
+    let dest = if embedded {
+        Repository::init_embedded(dst)?
+    } else {
+        Repository::init(dst)?
+    };
     for b in source.branches() {
         if let Some(tip) = source.read_branch(&b) {
             let ids = reachable(&source, &tip)?;
@@ -139,7 +143,7 @@ mod tests {
 
         // clone src -> dst; dst reproduces the world
         let dstdir = d.path().join("dst");
-        let dst = clone_local(&srcdir, &dstdir).unwrap();
+        let dst = clone_local(&srcdir, &dstdir, false).unwrap();
         assert_eq!(dst.read_branch("main").as_deref(), Some(c1.as_str()));
         let out = d.path().join("checkout");
         let m = dst
