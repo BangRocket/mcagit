@@ -39,6 +39,14 @@ enum Cmd {
         sign: bool,
         world: Option<PathBuf>,
     },
+    /// Stage worktree paths into the index for the next commit.
+    Add {
+        /// Paths / directories / globs to stage (relative to the worktree root).
+        pathspecs: Vec<String>,
+        /// Stage all changes across the whole worktree.
+        #[arg(short = 'A', long)]
+        all: bool,
+    },
     /// Materialize a snapshot into a directory (the worktree, or a given path).
     Checkout {
         reff: String,
@@ -433,6 +441,25 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                 message
             );
             println!("{commit}"); // stdout: the new commit id (scriptable)
+            Ok(ExitCode::SUCCESS)
+        }
+
+        Cmd::Add { pathspecs, all } => {
+            let repo = open_repo(&cli)?;
+            let world = repo
+                .worktree()
+                .map(PathBuf::from)
+                .ok_or_else(|| anyhow!("no worktree bound"))?;
+            let specs: Vec<String> = if *all {
+                vec![".".to_string()]
+            } else {
+                pathspecs.clone()
+            };
+            if specs.is_empty() {
+                bail!("nothing specified — give a pathspec or use -A");
+            }
+            let n = mca_repo::index::add_paths(&repo, &world, &specs)?;
+            eprintln!("staged {n} path(s)");
             Ok(ExitCode::SUCCESS)
         }
 

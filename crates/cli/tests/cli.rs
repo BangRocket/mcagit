@@ -471,6 +471,40 @@ fn status_lists_untracked_on_unborn_repo() {
 }
 
 #[test]
+fn add_then_status_shows_staged() {
+    let d = tempfile::tempdir().unwrap();
+    let repo = d.path().join("repo");
+    let world = d.path().join("world");
+    build_world(&world);
+
+    let ok = mcagit()
+        .args([
+            "init",
+            repo.to_str().unwrap(),
+            "--worktree",
+            world.to_str().unwrap(),
+        ])
+        .status()
+        .unwrap();
+    assert!(ok.success());
+
+    // stage just level.dat
+    let ok = mcagit()
+        .args(["-C", repo.to_str().unwrap(), "add", "level.dat"])
+        .status()
+        .unwrap();
+    assert!(ok.success());
+
+    let out = mcagit()
+        .args(["-C", repo.to_str().unwrap(), "status"])
+        .output()
+        .unwrap();
+    let text = String::from_utf8(out.stdout).unwrap();
+    assert!(text.contains("Changes staged for commit:"), "got:\n{text}");
+    assert!(text.contains("level.dat"), "got:\n{text}");
+}
+
+#[test]
 fn verify_remote_detects_corruption() {
     let d = tempfile::tempdir().unwrap();
     let repo = d.path().join("repo");
