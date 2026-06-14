@@ -442,6 +442,35 @@ fn bisect_finds_first_bad_commit() {
 }
 
 #[test]
+fn status_lists_untracked_on_unborn_repo() {
+    let d = tempfile::tempdir().unwrap();
+    let repo = d.path().join("repo");
+    let world = d.path().join("world");
+    build_world(&world);
+    let r = repo.to_str().unwrap();
+    assert!(mcagit()
+        .args(["init", r, "--worktree", world.to_str().unwrap()])
+        .status()
+        .unwrap()
+        .success());
+    // No commits yet: every worktree file is untracked, and status must NOT error.
+    let out = mcagit().args(["-C", r, "status"]).output().unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "expected exit 1 (untracked changes): {:?}",
+        out.status
+    );
+    let text = String::from_utf8(out.stdout).unwrap();
+    assert!(text.contains("Untracked files:"), "got:\n{text}");
+    assert!(text.contains("level.dat"), "got:\n{text}");
+    assert!(
+        text.contains("r.0.0.mca"),
+        "region file should be listed untracked:\n{text}"
+    );
+}
+
+#[test]
 fn verify_remote_detects_corruption() {
     let d = tempfile::tempdir().unwrap();
     let repo = d.path().join("repo");

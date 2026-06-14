@@ -502,21 +502,35 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                 .worktree()
                 .map(PathBuf::from)
                 .ok_or_else(|| anyhow!("no worktree bound"))?;
-            let head = repo
-                .head_commit()
-                .ok_or_else(|| anyhow!("no commits yet"))?;
-            let changes = mca_repo::status(&repo, &world, &head)?;
-            if changes.is_empty() {
-                eprintln!("clean — no changes vs HEAD");
+            let r = mca_repo::status_full(&repo, &world)?;
+            if r.staged.is_empty() && r.unstaged.is_empty() && r.untracked.is_empty() {
+                eprintln!("nothing to commit, working tree clean");
                 return Ok(ExitCode::SUCCESS);
             }
-            for c in &changes {
-                let tag = match c.kind {
-                    ChangeKind::Added => "A",
-                    ChangeKind::Modified => "M",
-                    ChangeKind::Removed => "D",
-                };
-                println!("{tag} {}", c.path);
+            let tag = |k: &ChangeKind| match k {
+                ChangeKind::Added => "A",
+                ChangeKind::Modified => "M",
+                ChangeKind::Removed => "D",
+            };
+            // Porcelain-style listing goes to stdout (scriptable); the clean-tree
+            // note above is a stderr message.
+            if !r.staged.is_empty() {
+                println!("Changes staged for commit:");
+                for c in &r.staged {
+                    println!("  {} {}", tag(&c.kind), c.path);
+                }
+            }
+            if !r.unstaged.is_empty() {
+                println!("Changes not staged for commit:");
+                for c in &r.unstaged {
+                    println!("  {} {}", tag(&c.kind), c.path);
+                }
+            }
+            if !r.untracked.is_empty() {
+                println!("Untracked files:");
+                for p in &r.untracked {
+                    println!("  {p}");
+                }
             }
             Ok(ExitCode::from(1))
         }
