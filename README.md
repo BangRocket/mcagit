@@ -46,15 +46,30 @@ crates/
 
 ## Commands
 
-**Version control** — `init · commit [-S] · checkout [--region X,Z] · status · log [--author/--grep/--since] ·
+**Version control** — `init · add · commit [-S|-a] · checkout [--region X,Z] · status · log [--author/--grep/--since] ·
 show · diff [--json] · extract · apply [--reverse] · verify · branch · merge · revert ·
-cherry-pick · rebase · stash [push|pop|list|drop] · reset [--soft/--mixed/--hard] · restore ·
+cherry-pick · rebase · stash [push|pop|list|drop] · reset [--soft/--mixed/--hard] · restore [--staged|--source <rev>] ·
 clean · tag [-a/-s/-m/-v/-f/-n] · verify-commit · reflog [branch] · bisect (start|bad|good|skip|reset|log) ·
 config · rev-parse · cat-file · ls-tree · fsck · gc`
 
 `reflog` shows every HEAD movement and powers `HEAD@{n}` revisions (`reflog <branch>`
 shows a branch's own log and powers `<branch>@{n}`, so a force-moved tip is recoverable); `bisect` binary-searches
 history for the first bad commit, checking each suspect out into the worktree.
+
+**Staging index** — `mcagit` now has a git-style staging area:
+
+- `mcagit add <pathspec>...` — stage worktree paths (files, dirs, or `*`/`?` globs, relative
+  to the worktree root; `-A`/`.` for everything) into the index.
+- `mcagit commit -m "<msg>"` — commit the staging index. `commit -a` snapshots the whole
+  worktree instead (the old snapshot behavior); set `commit.autoStageAll=true` to make bare
+  `commit` do that by default.
+- `mcagit status` — three sections: *staged* (index vs HEAD), *not staged* (worktree vs
+  index), *untracked*.
+- `mcagit restore --staged <path>` — unstage a path (reset its index entry to HEAD, or
+  `--source <rev>`).
+- `mcagit reset` — mixed reset (the default) moves the current branch to the target and clears
+  the whole index; `--soft` moves the ref only; `--hard` also resets the worktree. (Use
+  `restore --staged` to unstage without moving the branch.)
 
 **Hooks & signing** — `<repo>/hooks/pre-commit` (non-zero aborts the commit) and
 `post-commit` run with `MCAGIT_DIR`/`MCAGIT_WORKTREE` set. Commits (`commit -S` or
@@ -152,6 +167,5 @@ end-to-end round-trip checks.
 
 ## Not yet implemented
 
-- A staging index (mcagit is deliberately index-free, like fossil).
 - Cross-object pack deltas (objects are zstd-per-object; no delta chains).
 - The bare `mcagit A B` diff fallthrough (use `mcagit diff A B`).

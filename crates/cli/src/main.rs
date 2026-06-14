@@ -186,8 +186,9 @@ enum Cmd {
     /// Verify a commit's SSH signature (exit 0 only when the signer matches
     /// `gpg.ssh.allowedSignersFile`).
     VerifyCommit { rev: String },
-    /// Move the current branch to <rev>. --hard also resets the worktree;
-    /// --soft/--mixed move the ref only (mcagit has no staging index).
+    /// Move the current branch to <rev>. --hard also resets index + worktree;
+    /// --mixed (default) moves the ref and resets the index; --soft moves the
+    /// ref only.
     Reset {
         rev: String,
         #[arg(long)]
