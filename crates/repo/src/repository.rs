@@ -37,9 +37,15 @@ impl Repository {
         &self.objects
     }
 
-    /// A directory is a repo if it has both `HEAD` and `objects/`.
-    pub fn is_repository(dir: &Path) -> bool {
+    /// True if `dir` *directly* holds the repo metadata (flat / bare layout).
+    fn is_flat_repo(dir: &Path) -> bool {
         dir.join("HEAD").is_file() && dir.join("objects").is_dir()
+    }
+
+    /// A path is (or contains) a repo if it is a flat repo or has an embedded
+    /// `.mcagit/` flat repo inside it.
+    pub fn is_repository(dir: &Path) -> bool {
+        Self::is_flat_repo(dir) || Self::is_flat_repo(&dir.join(".mcagit"))
     }
 
     /// Create a fresh repo (idempotent — re-init keeps existing HEAD).
@@ -53,13 +59,45 @@ impl Repository {
         Self::open(dir)
     }
 
-    pub fn open(dir: &Path) -> Result<Self> {
-        if !Self::is_repository(dir) {
-            return Err(RepoError::NotARepository(dir.display().to_string()));
+    /// Create an embedded repo: metadata under `<folder>/.mcagit`, with `folder`
+    /// bound as the worktree (git-style). Idempotent: re-opens an existing
+    /// embedded repo, and keeps an existing *bare* repo bare (no nested `.mcagit/`).
+    pub fn init_embedded(folder: &Path) -> Result<Self> {
+        std::fs::create_dir_all(folder)?;
+        // Already embedded → re-open (no redundant config write).
+        if Self::is_flat_repo(&folder.join(".mcagit")) {
+            return Self::open(folder);
         }
+        // Already a bare repo → keep it bare (don't nest a `.mcagit/`).
+        if Self::is_flat_repo(folder) {
+            return Self::open(folder);
+        }
+        let repo = Self::init(&folder.join(".mcagit"))?;
+        // Bind the worktree to an absolute path (canonical if possible, else an
+        // absolute fallback — never a relative path in config).
+        let abs = std::fs::canonicalize(folder).unwrap_or_else(|_| {
+            std::env::current_dir()
+                .map(|cwd| cwd.join(folder))
+                .unwrap_or_else(|_| folder.to_path_buf())
+        });
+        repo.set_worktree(&abs.to_string_lossy())?;
+        Ok(repo)
+    }
+
+    /// Open an existing repo at `path`. Prefers an embedded `path/.mcagit/` over
+    /// a flat/bare repo directly at `path`.
+    pub fn open(path: &Path) -> Result<Self> {
+        // Embedded `<path>/.mcagit` wins; otherwise a flat repo at `path`.
+        let dir = if Self::is_flat_repo(&path.join(".mcagit")) {
+            path.join(".mcagit")
+        } else if Self::is_flat_repo(path) {
+            path.to_path_buf()
+        } else {
+            return Err(RepoError::NotARepository(path.display().to_string()));
+        };
         Ok(Self {
-            dir: dir.to_path_buf(),
             objects: ObjectStore::new(dir.join("objects")),
+            dir,
         })
     }
 
@@ -869,5 +907,91 @@ mod tests {
         std::fs::create_dir_all(&nested).unwrap();
         let repo = Repository::discover(&nested).unwrap();
         assert!(Repository::is_repository(repo.dir()));
+    }
+
+    #[test]
+    fn init_embedded_creates_dotmcagit_and_binds_worktree() {
+        let d = tempfile::tempdir().unwrap();
+        let world = d.path().join("world");
+        let repo = Repository::init_embedded(&world).unwrap();
+        assert!(world.join(".mcagit").join("HEAD").is_file());
+        assert!(world.join(".mcagit").join("objects").is_dir());
+        assert!(repo.dir().ends_with(".mcagit"), "dir() points at .mcagit");
+        // worktree is bound to the folder (canonicalized)
+        let wt = repo.worktree().unwrap();
+        assert_eq!(
+            std::fs::canonicalize(&wt).unwrap(),
+            std::fs::canonicalize(&world).unwrap()
+        );
+    }
+
+    #[test]
+    fn open_detects_embedded_and_bare() {
+        let d = tempfile::tempdir().unwrap();
+        // embedded
+        let world = d.path().join("world");
+        Repository::init_embedded(&world).unwrap();
+        let e = Repository::open(&world).unwrap();
+        assert!(e.dir().ends_with(".mcagit"));
+        // bare
+        let bare = d.path().join("bare");
+        Repository::init(&bare).unwrap();
+        let b = Repository::open(&bare).unwrap();
+        assert_eq!(b.dir(), bare.as_path());
+        // neither
+        assert!(Repository::open(&d.path().join("nope")).is_err());
+    }
+
+    #[test]
+    fn discover_finds_embedded_from_nested_subdir() {
+        let d = tempfile::tempdir().unwrap();
+        let world = d.path().join("world");
+        Repository::init_embedded(&world).unwrap();
+        let nested = world.join("region").join("sub");
+        std::fs::create_dir_all(&nested).unwrap();
+        let r = Repository::discover(&nested).unwrap();
+        assert!(r.dir().ends_with(".mcagit"));
+        assert_eq!(
+            std::fs::canonicalize(r.worktree().unwrap()).unwrap(),
+            std::fs::canonicalize(&world).unwrap()
+        );
+    }
+
+    #[test]
+    fn init_embedded_on_existing_bare_stays_bare() {
+        let d = tempfile::tempdir().unwrap();
+        let dir = d.path().join("repo");
+        Repository::init(&dir).unwrap(); // bare: HEAD/objects at top
+        let r = Repository::init_embedded(&dir).unwrap();
+        assert_eq!(
+            r.dir(),
+            dir.as_path(),
+            "re-init keeps the existing bare layout"
+        );
+        assert!(!dir.join(".mcagit").exists(), "must not nest a .mcagit");
+    }
+
+    #[test]
+    fn is_repository_recognizes_both_layouts() {
+        let d = tempfile::tempdir().unwrap();
+        let world = d.path().join("world");
+        Repository::init_embedded(&world).unwrap();
+        let bare = d.path().join("bare");
+        Repository::init(&bare).unwrap();
+        assert!(Repository::is_repository(&world));
+        assert!(Repository::is_repository(&bare));
+        assert!(!Repository::is_repository(&d.path().join("nope")));
+    }
+
+    #[test]
+    fn init_embedded_twice_is_idempotent() {
+        let d = tempfile::tempdir().unwrap();
+        let world = d.path().join("world");
+        let r1 = Repository::init_embedded(&world).unwrap();
+        let wt1 = r1.worktree().unwrap();
+        let r2 = Repository::init_embedded(&world).unwrap();
+        assert!(r2.dir().ends_with(".mcagit"));
+        assert_eq!(r2.worktree().unwrap(), wt1, "worktree unchanged on re-init");
+        assert!(Repository::open(&world).is_ok());
     }
 }
