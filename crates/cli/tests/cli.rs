@@ -459,10 +459,16 @@ fn verify_remote_detects_corruption() {
         .success());
     commit_value(&repo, &world, 4);
 
-    // clone to a "remote" path, then verify-remote against it: ok
+    // clone to a "remote" path (bare so that remote.join("objects") is the flat layout),
+    // then verify-remote against it: ok
     let remote = d.path().join("remote");
     assert!(mcagit()
-        .args(["clone", repo.to_str().unwrap(), remote.to_str().unwrap()])
+        .args([
+            "clone",
+            repo.to_str().unwrap(),
+            remote.to_str().unwrap(),
+            "--bare"
+        ])
         .status()
         .unwrap()
         .success());
@@ -502,4 +508,125 @@ fn verify_remote_detects_corruption() {
         .status()
         .unwrap();
     assert_eq!(st.code(), Some(1), "corruption must be detected");
+}
+
+#[test]
+fn init_embedded_layout_and_discovery() {
+    let d = tempfile::tempdir().unwrap();
+    let world = d.path().join("world");
+    build_world(&world); // region/r.0.0.mca + level.dat
+
+    // `mcagit init` from inside the world, no -C, no dir arg → embedded .mcagit
+    assert!(mcagit()
+        .current_dir(&world)
+        .args(["init"])
+        .status()
+        .unwrap()
+        .success());
+    assert!(
+        world.join(".mcagit").join("HEAD").is_file(),
+        ".mcagit created in the world"
+    );
+
+    // commit from inside the world via discovery (no -C); whole-world snapshot
+    let out = mcagit()
+        .current_dir(&world)
+        .args(["commit", "-m", "seed"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let commit = String::from_utf8(out.stdout).unwrap().trim().to_string();
+    assert_eq!(commit.len(), 64);
+
+    // the repo's own metadata must NOT be committed
+    let tree = mcagit()
+        .current_dir(&world)
+        .args(["ls-tree", &commit])
+        .output()
+        .unwrap();
+    let text = String::from_utf8(tree.stdout).unwrap();
+    assert!(
+        !text.contains(".mcagit"),
+        ".mcagit must not be committed:\n{text}"
+    );
+    assert!(
+        text.contains("level.dat"),
+        "world content committed:\n{text}"
+    );
+}
+
+#[test]
+fn clone_creates_embedded_worktree_and_checks_out() {
+    let d = tempfile::tempdir().unwrap();
+    let src = d.path().join("src");
+    let srcworld = d.path().join("srcworld");
+    build_world(&srcworld);
+
+    // a bare source repo bound to an external world, with one commit
+    assert!(mcagit()
+        .args([
+            "init",
+            src.to_str().unwrap(),
+            "--worktree",
+            srcworld.to_str().unwrap()
+        ])
+        .status()
+        .unwrap()
+        .success());
+    assert!(mcagit()
+        .args(["-C", src.to_str().unwrap(), "commit", "-m", "seed"])
+        .status()
+        .unwrap()
+        .success());
+
+    // clone into a fresh dir → embedded .mcagit + auto-checkout
+    let dst = d.path().join("dst");
+    assert!(mcagit()
+        .args(["clone", src.to_str().unwrap(), dst.to_str().unwrap()])
+        .status()
+        .unwrap()
+        .success());
+    assert!(
+        dst.join(".mcagit").join("HEAD").is_file(),
+        "embedded .mcagit at dst"
+    );
+    assert!(
+        dst.join("level.dat").is_file(),
+        "auto-checkout materialized the world"
+    );
+
+    // After a clean auto-checkout the worktree matches HEAD → status is clean (exit 0).
+    let st = mcagit()
+        .current_dir(&dst)
+        .args(["status"])
+        .status()
+        .unwrap();
+    assert!(
+        st.success(),
+        "status from the embedded worktree should be clean (exit 0): {st:?}"
+    );
+}
+
+#[test]
+fn init_bare_then_default_reinit_stays_bare() {
+    let d = tempfile::tempdir().unwrap();
+    let dir = d.path().join("repo");
+    let r = dir.to_str().unwrap();
+    assert!(mcagit()
+        .args(["init", r, "--bare"])
+        .status()
+        .unwrap()
+        .success());
+    assert!(dir.join("HEAD").is_file(), "bare: HEAD at top level");
+    assert!(!dir.join(".mcagit").exists());
+    // default re-init on an existing bare repo must not nest a .mcagit
+    assert!(mcagit().args(["init", r]).status().unwrap().success());
+    assert!(
+        !dir.join(".mcagit").exists(),
+        "re-init must not nest .mcagit in a bare repo"
+    );
 }

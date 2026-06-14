@@ -62,7 +62,7 @@ history for the first bad commit, checking each suspect out into the worktree.
 using `user.signingkey`; `verify-commit` / `tag -v` exit 0 only when the signer matches
 `gpg.ssh.allowedSignersFile`.
 
-**Remotes** — `clone [--depth N] [--filter blob:none] · push · pull · fetch · ls-remote · remote ·
+**Remotes** — `clone [--depth N] [--filter blob:none] [--bare|--worktree <path>] · push · pull · fetch · ls-remote · remote ·
 verify-remote [--deep]` over a **local path**, **`http(s)://`** (served by
 `mcagit serve <dir>`), **`ssh://`** (served by `mcagit serve-stdio <dir>`, spawned over
 `ssh`), or a serverless cloud object store — **`s3://bucket/prefix`** (any S3-compatible
@@ -96,12 +96,23 @@ inspect <x y z> · where-changed <old> <new>` (the grief detector) `· region <f
 poi · render <world> -o map.png`
 
 ```sh
-mcagit init repo.mcagit --worktree ./World
-mcagit -C repo.mcagit commit -m "before raid"
-mcagit -C repo.mcagit checkout HEAD~1 ./restored
-mcagit -C repo.mcagit verify HEAD ./restored        # fast tree-hash accuracy check
+# embedded layout (default): .mcagit/ lives inside the world folder
+mcagit init ./World              # creates ./World/.mcagit/; run mcagit from anywhere inside
+mcagit -C ./World commit -m "before raid"
+# from inside the world dir, no -C needed (discovery walks up to .mcagit/):
+cd World && mcagit commit -m "before raid"
+mcagit -C ./World checkout HEAD~1 ./restored
+mcagit -C ./World verify HEAD ./restored             # fast tree-hash accuracy check
 mcagit diff ./WorldA ./WorldB                        # shows @x,y,z block changes per chunk
-mcagit -C repo.mcagit gc --threads 8
+mcagit -C ./World gc --threads 8
+
+# opt-out flags (for automation / external worktrees)
+mcagit init repo.mcagit --worktree ./World           # bare layout: metadata in repo.mcagit/
+mcagit init repo.mcagit --bare                       # bare, no worktree
+
+# clone: embedded + auto-checkout (--bare/--worktree opt out)
+mcagit clone ./World ./clone                         # embedded .mcagit/ + checked-out world
+mcagit clone ssh://user@host/srv/worlds/myworld ./myworld
 
 # inspect + grief-detect
 mcagit inspect 2 -48 15 --world ./World              # block + properties + biome + block-entity
@@ -111,7 +122,6 @@ mcagit render ./World -o map.png                     # top-down surface map
 # self-hosted remotes
 mcagit serve /srv/worlds --addr 0.0.0.0:5080         # hub: clone/push http://host/r/<name>
 mcagit push http://host:5080/r/myworld main
-mcagit clone ssh://user@host/srv/worlds/myworld ./myworld
 ```
 
 ## Performance
@@ -140,8 +150,15 @@ canonicalizing unchanged chunks entirely; a hit is only trusted if the object ex
 
 - Object id = `blake3(uncompressed canonical NBT)`; loose objects are `zstd`-compressed at
   `objects/aa/rest`; packs are `objects/pack/pack-<id>.{pack,idx}` (mmap'd).
-- The repo is **bare and external** to the world; the bound worktree is recorded in the repo
-  `config`. `Repository::discover` walks up from cwd, git-style.
+- `mcagit init [<dir>]` creates an **embedded** repo by default: metadata under `<dir>/.mcagit/`,
+  worktree = `<dir>` (git-style). Run `mcagit` commands from anywhere inside `<dir>` — they
+  discover `.mcagit/`. `--worktree <path>` uses a bare layout in `<dir>` bound to an external
+  world; `--bare` makes a bare repo with no worktree.
+- `mcagit clone <src> <dir>` also defaults to embedded (`.mcagit/` inside `<dir>`) and
+  auto-checks out HEAD into `<dir>`. `--bare`/`--worktree <path>` opt out;
+  `--filter blob:none` clones the skeleton only and checks out nothing.
+- `Repository::discover` walks up from cwd, git-style, preferring `.mcagit/` over a flat
+  layout. The worktree binding is recorded in the repo `config`.
 - Region files written on checkout are valid Anvil (zlib chunks) but not byte-identical to
   Minecraft's own output — **semantic diff / `verify` is the equivalence check** (an unchanged
   chunk hashes identically regardless of on-disk compression).

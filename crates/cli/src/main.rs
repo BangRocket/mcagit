@@ -24,11 +24,17 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Cmd {
-    /// Create a repo, optionally binding a world as the worktree.
+    /// Create a repo. Default: embedded `<dir>/.mcagit/` with the worktree bound
+    /// to `<dir>`. `--worktree` binds an external world (bare layout in `<dir>`);
+    /// `--bare` makes a bare repo with no worktree.
     Init {
         dir: Option<PathBuf>,
-        #[arg(long)]
+        /// Bind an external worktree (bare layout: metadata directly in <dir>).
+        #[arg(long, conflicts_with = "bare")]
         worktree: Option<PathBuf>,
+        /// Bare repo: metadata directly in <dir>, no worktree, no `.mcagit/`.
+        #[arg(long)]
+        bare: bool,
     },
     /// Snapshot a world (the bound worktree, or a given path).
     Commit {
@@ -207,6 +213,13 @@ enum Cmd {
         /// only; leaf chunks are backfilled on demand (e.g. at checkout).
         #[arg(long)]
         filter: Option<String>,
+        /// Bare clone: metadata in <dst>, no worktree, no checkout.
+        #[arg(long, conflicts_with = "worktree")]
+        bare: bool,
+        /// Bind an external worktree instead of the embedded `.mcagit/` default
+        /// (no auto-checkout of <dst>).
+        #[arg(long)]
+        worktree: Option<PathBuf>,
     },
     /// Push a branch to a remote (a configured remote name or a URL/path).
     Push {
@@ -363,17 +376,44 @@ fn main() -> ExitCode {
 
 fn run(cli: Cli) -> anyhow::Result<ExitCode> {
     match &cli.cmd {
-        Cmd::Init { dir, worktree } => {
+        Cmd::Init {
+            dir,
+            worktree,
+            bare,
+        } => {
             let dir = dir
                 .clone()
                 .or_else(|| cli.repo.clone())
                 .unwrap_or_else(|| PathBuf::from("."));
-            let repo = Repository::init(&dir)?;
             if let Some(w) = worktree {
+                // External worktree → bare/flat layout in `dir`.
+                let repo = Repository::init(&dir)?;
                 let w = std::fs::canonicalize(w).unwrap_or_else(|_| w.clone());
                 repo.set_worktree(&w.to_string_lossy())?;
+                eprintln!(
+                    "Initialized mcagit repository in {} (worktree {})",
+                    dir.display(),
+                    w.display()
+                );
+            } else if *bare {
+                Repository::init(&dir)?;
+                eprintln!("Initialized bare mcagit repository in {}", dir.display());
+            } else {
+                // Default: embedded `.mcagit/` with the worktree = dir (or keep an
+                // existing bare repo bare).
+                let repo = Repository::init_embedded(&dir)?;
+                if repo.dir().ends_with(".mcagit") {
+                    eprintln!(
+                        "Initialized mcagit repository in {} (.mcagit/)",
+                        dir.display()
+                    );
+                } else {
+                    eprintln!(
+                        "Reinitialized existing bare mcagit repository in {}",
+                        dir.display()
+                    );
+                }
             }
-            eprintln!("Initialized empty mcagit repository in {}", dir.display());
             Ok(ExitCode::SUCCESS)
         }
 
@@ -1108,18 +1148,33 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             dst,
             depth,
             filter,
+            bare,
+            worktree,
         } => {
+            // Embedded (.mcagit/ + worktree=dst) unless --bare or --worktree.
+            let embedded = !*bare && worktree.is_none();
             let suffix = match filter.as_deref() {
                 Some("blob:none") => {
                     if depth.is_some() {
                         bail!("--filter and --depth cannot be combined");
                     }
-                    mca_repo::remote::clone_partial(src, dst)?;
+                    let repo = mca_repo::remote::clone_partial(src, dst, embedded)?;
+                    if let Some(w) = worktree {
+                        bind_worktree(&repo, w)?;
+                    }
+                    // Partial clones intentionally check out nothing (the leaves
+                    // aren't fetched); the worktree stays empty until checkout.
                     " (partial: blob:none)".to_string()
                 }
                 Some(other) => bail!("unsupported filter: {other} (only blob:none)"),
                 None => {
-                    mca_repo::remote::clone_depth(src, dst, depth.unwrap_or(0))?;
+                    let repo =
+                        mca_repo::remote::clone_depth(src, dst, depth.unwrap_or(0), embedded)?;
+                    if let Some(w) = worktree {
+                        bind_worktree(&repo, w)?;
+                    } else if embedded {
+                        checkout_after_clone(&repo)?;
+                    }
                     depth.map(|d| format!(" (depth {d})")).unwrap_or_default()
                 }
             };
@@ -1537,6 +1592,28 @@ fn open_repo(cli: &Cli) -> anyhow::Result<Repository> {
         Some(d) => Ok(Repository::open(d)?),
         None => Ok(Repository::discover(&std::env::current_dir()?)?),
     }
+}
+
+/// Bind an external worktree (canonicalized) to a repo's config.
+fn bind_worktree(repo: &Repository, w: &std::path::Path) -> anyhow::Result<()> {
+    let w = std::fs::canonicalize(w).unwrap_or_else(|_| w.to_path_buf());
+    repo.set_worktree(&w.to_string_lossy())?;
+    Ok(())
+}
+
+/// After an embedded clone, materialize HEAD into the bound worktree (git-style).
+/// A no-op for an empty clone (no HEAD) or a repo with no bound worktree.
+fn checkout_after_clone(repo: &Repository) -> anyhow::Result<()> {
+    let Some(wt) = repo.worktree() else {
+        return Ok(());
+    };
+    let Some(head) = repo.head_commit() else {
+        return Ok(());
+    };
+    let manifest = repo.read_manifest(&repo.read_commit(&head)?.tree)?;
+    mca_repo::checkout(repo, &manifest, std::path::Path::new(&wt), false)?;
+    eprintln!("Checked out {} into {wt}", &head[..10.min(head.len())]);
+    Ok(())
 }
 
 fn bisect_cmd(cli: &Cli, action: &BisectCmd) -> anyhow::Result<ExitCode> {
