@@ -34,6 +34,8 @@ fn build_world(world: &Path) {
         ChunkCompression::GZip,
     )
     .unwrap();
+    // icon.png: a tracked blob file (so modifications show as "not staged" rather than untracked)
+    std::fs::write(world.join("icon.png"), b"icon").unwrap();
 }
 
 #[test]
@@ -55,7 +57,7 @@ fn init_commit_checkout_roundtrip() {
     assert!(ok.success());
 
     let out = mcagit()
-        .args(["-C", repo.to_str().unwrap(), "commit", "-m", "first"])
+        .args(["-C", repo.to_str().unwrap(), "commit", "-a", "-m", "first"])
         .output()
         .unwrap();
     assert!(out.status.success());
@@ -165,7 +167,7 @@ fn plumbing_tag_revparse_lstree() {
         .unwrap()
         .success());
     let out = mcagit()
-        .args(["-C", repo.to_str().unwrap(), "commit", "-m", "c1"])
+        .args(["-C", repo.to_str().unwrap(), "commit", "-a", "-m", "c1"])
         .output()
         .unwrap();
     let commit = String::from_utf8(out.stdout).unwrap().trim().to_string();
@@ -237,7 +239,7 @@ fn hooks_gate_commit() {
     )
     .unwrap();
     assert!(mcagit()
-        .args(["-C", repo.to_str().unwrap(), "commit", "-m", "ok"])
+        .args(["-C", repo.to_str().unwrap(), "commit", "-a", "-m", "ok"])
         .status()
         .unwrap()
         .success());
@@ -261,7 +263,7 @@ fn annotated_tag_create_list_peel() {
         .unwrap()
         .success());
     let out = mcagit()
-        .args(["-C", repo.to_str().unwrap(), "commit", "-m", "c1"])
+        .args(["-C", repo.to_str().unwrap(), "commit", "-a", "-m", "c1"])
         .output()
         .unwrap();
     let commit = String::from_utf8(out.stdout).unwrap().trim().to_string();
@@ -329,6 +331,7 @@ fn commit_value(repo: &Path, world: &Path, v: i32) -> String {
             "-C",
             repo.to_str().unwrap(),
             "commit",
+            "-a",
             "-m",
             &format!("v{v}"),
         ])
@@ -442,6 +445,179 @@ fn bisect_finds_first_bad_commit() {
 }
 
 #[test]
+fn status_lists_untracked_on_unborn_repo() {
+    let d = tempfile::tempdir().unwrap();
+    let repo = d.path().join("repo");
+    let world = d.path().join("world");
+    build_world(&world);
+    let r = repo.to_str().unwrap();
+    assert!(mcagit()
+        .args(["init", r, "--worktree", world.to_str().unwrap()])
+        .status()
+        .unwrap()
+        .success());
+    // No commits yet: every worktree file is untracked, and status must NOT error.
+    let out = mcagit().args(["-C", r, "status"]).output().unwrap();
+    assert_eq!(
+        out.status.code(),
+        Some(1),
+        "expected exit 1 (untracked changes): {:?}",
+        out.status
+    );
+    let text = String::from_utf8(out.stdout).unwrap();
+    assert!(text.contains("Untracked files:"), "got:\n{text}");
+    assert!(text.contains("level.dat"), "got:\n{text}");
+    assert!(
+        text.contains("r.0.0.mca"),
+        "region file should be listed untracked:\n{text}"
+    );
+}
+
+#[test]
+fn add_then_status_shows_staged() {
+    let d = tempfile::tempdir().unwrap();
+    let repo = d.path().join("repo");
+    let world = d.path().join("world");
+    build_world(&world);
+
+    let ok = mcagit()
+        .args([
+            "init",
+            repo.to_str().unwrap(),
+            "--worktree",
+            world.to_str().unwrap(),
+        ])
+        .status()
+        .unwrap();
+    assert!(ok.success());
+
+    // stage just level.dat
+    let ok = mcagit()
+        .args(["-C", repo.to_str().unwrap(), "add", "level.dat"])
+        .status()
+        .unwrap();
+    assert!(ok.success());
+
+    let out = mcagit()
+        .args(["-C", repo.to_str().unwrap(), "status"])
+        .output()
+        .unwrap();
+    let text = String::from_utf8(out.stdout).unwrap();
+    assert!(text.contains("Changes staged for commit:"), "got:\n{text}");
+    assert!(text.contains("level.dat"), "got:\n{text}");
+}
+
+#[test]
+fn bare_commit_commits_only_the_index() {
+    let d = tempfile::tempdir().unwrap();
+    let repo = d.path().join("repo");
+    let world = d.path().join("world");
+    build_world(&world);
+    let r = repo.to_str().unwrap();
+
+    assert!(mcagit()
+        .args(["init", r, "--worktree", world.to_str().unwrap()])
+        .status()
+        .unwrap()
+        .success());
+    // first commit: seed HEAD with the whole world
+    assert!(mcagit()
+        .args(["-C", r, "commit", "-a", "-m", "seed"])
+        .status()
+        .unwrap()
+        .success());
+
+    // modify two files, stage only one
+    std::fs::write(world.join("icon.png"), b"CHANGED").unwrap();
+    std::fs::write(world.join("level.dat"), b"also changed").unwrap();
+    assert!(mcagit()
+        .args(["-C", r, "add", "icon.png"])
+        .status()
+        .unwrap()
+        .success());
+
+    // bare commit captures only the staged icon.png; level.dat stays dirty
+    assert!(mcagit()
+        .args(["-C", r, "commit", "-m", "staged only"])
+        .status()
+        .unwrap()
+        .success());
+
+    let out = mcagit().args(["-C", r, "status"]).output().unwrap();
+    let text = String::from_utf8(out.stdout).unwrap();
+    assert!(
+        text.contains("Changes not staged for commit:"),
+        "got:\n{text}"
+    );
+    assert!(text.contains("level.dat"), "level.dat still dirty:\n{text}");
+    assert!(
+        !text.contains("Changes staged for commit:"),
+        "index cleared after commit:\n{text}"
+    );
+}
+
+#[test]
+fn bare_commit_with_nothing_staged_errors() {
+    let d = tempfile::tempdir().unwrap();
+    let repo = d.path().join("repo");
+    let world = d.path().join("world");
+    build_world(&world);
+    let r = repo.to_str().unwrap();
+
+    assert!(mcagit()
+        .args(["init", r, "--worktree", world.to_str().unwrap()])
+        .status()
+        .unwrap()
+        .success());
+    assert!(mcagit()
+        .args(["-C", r, "commit", "-a", "-m", "seed"])
+        .status()
+        .unwrap()
+        .success());
+
+    // dirty the worktree but stage nothing
+    std::fs::write(world.join("icon.png"), b"CHANGED").unwrap();
+    let out = mcagit()
+        .args(["-C", r, "commit", "-m", "x"])
+        .output()
+        .unwrap();
+    assert!(!out.status.success(), "should refuse with nothing staged");
+    let err = String::from_utf8(out.stderr).unwrap();
+    assert!(err.contains("nothing staged"), "got:\n{err}");
+}
+
+#[test]
+fn commit_autostageall_config_commits_whole_worktree() {
+    let d = tempfile::tempdir().unwrap();
+    let repo = d.path().join("repo");
+    let world = d.path().join("world");
+    build_world(&world);
+    let r = repo.to_str().unwrap();
+    assert!(mcagit()
+        .args(["init", r, "--worktree", world.to_str().unwrap()])
+        .status()
+        .unwrap()
+        .success());
+    assert!(mcagit()
+        .args(["-C", r, "config", "commit.autoStageAll", "true"])
+        .status()
+        .unwrap()
+        .success());
+    // bare commit with autoStageAll set behaves like -a (no prior `add` needed)
+    let out = mcagit()
+        .args(["-C", r, "commit", "-m", "seed"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let commit = String::from_utf8(out.stdout).unwrap().trim().to_string();
+    assert_eq!(commit.len(), 64, "commit id on stdout");
+}
+
+#[test]
 fn verify_remote_detects_corruption() {
     let d = tempfile::tempdir().unwrap();
     let repo = d.path().join("repo");
@@ -502,4 +678,195 @@ fn verify_remote_detects_corruption() {
         .status()
         .unwrap();
     assert_eq!(st.code(), Some(1), "corruption must be detected");
+}
+
+#[test]
+fn restore_staged_unstages_a_path() {
+    let d = tempfile::tempdir().unwrap();
+    let repo = d.path().join("repo");
+    let world = d.path().join("world");
+    build_world(&world);
+    let r = repo.to_str().unwrap();
+
+    assert!(mcagit()
+        .args(["init", r, "--worktree", world.to_str().unwrap()])
+        .status()
+        .unwrap()
+        .success());
+    assert!(mcagit()
+        .args(["-C", r, "commit", "-a", "-m", "seed"])
+        .status()
+        .unwrap()
+        .success());
+
+    std::fs::write(world.join("icon.png"), b"CHANGED").unwrap();
+    assert!(mcagit()
+        .args(["-C", r, "add", "icon.png"])
+        .status()
+        .unwrap()
+        .success());
+
+    // confirm staged
+    let out = mcagit().args(["-C", r, "status"]).output().unwrap();
+    assert!(String::from_utf8(out.stdout)
+        .unwrap()
+        .contains("Changes staged for commit:"));
+
+    // unstage
+    assert!(mcagit()
+        .args(["-C", r, "restore", "--staged", "icon.png"])
+        .status()
+        .unwrap()
+        .success());
+
+    let out = mcagit().args(["-C", r, "status"]).output().unwrap();
+    let text = String::from_utf8(out.stdout).unwrap();
+    assert!(
+        !text.contains("Changes staged for commit:"),
+        "should be unstaged:\n{text}"
+    );
+    assert!(
+        text.contains("Changes not staged for commit:"),
+        "now unstaged:\n{text}"
+    );
+    assert!(
+        !repo.join("index").exists(),
+        "unstaging the only staged path should clear the index file"
+    );
+}
+
+#[test]
+fn reset_clears_the_index() {
+    let d = tempfile::tempdir().unwrap();
+    let repo = d.path().join("repo");
+    let world = d.path().join("world");
+    build_world(&world);
+    let r = repo.to_str().unwrap();
+
+    assert!(mcagit()
+        .args(["init", r, "--worktree", world.to_str().unwrap()])
+        .status()
+        .unwrap()
+        .success());
+    assert!(mcagit()
+        .args(["-C", r, "commit", "-a", "-m", "seed"])
+        .status()
+        .unwrap()
+        .success());
+
+    std::fs::write(world.join("icon.png"), b"CHANGED").unwrap();
+    assert!(mcagit()
+        .args(["-C", r, "add", "icon.png"])
+        .status()
+        .unwrap()
+        .success());
+    // mixed reset to HEAD clears staged state
+    assert!(mcagit()
+        .args(["-C", r, "reset", "HEAD"])
+        .status()
+        .unwrap()
+        .success());
+
+    let out = mcagit().args(["-C", r, "status"]).output().unwrap();
+    let text = String::from_utf8(out.stdout).unwrap();
+    assert!(
+        !text.contains("Changes staged for commit:"),
+        "reset clears index:\n{text}"
+    );
+    assert!(
+        text.contains("Changes not staged for commit:"),
+        "worktree change remains:\n{text}"
+    );
+}
+
+#[test]
+fn stash_clears_the_index() {
+    let d = tempfile::tempdir().unwrap();
+    let repo = d.path().join("repo");
+    let world = d.path().join("world");
+    build_world(&world);
+    let r = repo.to_str().unwrap();
+    assert!(mcagit()
+        .args(["init", r, "--worktree", world.to_str().unwrap()])
+        .status()
+        .unwrap()
+        .success());
+    assert!(mcagit()
+        .args(["-C", r, "commit", "-a", "-m", "seed"])
+        .status()
+        .unwrap()
+        .success());
+
+    // modify and stage a tracked file
+    std::fs::write(world.join("icon.png"), b"CHANGED").unwrap();
+    assert!(mcagit()
+        .args(["-C", r, "add", "icon.png"])
+        .status()
+        .unwrap()
+        .success());
+    assert!(
+        repo.join("index").exists(),
+        "precondition: something is staged"
+    );
+
+    // stash rewrites the worktree → the index must be cleared
+    assert!(mcagit()
+        .args(["-C", r, "stash", "push"])
+        .status()
+        .unwrap()
+        .success());
+    assert!(
+        !repo.join("index").exists(),
+        "stash push must clear the index"
+    );
+}
+
+#[test]
+fn checkout_clears_the_index() {
+    let d = tempfile::tempdir().unwrap();
+    let repo = d.path().join("repo");
+    let world = d.path().join("world");
+    build_world(&world);
+    let r = repo.to_str().unwrap();
+    assert!(mcagit()
+        .args(["init", r, "--worktree", world.to_str().unwrap()])
+        .status()
+        .unwrap()
+        .success());
+    assert!(mcagit()
+        .args(["-C", r, "commit", "-a", "-m", "seed"])
+        .status()
+        .unwrap()
+        .success());
+    // stage a change
+    std::fs::write(world.join("icon.png"), b"CHANGED").unwrap();
+    assert!(mcagit()
+        .args(["-C", r, "add", "icon.png"])
+        .status()
+        .unwrap()
+        .success());
+    assert!(
+        repo.join("index").exists(),
+        "precondition: something staged"
+    );
+    // checking out the current commit back into the bound worktree must clear the index
+    let head = String::from_utf8(
+        mcagit()
+            .args(["-C", r, "rev-parse", "HEAD"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap()
+    .trim()
+    .to_string();
+    assert!(mcagit()
+        .args(["-C", r, "checkout", &head])
+        .status()
+        .unwrap()
+        .success());
+    assert!(
+        !repo.join("index").exists(),
+        "checkout into the worktree must clear the index"
+    );
 }

@@ -30,7 +30,7 @@ pub type Progress<'a> = &'a (dyn Fn(usize, usize) + Sync);
 /// A persistent compressed-payload → object-id cache skips decoding chunks
 /// whose raw bytes are unchanged (the common incremental-backup case).
 pub fn snapshot(repo: &Repository, world_dir: &Path) -> Result<Manifest> {
-    snapshot_inner(repo, world_dir, None)
+    snapshot_inner(repo, world_dir, None, &|_| true)
 }
 
 /// Like [`snapshot`], reporting per-file progress (a first commit decodes
@@ -40,13 +40,14 @@ pub fn snapshot_with_progress(
     world_dir: &Path,
     progress: Progress,
 ) -> Result<Manifest> {
-    snapshot_inner(repo, world_dir, Some(progress))
+    snapshot_inner(repo, world_dir, Some(progress), &|_| true)
 }
 
 fn snapshot_inner(
     repo: &Repository,
     world_dir: &Path,
     progress: Option<Progress>,
+    accept: &dyn Fn(&str) -> bool,
 ) -> Result<Manifest> {
     let pack_dir = repo.objects().pack_dir();
     let writer = Mutex::new(PackWriter::new(&pack_dir)?);
@@ -57,6 +58,7 @@ fn snapshot_inner(
         Some(repo.dir()),
         Some(&cache),
         progress,
+        accept,
     )?;
     let writer = writer.into_inner().unwrap();
     if !writer.is_empty() {
@@ -65,6 +67,16 @@ fn snapshot_inner(
     }
     cache.save()?;
     Ok(manifest)
+}
+
+/// Snapshot only the worktree files whose rel-path satisfies `accept`, streaming
+/// new objects into a pack. Returns a partial manifest of just those entries.
+pub fn snapshot_scoped(
+    repo: &Repository,
+    world_dir: &Path,
+    accept: &dyn Fn(&str) -> bool,
+) -> Result<Manifest> {
+    snapshot_inner(repo, world_dir, None, accept)
 }
 
 /// Compute the manifest (and object ids) WITHOUT writing — used by status.
@@ -78,6 +90,7 @@ pub fn hash_only(repo: &Repository, world_dir: &Path) -> Result<Manifest> {
         Some(repo.dir()),
         Some(&cache),
         None,
+        &|_| true,
     )
 }
 
@@ -97,6 +110,7 @@ fn build(
     repo_dir: Option<&Path>,
     cache: Option<&ChunkCache>,
     progress: Option<Progress>,
+    accept: &dyn Fn(&str) -> bool,
 ) -> Result<Manifest> {
     let root = std::fs::canonicalize(world_dir).unwrap_or_else(|_| world_dir.to_path_buf());
     let repo_prefix = repo_dir.and_then(|d| std::fs::canonicalize(d).ok());
@@ -124,6 +138,8 @@ fn build(
         }
     }
 
+    files.retain(|p| accept(&rel_path(&root, p)));
+    dirs.retain(|p| accept(&rel_path(&root, p)));
     let total = files.len();
     let done = std::sync::atomic::AtomicUsize::new(0);
     let entries: Vec<Entry> = files
@@ -350,6 +366,25 @@ mod tests {
             vec![(1, 3), (2, 3), (3, 3)],
             "called once per file with a running count"
         );
+    }
+
+    #[test]
+    fn snapshot_scoped_captures_only_accepted_paths() {
+        let d = tempfile::tempdir().unwrap();
+        let repo = Repository::init(&d.path().join("repo")).unwrap();
+        let world = d.path().join("world");
+        build_world(&world); // region/r.0.0.mca, level.dat, icon.png, playerdata/
+
+        // accept only the region file
+        let m = snapshot_scoped(&repo, &world, &|rel| rel == "region/r.0.0.mca").unwrap();
+        assert!(m.regions.contains_key("region/r.0.0.mca"));
+        assert!(m.nbt.is_empty(), "level.dat excluded");
+        assert!(m.blobs.is_empty(), "icon.png excluded");
+        assert!(m.empty_dirs.is_empty(), "playerdata dir excluded");
+
+        // accept-all matches the full snapshot
+        let all = snapshot_scoped(&repo, &world, &|_| true).unwrap();
+        assert_eq!(all, snapshot(&repo, &world).unwrap());
     }
 
     #[test]

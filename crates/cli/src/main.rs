@@ -37,7 +37,18 @@ enum Cmd {
         /// Sign the commit with SSH (uses `user.signingkey`).
         #[arg(short = 'S', long)]
         sign: bool,
+        /// Snapshot the whole worktree instead of committing the index.
+        #[arg(short = 'a', long = "all")]
+        all: bool,
         world: Option<PathBuf>,
+    },
+    /// Stage worktree paths into the index for the next commit.
+    Add {
+        /// Paths / directories / globs to stage (relative to the worktree root).
+        pathspecs: Vec<String>,
+        /// Stage all changes across the whole worktree.
+        #[arg(short = 'A', long)]
+        all: bool,
     },
     /// Materialize a snapshot into a directory (the worktree, or a given path).
     Checkout {
@@ -175,8 +186,9 @@ enum Cmd {
     /// Verify a commit's SSH signature (exit 0 only when the signer matches
     /// `gpg.ssh.allowedSignersFile`).
     VerifyCommit { rev: String },
-    /// Move the current branch to <rev>. --hard also resets the worktree;
-    /// --soft/--mixed move the ref only (mcagit has no staging index).
+    /// Move the current branch to <rev>. --hard also resets index + worktree;
+    /// --mixed (default) moves the ref and resets the index; --soft moves the
+    /// ref only.
     Reset {
         rev: String,
         #[arg(long)]
@@ -186,8 +198,17 @@ enum Cmd {
         #[arg(long)]
         mixed: bool,
     },
-    /// Restore specific files from <rev> into the worktree.
-    Restore { rev: String, paths: Vec<String> },
+    /// Restore worktree files from a revision, or unstage with --staged.
+    Restore {
+        /// Paths to restore (worktree files, or index entries with --staged).
+        paths: Vec<String>,
+        /// Restore the index entry (unstage) instead of the worktree file.
+        #[arg(long)]
+        staged: bool,
+        /// Source revision (default: HEAD).
+        #[arg(long, default_value = "HEAD")]
+        source: String,
+    },
     /// Remove untracked files from the worktree (-n preview, -f remove).
     Clean {
         #[arg(short = 'n')]
@@ -380,34 +401,72 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         Cmd::Commit {
             message,
             sign,
+            all,
             world,
         } => {
             let repo = open_repo(&cli)?;
-            let world = world
-                .clone()
-                .or_else(|| repo.worktree().map(PathBuf::from))
-                .ok_or_else(|| anyhow!("no world given and no worktree bound"))?;
+            let worktree = repo.worktree().map(PathBuf::from);
             if mca_repo::hooks::run(&repo, "pre-commit") != 0 {
                 bail!("pre-commit hook failed; commit aborted");
             }
-            // A first commit decodes every chunk — show a sign of life on a tty.
-            let manifest = if std::io::stderr().is_terminal() {
-                let m = snapshot::snapshot_with_progress(&repo, &world, &|done, total| {
-                    eprint!("\rsnapshot: {done}/{total} files");
-                })?;
-                eprint!("\r\x1b[K"); // clear the progress line
-                m
+            let auto = repo
+                .config_get("commit.autoStageAll")
+                .is_some_and(|v| v.eq_ignore_ascii_case("true"));
+            // Whole-worktree snapshot when -a / autoStageAll / an explicit path;
+            // otherwise commit the staging index.
+            let whole = *all || auto || world.is_some();
+
+            let manifest = if whole {
+                let dir = world
+                    .clone()
+                    .or_else(|| worktree.clone())
+                    .ok_or_else(|| anyhow!("no world given and no worktree bound"))?;
+                if std::io::stderr().is_terminal() {
+                    let m = snapshot::snapshot_with_progress(&repo, &dir, &|done, total| {
+                        eprint!("\rsnapshot: {done}/{total} files");
+                    })?;
+                    eprint!("\r\x1b[K");
+                    m
+                } else {
+                    snapshot::snapshot(&repo, &dir)?
+                }
             } else {
-                snapshot::snapshot(&repo, &world)?
+                mca_repo::index::effective(&repo)?
             };
+
             let tree = repo.write_manifest(&manifest)?;
             let head = repo.head_commit();
-            if let Some(h) = &head {
-                if repo.read_commit(h)?.tree == tree {
-                    eprintln!("nothing to commit — world matches HEAD");
-                    return Ok(ExitCode::SUCCESS);
+            let head_tree = match &head {
+                Some(h) => Some(repo.read_commit(h)?.tree),
+                None => None,
+            };
+
+            // Guardrail: is there anything new to commit?
+            let nothing_new = head_tree.as_deref() == Some(tree.as_str())
+                || (head.is_none() && manifest == mca_repo::Manifest::default());
+            if nothing_new {
+                if !whole {
+                    let dirty = match (&worktree, &head) {
+                        (Some(wt), Some(h)) => {
+                            !mca_repo::status(&repo, std::path::Path::new(wt), h)?.is_empty()
+                        }
+                        (Some(wt), None) => std::fs::read_dir(wt)
+                            .map(|mut it| it.next().is_some())
+                            .unwrap_or(false),
+                        _ => false,
+                    };
+                    if dirty {
+                        bail!("nothing staged for commit. use `mcagit add <path>` or `commit -a`.");
+                    }
                 }
+                if head.is_none() {
+                    eprintln!("nothing to commit — nothing staged");
+                } else {
+                    eprintln!("nothing to commit — world matches HEAD");
+                }
+                return Ok(ExitCode::SUCCESS);
             }
+
             let parents: Vec<String> = head.clone().into_iter().collect();
             let sign_fn = signer(&repo, *sign)?;
             let commit = repo.create_commit_signed(
@@ -423,6 +482,12 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                 None => repo.set_head_detached(&commit)?,
             }
             repo.record_head(head.as_deref(), &commit, &format!("commit: {message}"))?;
+            // The commit came from the bound worktree (index, or -a/autoStageAll) →
+            // its index is now clean. Don't touch it when committing an explicit
+            // external <world> path that has nothing to do with the index.
+            if world.is_none() {
+                mca_repo::index::clear(&repo)?;
+            }
             mca_repo::hooks::run(&repo, "post-commit");
             let files = manifest.regions.len() + manifest.nbt.len() + manifest.blobs.len();
             let chunks: usize = manifest.regions.values().map(|c| c.len()).sum();
@@ -433,6 +498,29 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                 message
             );
             println!("{commit}"); // stdout: the new commit id (scriptable)
+            Ok(ExitCode::SUCCESS)
+        }
+
+        Cmd::Add { pathspecs, all } => {
+            let repo = open_repo(&cli)?;
+            let world = repo
+                .worktree()
+                .map(PathBuf::from)
+                .ok_or_else(|| anyhow!("no worktree bound"))?;
+            let specs: Vec<String> = if *all {
+                vec![".".to_string()]
+            } else {
+                pathspecs.clone()
+            };
+            if specs.is_empty() {
+                bail!("nothing specified — give a pathspec or use -A");
+            }
+            let n = mca_repo::index::add_paths(&repo, &world, &specs)?;
+            if n > 0 {
+                eprintln!("staged {n} path(s)");
+            } else {
+                eprintln!("nothing to stage — already up to date");
+            }
             Ok(ExitCode::SUCCESS)
         }
 
@@ -477,6 +565,9 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             // full checkout so `--region` doesn't delete the rest of a worktree.
             let prune = regions.is_empty();
             mca_repo::checkout(&repo, &manifest, &out, prune)?;
+            if is_worktree {
+                mca_repo::index::clear(&repo)?; // worktree rewritten → index no longer valid
+            }
             let old_head = repo.head_commit();
             if repo.read_branch(reff).is_some() {
                 repo.set_head_to_branch(reff)?;
@@ -502,21 +593,35 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                 .worktree()
                 .map(PathBuf::from)
                 .ok_or_else(|| anyhow!("no worktree bound"))?;
-            let head = repo
-                .head_commit()
-                .ok_or_else(|| anyhow!("no commits yet"))?;
-            let changes = mca_repo::status(&repo, &world, &head)?;
-            if changes.is_empty() {
-                eprintln!("clean — no changes vs HEAD");
+            let r = mca_repo::status_full(&repo, &world)?;
+            if r.staged.is_empty() && r.unstaged.is_empty() && r.untracked.is_empty() {
+                eprintln!("nothing to commit, working tree clean");
                 return Ok(ExitCode::SUCCESS);
             }
-            for c in &changes {
-                let tag = match c.kind {
-                    ChangeKind::Added => "A",
-                    ChangeKind::Modified => "M",
-                    ChangeKind::Removed => "D",
-                };
-                println!("{tag} {}", c.path);
+            let tag = |k: &ChangeKind| match k {
+                ChangeKind::Added => "A",
+                ChangeKind::Modified => "M",
+                ChangeKind::Removed => "D",
+            };
+            // Porcelain-style listing goes to stdout (scriptable); the clean-tree
+            // note above is a stderr message.
+            if !r.staged.is_empty() {
+                println!("Changes staged for commit:");
+                for c in &r.staged {
+                    println!("  {} {}", tag(&c.kind), c.path);
+                }
+            }
+            if !r.unstaged.is_empty() {
+                println!("Changes not staged for commit:");
+                for c in &r.unstaged {
+                    println!("  {} {}", tag(&c.kind), c.path);
+                }
+            }
+            if !r.untracked.is_empty() {
+                println!("Untracked files:");
+                for p in &r.untracked {
+                    println!("  {p}");
+                }
             }
             Ok(ExitCode::from(1))
         }
@@ -708,6 +813,7 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                         let m = repo.read_manifest(&repo.read_commit(&t)?.tree)?;
                         mca_repo::checkout(&repo, &m, std::path::Path::new(&wt), true)?;
                     }
+                    mca_repo::index::clear(&repo)?; // merge rewrote the worktree
                     eprintln!("Merge complete -> {}", &t[..10]);
                     Ok(ExitCode::SUCCESS)
                 }
@@ -813,7 +919,10 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                         .worktree()
                         .ok_or_else(|| anyhow!("no worktree bound"))?;
                     match mca_repo::stash::pop(&repo, std::path::Path::new(&wt))? {
-                        Some(s) => eprintln!("popped {}", &s[..10]),
+                        Some(s) => {
+                            eprintln!("popped {}", &s[..10]);
+                            mca_repo::index::clear(&repo)?; // worktree rewritten → index clean
+                        }
                         None => eprintln!("stash empty"),
                     }
                     Ok(ExitCode::SUCCESS)
@@ -828,7 +937,10 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                         &author(&repo),
                         &now_secs(),
                     )? {
-                        Some(s) => eprintln!("stashed {}", &s[..10]),
+                        Some(s) => {
+                            eprintln!("stashed {}", &s[..10]);
+                            mca_repo::index::clear(&repo)?; // worktree rewritten → index clean
+                        }
                         None => eprintln!("nothing to stash"),
                     }
                     Ok(ExitCode::SUCCESS)
@@ -1027,7 +1139,9 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             ))
         }
 
-        Cmd::Reset { rev, hard, .. } => {
+        Cmd::Reset {
+            rev, hard, soft, ..
+        } => {
             let repo = open_repo(&cli)?;
             let target = repo.resolve_ref(rev)?;
             let old_head = repo.head_commit();
@@ -1040,6 +1154,9 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                 &target,
                 &format!("reset: moving to {rev}"),
             )?;
+            if !*soft {
+                mca_repo::index::clear(&repo)?; // mixed/hard reset the index to HEAD
+            }
             if *hard {
                 if let Some(wt) = repo.worktree() {
                     let m = repo.read_manifest(&repo.read_commit(&target)?.tree)?;
@@ -1050,27 +1167,58 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             Ok(ExitCode::SUCCESS)
         }
 
-        Cmd::Restore { rev, paths } => {
+        Cmd::Restore {
+            paths,
+            staged,
+            source,
+        } => {
             let repo = open_repo(&cli)?;
-            let wt = repo
-                .worktree()
-                .ok_or_else(|| anyhow!("no worktree bound"))?;
-            let commit = repo.resolve_ref(rev)?;
+            let commit = repo.resolve_ref(source)?;
             let full = repo.read_manifest(&repo.read_commit(&commit)?.tree)?;
-            let mut sub = mca_repo::Manifest::default();
-            for p in paths {
-                if let Some(c) = full.regions.get(p) {
-                    sub.regions.insert(p.clone(), c.clone());
+            if *staged {
+                // Unstage: reset these index entries to their <source> state.
+                let mut idx = mca_repo::index::effective(&repo)?;
+                for p in paths {
+                    idx.regions.remove(p);
+                    idx.nbt.remove(p);
+                    idx.blobs.remove(p);
+                    if let Some(c) = full.regions.get(p) {
+                        idx.regions.insert(p.clone(), c.clone());
+                    }
+                    if let Some(h) = full.nbt.get(p) {
+                        idx.nbt.insert(p.clone(), h.clone());
+                    }
+                    if let Some(h) = full.blobs.get(p) {
+                        idx.blobs.insert(p.clone(), h.clone());
+                    }
                 }
-                if let Some(h) = full.nbt.get(p) {
-                    sub.nbt.insert(p.clone(), h.clone());
+                // If unstaging left the index equal to HEAD, the index is clean —
+                // represent that as the file's absence, not a HEAD-equal file.
+                if idx == mca_repo::index::head_tree(&repo)? {
+                    mca_repo::index::clear(&repo)?;
+                } else {
+                    mca_repo::index::write(&repo, &idx)?;
                 }
-                if let Some(h) = full.blobs.get(p) {
-                    sub.blobs.insert(p.clone(), h.clone());
+                eprintln!("unstaged {} path(s)", paths.len());
+            } else {
+                let wt = repo
+                    .worktree()
+                    .ok_or_else(|| anyhow!("no worktree bound"))?;
+                let mut sub = mca_repo::Manifest::default();
+                for p in paths {
+                    if let Some(c) = full.regions.get(p) {
+                        sub.regions.insert(p.clone(), c.clone());
+                    }
+                    if let Some(h) = full.nbt.get(p) {
+                        sub.nbt.insert(p.clone(), h.clone());
+                    }
+                    if let Some(h) = full.blobs.get(p) {
+                        sub.blobs.insert(p.clone(), h.clone());
+                    }
                 }
+                mca_repo::checkout(&repo, &sub, std::path::Path::new(&wt), false)?;
+                eprintln!("restored {} path(s) from {}", paths.len(), &commit[..10]);
             }
-            mca_repo::checkout(&repo, &sub, std::path::Path::new(&wt), false)?;
-            eprintln!("restored {} path(s) from {}", paths.len(), &commit[..10]);
             Ok(ExitCode::SUCCESS)
         }
 
@@ -1079,15 +1227,7 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             let wt = repo
                 .worktree()
                 .ok_or_else(|| anyhow!("no worktree bound"))?;
-            let head = repo
-                .head_commit()
-                .ok_or_else(|| anyhow!("no commits yet"))?;
-            let changes = mca_repo::status(&repo, std::path::Path::new(&wt), &head)?;
-            let untracked: Vec<&String> = changes
-                .iter()
-                .filter(|c| c.kind == ChangeKind::Added)
-                .map(|c| &c.path)
-                .collect();
+            let untracked = mca_repo::status_full(&repo, std::path::Path::new(&wt))?.untracked;
             if untracked.is_empty() {
                 eprintln!("nothing to clean");
                 return Ok(ExitCode::SUCCESS);
@@ -1176,6 +1316,7 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                 if let Some(wt) = repo.worktree() {
                     let m = repo.read_manifest(&repo.read_commit(&tip)?.tree)?;
                     mca_repo::checkout(&repo, &m, std::path::Path::new(&wt), true)?;
+                    mca_repo::index::clear(&repo)?; // worktree fast-forwarded → index stale
                 }
             }
             eprintln!("pulled {branch} from {remote} ({copied} objects)");
@@ -1522,6 +1663,7 @@ fn advance(repo: &Repository, target: &str, log_message: &str) -> anyhow::Result
         let m = repo.read_manifest(&repo.read_commit(target)?.tree)?;
         mca_repo::checkout(repo, &m, std::path::Path::new(&wt), true)?;
     }
+    mca_repo::index::clear(repo)?; // replay (revert/cherry-pick/rebase) → clean index
     Ok(())
 }
 
@@ -1621,6 +1763,7 @@ fn bisect_cmd(cli: &Cli, action: &BisectCmd) -> anyhow::Result<ExitCode> {
             if let Some(wt) = repo.worktree() {
                 let m = repo.read_manifest(&repo.read_commit(&commit)?.tree)?;
                 mca_repo::checkout(&repo, &m, std::path::Path::new(&wt), true)?;
+                mca_repo::index::clear(&repo)?; // bisect reset rewrote the worktree → clear index
             }
             bisect::clear(&repo)?;
             eprintln!("Bisect reset; back at {orig}.");
@@ -1655,6 +1798,7 @@ fn bisect_advance(repo: &Repository) -> anyhow::Result<ExitCode> {
             if let Some(wt) = repo.worktree() {
                 let m = repo.read_manifest(&repo.read_commit(&next)?.tree)?;
                 mca_repo::checkout(repo, &m, std::path::Path::new(&wt), true)?;
+                mca_repo::index::clear(repo)?; // bisect rewrote the worktree → clear index
                 let old_head = repo.head_commit();
                 repo.set_head_detached(&next)?;
                 repo.record_head(old_head.as_deref(), &next, "bisect: testing")?;

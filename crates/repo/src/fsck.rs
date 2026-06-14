@@ -83,6 +83,21 @@ pub fn fsck(repo: &Repository) -> Result<FsckReport> {
         }
     }
 
+    // The staging index is a reachability root: its objects must exist (in a
+    // full repo) and count as reachable.
+    if let Some(m) = crate::index::read(repo)? {
+        for id in manifest_ids(&m) {
+            if !store.exists(&id) {
+                if partial {
+                    report.promised += 1;
+                } else {
+                    report.missing.push(id.clone());
+                }
+            }
+            reachable.insert(id);
+        }
+    }
+
     report.unreachable = all.iter().filter(|id| !reachable.contains(*id)).count();
     Ok(report)
 }
@@ -131,6 +146,27 @@ mod tests {
     fn tiny_world(world: &Path) {
         std::fs::create_dir_all(world).unwrap();
         std::fs::write(world.join("icon.png"), b"PNGDATA").unwrap();
+    }
+
+    #[test]
+    fn index_objects_count_as_reachable() {
+        let d = tempfile::tempdir().unwrap();
+        let repo = Repository::init(&d.path().join("repo")).unwrap();
+        let world = d.path().join("world");
+        std::fs::create_dir_all(&world).unwrap();
+        std::fs::write(world.join("staged.bin"), b"staged-only").unwrap();
+
+        crate::index::add_paths(&repo, &world, &["staged.bin".into()]).unwrap();
+
+        // the staged object exists and is reachable via the index → 0 unreachable
+        let r = fsck(&repo).unwrap();
+        assert!(
+            r.is_clean(),
+            "missing={:?} corrupt={:?}",
+            r.missing,
+            r.corrupt
+        );
+        assert_eq!(r.unreachable, 0, "index object should be reachable");
     }
 
     #[test]
