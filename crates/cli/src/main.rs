@@ -37,6 +37,9 @@ enum Cmd {
         /// Sign the commit with SSH (uses `user.signingkey`).
         #[arg(short = 'S', long)]
         sign: bool,
+        /// Snapshot the whole worktree instead of committing the index.
+        #[arg(short = 'a', long = "all")]
+        all: bool,
         world: Option<PathBuf>,
     },
     /// Stage worktree paths into the index for the next commit.
@@ -388,34 +391,72 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
         Cmd::Commit {
             message,
             sign,
+            all,
             world,
         } => {
             let repo = open_repo(&cli)?;
-            let world = world
-                .clone()
-                .or_else(|| repo.worktree().map(PathBuf::from))
-                .ok_or_else(|| anyhow!("no world given and no worktree bound"))?;
+            let worktree = repo.worktree().map(PathBuf::from);
             if mca_repo::hooks::run(&repo, "pre-commit") != 0 {
                 bail!("pre-commit hook failed; commit aborted");
             }
-            // A first commit decodes every chunk — show a sign of life on a tty.
-            let manifest = if std::io::stderr().is_terminal() {
-                let m = snapshot::snapshot_with_progress(&repo, &world, &|done, total| {
-                    eprint!("\rsnapshot: {done}/{total} files");
-                })?;
-                eprint!("\r\x1b[K"); // clear the progress line
-                m
+            let auto = repo
+                .config_get("commit.autoStageAll")
+                .is_some_and(|v| v.eq_ignore_ascii_case("true"));
+            // Whole-worktree snapshot when -a / autoStageAll / an explicit path;
+            // otherwise commit the staging index.
+            let whole = *all || auto || world.is_some();
+
+            let manifest = if whole {
+                let dir = world
+                    .clone()
+                    .or_else(|| worktree.clone())
+                    .ok_or_else(|| anyhow!("no world given and no worktree bound"))?;
+                if std::io::stderr().is_terminal() {
+                    let m = snapshot::snapshot_with_progress(&repo, &dir, &|done, total| {
+                        eprint!("\rsnapshot: {done}/{total} files");
+                    })?;
+                    eprint!("\r\x1b[K");
+                    m
+                } else {
+                    snapshot::snapshot(&repo, &dir)?
+                }
             } else {
-                snapshot::snapshot(&repo, &world)?
+                mca_repo::index::effective(&repo)?
             };
+
             let tree = repo.write_manifest(&manifest)?;
             let head = repo.head_commit();
-            if let Some(h) = &head {
-                if repo.read_commit(h)?.tree == tree {
-                    eprintln!("nothing to commit — world matches HEAD");
-                    return Ok(ExitCode::SUCCESS);
+            let head_tree = match &head {
+                Some(h) => Some(repo.read_commit(h)?.tree),
+                None => None,
+            };
+
+            // Guardrail: is there anything new to commit?
+            let nothing_new = head_tree.as_deref() == Some(tree.as_str())
+                || (head.is_none() && manifest == mca_repo::Manifest::default());
+            if nothing_new {
+                if !whole {
+                    let dirty = match (&worktree, &head) {
+                        (Some(wt), Some(h)) => {
+                            !mca_repo::status(&repo, std::path::Path::new(wt), h)?.is_empty()
+                        }
+                        (Some(wt), None) => std::fs::read_dir(wt)
+                            .map(|mut it| it.next().is_some())
+                            .unwrap_or(false),
+                        _ => false,
+                    };
+                    if dirty {
+                        bail!("nothing staged for commit. use `mcagit add <path>` or `commit -a`.");
+                    }
                 }
+                if head.is_none() {
+                    eprintln!("nothing to commit — nothing staged");
+                } else {
+                    eprintln!("nothing to commit — world matches HEAD");
+                }
+                return Ok(ExitCode::SUCCESS);
             }
+
             let parents: Vec<String> = head.clone().into_iter().collect();
             let sign_fn = signer(&repo, *sign)?;
             let commit = repo.create_commit_signed(
@@ -431,6 +472,12 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                 None => repo.set_head_detached(&commit)?,
             }
             repo.record_head(head.as_deref(), &commit, &format!("commit: {message}"))?;
+            // The commit came from the bound worktree (index, or -a/autoStageAll) →
+            // its index is now clean. Don't touch it when committing an explicit
+            // external <world> path that has nothing to do with the index.
+            if world.is_none() {
+                mca_repo::index::clear(&repo)?;
+            }
             mca_repo::hooks::run(&repo, "post-commit");
             let files = manifest.regions.len() + manifest.nbt.len() + manifest.blobs.len();
             let chunks: usize = manifest.regions.values().map(|c| c.len()).sum();
