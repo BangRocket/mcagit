@@ -43,7 +43,7 @@ pub mod checkout;
 pub mod snapshot;
 pub use checkout::checkout;
 pub mod status;
-pub use status::{status, Change, ChangeKind};
+pub use status::{status, status_full, Change, ChangeKind, StatusReport};
 pub mod verify;
 pub use verify::{verify_commit, world_tree};
 pub mod fsck;
