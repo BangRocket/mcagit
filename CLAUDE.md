@@ -38,12 +38,15 @@ cargo run -p mcagit -- <args>                # run the CLI
 `crates/cli/src/main.rs` is a `clap` derive over subcommands (git-style, with an optional
 leading `-C <repo>`). Exit codes follow git: `0` = identical/clean, `1` = differences/conflicts,
 `2` = error. `commit` prints the new commit hash to stdout (scriptable). Subcommands:
-`init · commit [-S] · checkout · status · log · diff [--json] · extract · apply [--reverse] ·
-verify · branch · merge · fsck · gc · revert · cherry-pick · rebase · stash [drop] · reflog ·
-bisect · rev-parse · cat-file · ls-tree · tag [-a/-s/-m/-v/-f/-n] · verify-commit ·
-reset [--hard] · restore · clean · clone · push · pull · fetch · ls-remote · remote ·
-verify-remote [--deep] · serve · serve-stdio · config · players · find · inspect ·
-where-changed · region · poi · render`.
+`init [<dir>] [--bare|--worktree <path>]` (`<dir>` defaults to `.`; default layout: embedded
+`<dir>/.mcagit/`; `--bare` = no worktree; `--worktree` = bare layout in `<dir>`, external world) `· commit [-S] · checkout ·
+status · log · diff [--json] · extract · apply [--reverse] · verify · branch · merge · fsck ·
+gc · revert · cherry-pick · rebase · stash [drop] · reflog · bisect · rev-parse · cat-file ·
+ls-tree · tag [-a/-s/-m/-v/-f/-n] · verify-commit · reset [--hard] · restore · clean ·
+clone [--bare|--worktree <path>]` (default: embedded `.mcagit/` + auto-checkout HEAD; `--bare`/
+`--worktree` opt out; `--filter blob:none` clones skeleton only, no checkout) `· push · pull ·
+fetch · ls-remote · remote · verify-remote [--deep] · serve · serve-stdio · config · players ·
+find · inspect · where-changed · region · poi · render`.
 Every HEAD move records a reflog entry (`logs/HEAD`; `HEAD@{n}` resolves against it).
 Hooks (`<repo>/hooks/pre-commit`, `post-commit`) gate/follow `commit`; SSH signing
 (`crates/repo/src/sign.rs`, `ssh-keygen -Y`, namespace `mcagit`) covers commits and
@@ -85,8 +88,13 @@ patch → cli`.
     list is read lock-free via `ArcSwap` (checkout/diff read objects hundreds of thousands of
     times across threads).
   - `Manifest` ≈ git tree (regions map chunk pos → chunk-object id; loose nbt + blobs map path
-    → id); `CommitObject` JSON. `Repository` is **bare and external** to the world; the bound
-    worktree is stored in the repo `config`; `Repository::discover` walks up from cwd.
+    → id); `CommitObject` JSON. `Repository::discover` walks up from cwd.
+  - `Repository` supports two layouts: **embedded** (`<world>/.mcagit/` holds the metadata,
+    worktree = the containing folder — the `init`/`clone` default) and **bare** (metadata
+    directly in the repo dir, worktree external via `config` or none — `--bare`/`--worktree`).
+    `Repository::dir()` is the metadata dir in both cases; `open`/`discover` detect `.mcagit/`
+    (preferred) or a flat layout. The embedded `.mcagit/` is excluded from snapshots AND
+    protected from `checkout` prune (it lives inside the worktree).
   - `chunk_cache` — persistent compressed-payload-hash → chunk-object-id map
     (`chunkcache.json`) so incremental commits skip decode+canonicalize for unchanged raw
     chunk bytes; hits are trusted only after an `exists()` check.

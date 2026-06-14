@@ -1,5 +1,7 @@
-//! The bare, external repository: object store + refs/HEAD + config, plus
-//! commit/manifest storage and revision resolution.
+//! The repository: object store + refs/HEAD + config, plus commit/manifest
+//! storage and revision resolution. Supports an embedded `.mcagit/` layout
+//! (worktree = the containing folder) and a bare layout (metadata in the repo
+//! dir, worktree external via config or none).
 
 use crate::manifest::{CommitObject, Manifest, TagObject};
 use crate::object_store::ObjectStore;
