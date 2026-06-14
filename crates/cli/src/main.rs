@@ -197,8 +197,17 @@ enum Cmd {
         #[arg(long)]
         mixed: bool,
     },
-    /// Restore specific files from <rev> into the worktree.
-    Restore { rev: String, paths: Vec<String> },
+    /// Restore worktree files from a revision, or unstage with --staged.
+    Restore {
+        /// Paths to restore (worktree files, or index entries with --staged).
+        paths: Vec<String>,
+        /// Restore the index entry (unstage) instead of the worktree file.
+        #[arg(long)]
+        staged: bool,
+        /// Source revision (default: HEAD).
+        #[arg(long, default_value = "HEAD")]
+        source: String,
+    },
     /// Remove untracked files from the worktree (-n preview, -f remove).
     Clean {
         #[arg(short = 'n')]
@@ -1115,7 +1124,9 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             ))
         }
 
-        Cmd::Reset { rev, hard, .. } => {
+        Cmd::Reset {
+            rev, hard, soft, ..
+        } => {
             let repo = open_repo(&cli)?;
             let target = repo.resolve_ref(rev)?;
             let old_head = repo.head_commit();
@@ -1128,6 +1139,9 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                 &target,
                 &format!("reset: moving to {rev}"),
             )?;
+            if !*soft {
+                mca_repo::index::clear(&repo)?; // mixed/hard reset the index to HEAD
+            }
             if *hard {
                 if let Some(wt) = repo.worktree() {
                     let m = repo.read_manifest(&repo.read_commit(&target)?.tree)?;
@@ -1138,27 +1152,58 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             Ok(ExitCode::SUCCESS)
         }
 
-        Cmd::Restore { rev, paths } => {
+        Cmd::Restore {
+            paths,
+            staged,
+            source,
+        } => {
             let repo = open_repo(&cli)?;
-            let wt = repo
-                .worktree()
-                .ok_or_else(|| anyhow!("no worktree bound"))?;
-            let commit = repo.resolve_ref(rev)?;
+            let commit = repo.resolve_ref(source)?;
             let full = repo.read_manifest(&repo.read_commit(&commit)?.tree)?;
-            let mut sub = mca_repo::Manifest::default();
-            for p in paths {
-                if let Some(c) = full.regions.get(p) {
-                    sub.regions.insert(p.clone(), c.clone());
+            if *staged {
+                // Unstage: reset these index entries to their <source> state.
+                let mut idx = mca_repo::index::effective(&repo)?;
+                for p in paths {
+                    idx.regions.remove(p);
+                    idx.nbt.remove(p);
+                    idx.blobs.remove(p);
+                    if let Some(c) = full.regions.get(p) {
+                        idx.regions.insert(p.clone(), c.clone());
+                    }
+                    if let Some(h) = full.nbt.get(p) {
+                        idx.nbt.insert(p.clone(), h.clone());
+                    }
+                    if let Some(h) = full.blobs.get(p) {
+                        idx.blobs.insert(p.clone(), h.clone());
+                    }
                 }
-                if let Some(h) = full.nbt.get(p) {
-                    sub.nbt.insert(p.clone(), h.clone());
+                // If unstaging left the index equal to HEAD, the index is clean —
+                // represent that as the file's absence, not a HEAD-equal file.
+                if idx == mca_repo::index::head_tree(&repo)? {
+                    mca_repo::index::clear(&repo)?;
+                } else {
+                    mca_repo::index::write(&repo, &idx)?;
                 }
-                if let Some(h) = full.blobs.get(p) {
-                    sub.blobs.insert(p.clone(), h.clone());
+                eprintln!("unstaged {} path(s)", paths.len());
+            } else {
+                let wt = repo
+                    .worktree()
+                    .ok_or_else(|| anyhow!("no worktree bound"))?;
+                let mut sub = mca_repo::Manifest::default();
+                for p in paths {
+                    if let Some(c) = full.regions.get(p) {
+                        sub.regions.insert(p.clone(), c.clone());
+                    }
+                    if let Some(h) = full.nbt.get(p) {
+                        sub.nbt.insert(p.clone(), h.clone());
+                    }
+                    if let Some(h) = full.blobs.get(p) {
+                        sub.blobs.insert(p.clone(), h.clone());
+                    }
                 }
+                mca_repo::checkout(&repo, &sub, std::path::Path::new(&wt), false)?;
+                eprintln!("restored {} path(s) from {}", paths.len(), &commit[..10]);
             }
-            mca_repo::checkout(&repo, &sub, std::path::Path::new(&wt), false)?;
-            eprintln!("restored {} path(s) from {}", paths.len(), &commit[..10]);
             Ok(ExitCode::SUCCESS)
         }
 
@@ -1167,15 +1212,7 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
             let wt = repo
                 .worktree()
                 .ok_or_else(|| anyhow!("no worktree bound"))?;
-            let head = repo
-                .head_commit()
-                .ok_or_else(|| anyhow!("no commits yet"))?;
-            let changes = mca_repo::status(&repo, std::path::Path::new(&wt), &head)?;
-            let untracked: Vec<&String> = changes
-                .iter()
-                .filter(|c| c.kind == ChangeKind::Added)
-                .map(|c| &c.path)
-                .collect();
+            let untracked = mca_repo::status_full(&repo, std::path::Path::new(&wt))?.untracked;
             if untracked.is_empty() {
                 eprintln!("nothing to clean");
                 return Ok(ExitCode::SUCCESS);

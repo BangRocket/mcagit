@@ -34,6 +34,8 @@ fn build_world(world: &Path) {
         ChunkCompression::GZip,
     )
     .unwrap();
+    // icon.png: a tracked blob file (so modifications show as "not staged" rather than untracked)
+    std::fs::write(world.join("icon.png"), b"icon").unwrap();
 }
 
 #[test]
@@ -676,4 +678,103 @@ fn verify_remote_detects_corruption() {
         .status()
         .unwrap();
     assert_eq!(st.code(), Some(1), "corruption must be detected");
+}
+
+#[test]
+fn restore_staged_unstages_a_path() {
+    let d = tempfile::tempdir().unwrap();
+    let repo = d.path().join("repo");
+    let world = d.path().join("world");
+    build_world(&world);
+    let r = repo.to_str().unwrap();
+
+    assert!(mcagit()
+        .args(["init", r, "--worktree", world.to_str().unwrap()])
+        .status()
+        .unwrap()
+        .success());
+    assert!(mcagit()
+        .args(["-C", r, "commit", "-a", "-m", "seed"])
+        .status()
+        .unwrap()
+        .success());
+
+    std::fs::write(world.join("icon.png"), b"CHANGED").unwrap();
+    assert!(mcagit()
+        .args(["-C", r, "add", "icon.png"])
+        .status()
+        .unwrap()
+        .success());
+
+    // confirm staged
+    let out = mcagit().args(["-C", r, "status"]).output().unwrap();
+    assert!(String::from_utf8(out.stdout)
+        .unwrap()
+        .contains("Changes staged for commit:"));
+
+    // unstage
+    assert!(mcagit()
+        .args(["-C", r, "restore", "--staged", "icon.png"])
+        .status()
+        .unwrap()
+        .success());
+
+    let out = mcagit().args(["-C", r, "status"]).output().unwrap();
+    let text = String::from_utf8(out.stdout).unwrap();
+    assert!(
+        !text.contains("Changes staged for commit:"),
+        "should be unstaged:\n{text}"
+    );
+    assert!(
+        text.contains("Changes not staged for commit:"),
+        "now unstaged:\n{text}"
+    );
+    assert!(
+        !repo.join("index").exists(),
+        "unstaging the only staged path should clear the index file"
+    );
+}
+
+#[test]
+fn reset_clears_the_index() {
+    let d = tempfile::tempdir().unwrap();
+    let repo = d.path().join("repo");
+    let world = d.path().join("world");
+    build_world(&world);
+    let r = repo.to_str().unwrap();
+
+    assert!(mcagit()
+        .args(["init", r, "--worktree", world.to_str().unwrap()])
+        .status()
+        .unwrap()
+        .success());
+    assert!(mcagit()
+        .args(["-C", r, "commit", "-a", "-m", "seed"])
+        .status()
+        .unwrap()
+        .success());
+
+    std::fs::write(world.join("icon.png"), b"CHANGED").unwrap();
+    assert!(mcagit()
+        .args(["-C", r, "add", "icon.png"])
+        .status()
+        .unwrap()
+        .success());
+    // mixed reset to HEAD clears staged state
+    assert!(mcagit()
+        .args(["-C", r, "reset", "HEAD"])
+        .status()
+        .unwrap()
+        .success());
+
+    let out = mcagit().args(["-C", r, "status"]).output().unwrap();
+    let text = String::from_utf8(out.stdout).unwrap();
+    assert!(
+        !text.contains("Changes staged for commit:"),
+        "reset clears index:\n{text}"
+    );
+    assert!(
+        text.contains("Changes not staged for commit:"),
+        "worktree change remains:\n{text}"
+    );
 }
