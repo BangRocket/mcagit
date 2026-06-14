@@ -99,7 +99,8 @@ fn build(
     progress: Option<Progress>,
 ) -> Result<Manifest> {
     let root = std::fs::canonicalize(world_dir).unwrap_or_else(|_| world_dir.to_path_buf());
-    let repo_prefix = repo_dir.and_then(|d| std::fs::canonicalize(d).ok());
+    let repo_prefix =
+        repo_dir.map(|d| std::fs::canonicalize(d).unwrap_or_else(|_| d.to_path_buf()));
 
     let mut files: Vec<PathBuf> = Vec::new();
     let mut dirs: Vec<PathBuf> = Vec::new();

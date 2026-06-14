@@ -399,12 +399,20 @@ fn run(cli: Cli) -> anyhow::Result<ExitCode> {
                 Repository::init(&dir)?;
                 eprintln!("Initialized bare mcagit repository in {}", dir.display());
             } else {
-                // Default: embedded `.mcagit/` with the worktree = dir.
-                Repository::init_embedded(&dir)?;
-                eprintln!(
-                    "Initialized mcagit repository in {} (.mcagit/)",
-                    dir.display()
-                );
+                // Default: embedded `.mcagit/` with the worktree = dir (or keep an
+                // existing bare repo bare).
+                let repo = Repository::init_embedded(&dir)?;
+                if repo.dir().ends_with(".mcagit") {
+                    eprintln!(
+                        "Initialized mcagit repository in {} (.mcagit/)",
+                        dir.display()
+                    );
+                } else {
+                    eprintln!(
+                        "Reinitialized existing bare mcagit repository in {}",
+                        dir.display()
+                    );
+                }
             }
             Ok(ExitCode::SUCCESS)
         }
